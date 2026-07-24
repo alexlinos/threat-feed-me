@@ -67,12 +67,16 @@ feeds:
   # --- DShield / SANS ISC recommended block list (top attacking /24s) ----
   # Netblock-shaped: rows are start/end/mask, rewritten to CIDR by the
   # dshield_block scraper so the real /24 prefixes drive overlap scoring.
+  # The 30-minute interval + conditional GET (mostly 304s) approximates
+  # FireHOL's dshield_1d, which is this same list polled frequently with a
+  # rolling 1-day union — our 30-day retention keeps blocks that rotate out
+  # of the top-20, so the union accumulates here too.
   # NOTE: emerging_threats_block also incorporates DShield data — agreement
   # between the two is not fully independent evidence.
   - name: dshield_block
     url: https://www.dshield.org/block.txt
     feed_type: "threat_intel"
-    update_interval: 3600
+    update_interval: 1800
     scraper: dshield_block
 
   # --- Spamhaus DROP (hijacked/leased netblocks, netblock-shaped) --------
