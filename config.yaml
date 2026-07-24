@@ -1,0 +1,223 @@
+# Threat Feed Me! Configuration
+#
+# Default feed lineup is a curated set of free, keyless block lists suitable
+# for a small-org firewall. Talos is self-hosted via a Snort.org scraper.
+#
+# Feeds are seeded into the DB on first import. After that the DB is
+# authoritative — edit feeds from the dashboard.
+#
+# Reputation is earned, not assumed: every feed starts at the same weight
+# (1.0), and flagging false positives from the dashboard automatically lowers
+# the offending feed's reputation so its IPs score lower. You can still pin a
+# per-feed starting weight (weight: 0.0-1.0) if you have a measured reason to.
+
+feeds:
+  # --- Talos (Snort.org IP block list, self-hosted via scraper) ----------
+  # The scraper navigates Snort.org's CSRF-protected terms form; the POST
+  # response body IS the raw IP list. No conditional GET support (Snort.org
+  # doesn't provide ETags for this endpoint).
+  - name: talos_snort
+    url: https://snort.org/downloads/ip-block-list/terms
+    feed_type: "threat_intel"
+    update_interval: 86400  # 24 hours — Snort list updates ~daily
+    scraper: talos_snort
+
+  # --- Emerging Threats (compromised hosts, ~12h update) -----------------
+  - name: emerging_threats_compromised
+    url: https://rules.emergingthreats.net/blockrules/compromised-ips.txt
+    feed_type: "threat_intel"
+    update_interval: 43200  # 12 hours
+
+  # --- Emerging Threats (firewall block IPs) -----------------------------
+  # NOTE: this list aggregates other sources (Spamhaus DROP, DShield), so
+  # agreement between it and those feeds is not fully independent evidence.
+  - name: emerging_threats_block
+    url: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt
+    feed_type: "threat_intel"
+    update_interval: 43200  # 12 hours
+
+  # --- BBcan177 Malicious IPs (GitHub gist, community-maintained) --------
+  # NOTE: also an aggregation of other public lists (see the gist), so the
+  # same partial-independence caveat as emerging_threats_block applies.
+  - name: bbcan177
+    url: https://gist.githubusercontent.com/BBcan177/bf29d47ea04391cb3eb0/raw/
+    feed_type: "threat_intel"
+    update_interval: 3600
+
+  # --- Blocklist.de (SSH/FTP/mail/web attackers, fail2ban reporters) -----
+  - name: blocklist_de
+    url: https://lists.blocklist.de/lists/all.txt
+    feed_type: "threat_intel"
+    update_interval: 3600
+
+  # --- CI Army (CINSscore — actively-attacking IPs, poor rogue score) ---
+  - name: cins_army
+    url: https://cinsscore.com/list/ci-badguys.txt
+    feed_type: "threat_intel"
+    update_interval: 3600
+
+  # --- Feodo (abuse.ch — botnet C2 IPs, Emotet/Dridex/etc.) ------------
+  # The "recommended" list is deliberately conservative and can be very small
+  # (single digits) — that is upstream policy, not a fetch failure.
+  - name: abuse_ch_feodo
+    url: https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt
+    feed_type: "malware"
+    update_interval: 3600  # 1 hour
+
+  # --- DShield / SANS ISC recommended block list (top attacking /24s) ----
+  # Netblock-shaped: rows are start/end/mask, rewritten to CIDR by the
+  # dshield_block scraper so the real /24 prefixes drive overlap scoring.
+  # NOTE: emerging_threats_block also incorporates DShield data — agreement
+  # between the two is not fully independent evidence.
+  - name: dshield_block
+    url: https://www.dshield.org/block.txt
+    feed_type: "threat_intel"
+    update_interval: 3600
+    scraper: dshield_block
+
+  # --- Spamhaus DROP (hijacked/leased netblocks, netblock-shaped) --------
+  # Also partially incorporated by emerging_threats_block (see note there).
+  - name: spamhaus_drop
+    url: https://www.spamhaus.org/drop/drop.txt
+    feed_type: "spam"
+    update_interval: 7200
+
+  # --- GreenSnow (multi-service attack sensors) --------------------------
+  - name: greensnow
+    url: https://blocklist.greensnow.co/greensnow.txt
+    feed_type: "threat_intel"
+    update_interval: 3600
+
+  # --- DataPlane.org (SSH password-auth attackers, sensor network) -------
+  - name: dataplane_sshpwauth
+    url: https://dataplane.org/sshpwauth.txt
+    feed_type: "threat_intel"
+    update_interval: 3600
+
+  # --- BruteForceBlocker (danger.rulez.sk — SSH brute-force reporters) ---
+  - name: bruteforceblocker
+    url: https://danger.rulez.sk/projects/bruteforceblocker/blist.php
+    feed_type: "threat_intel"
+    update_interval: 3600
+
+  # --- Turris Sentinel greylist (CZ.NIC router telemetry) ----------------
+  - name: turris_greylist
+    url: https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv
+    feed_type: "threat_intel"
+    update_interval: 86400  # published daily
+
+  # --- Binary Defense Artillery banlist (public use only, no resale) -----
+  - name: binarydefense
+    url: https://binarydefense.com/banlist.txt
+    feed_type: "threat_intel"
+    update_interval: 86400
+
+  # --- Retired feeds kept for reference (disabled) -----------------------
+  - name: abuse_ch_sslbl
+    url: https://sslbl.abuse.ch/blacklist/sslipblacklist.txt
+    feed_type: "malware"
+    update_interval: 3600
+    enabled: false
+
+  - name: abuse_ch_threatfox
+    url: https://threatfox.abuse.ch/export/csv/ip-port/recent/
+    feed_type: "malware"
+    update_interval: 3600
+    enabled: false
+
+  # ---- Opt-in feeds (disabled, need setup) -----------------------------
+  # Exports the IPv4 indicators from the OTX pulses your account subscribes
+  # to. Requires a (free) OTX account: set OTX_API_KEY and enable from the
+  # dashboard. Without subscribed pulses the export is empty.
+  - name: alienVault_otx
+    url: https://otx.alienvault.com/api/v1/indicators/export?types=IPv4
+    feed_type: "threat_intel"
+    update_interval: 3600
+    requires_auth: true
+    auth_env: OTX_API_KEY
+    auth_header: X-OTX-API-KEY
+    enabled: false
+
+  - name: custom_honeypot
+    url: ./sample_honeypot_ips.txt
+    feed_type: "custom"
+    update_interval: 3600
+    enabled: false
+    local_file: true
+
+safety:
+  # Guardrails so an operator can't accidentally hand their firewall something
+  # that would break their own network. Applied when feeds are ingested and
+  # when an IP is added by hand.
+  #
+  # Drop private/internal and reserved/bogon addresses (RFC1918 10/8,
+  # 172.16/12, 192.168/16, loopback, link-local, CGNAT 100.64/10, multicast,
+  # etc.). Set false only if you deliberately track internal indicators.
+  drop_private_reserved: true
+  # Never block well-known public infrastructure (Google/Cloudflare/Quad9/OpenDNS
+  # DNS resolvers, etc.) even if a feed lists it. Blocking these breaks name
+  # resolution for the whole site.
+  protect_known_good: true
+  # Optional: extra IPs to always protect (your gateway, DNS, mail relay, ...).
+  # known_good:
+  #   - 203.0.113.10
+  #
+  # Remote feed URLs whose host resolves to a private/internal address are
+  # refused (SSRF guard: a dashboard user could otherwise point a "feed" at
+  # cloud metadata services or internal hosts). Set true only if you fetch
+  # feeds from servers on your own network (e.g. an internal honeypot).
+  allow_private_feed_urls: false
+
+scoring:
+  # Confidence tier thresholds
+  high_confidence:
+    min_sources: 3
+    min_score: 0.75
+    # Additionally require at least one curated external feed (any feed_type
+    # except "custom") among the sources: an IP known only from custom
+    # uploads, local lists, or manual adds tops out at medium.
+    require_threat_intel: true
+
+  medium_confidence:
+    min_sources: 2
+    min_score: 0.5
+
+  low_confidence:
+    min_sources: 1
+    min_score: 0.0
+
+  # Score calculation weights. These are normalized to sum to 1.0 at runtime,
+  # so the final score always spans the full 0.0-1.0 range regardless of the
+  # raw values below.
+  source_weight: 0.45
+  reputation_weight: 0.33
+  recency_weight: 0.22
+
+  # Age decay (scores decrease over time)
+  decay_half_life_hours: 72  # Score halves every 3 days
+
+output:
+  base_dir: ./output
+  formats:
+    - text
+    - csv
+    - json
+
+retention:
+  max_age_days: 30
+
+database:
+  path: ./data/threatfeedme.db
+  backup:
+    enabled: true
+    interval_hours: 24
+    keep: 7
+    dir: ./data/backups
+
+dashboard:
+  # host/port apply when running `python -m threatfeedme.dashboard` directly.
+  # In Docker the entrypoint binds 0.0.0.0:8080 regardless (restrict exposure
+  # via the compose port mapping / firewall instead).
+  host: 127.0.0.1
+  port: 8080
+  auth_required: false

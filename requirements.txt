@@ -1,0 +1,10 @@
+# Runtime dependencies, pinned for reproducible Docker builds (a fresh image a
+# year from now installs the same, tested versions). Bump deliberately and
+# re-run the test suite. Dev/test extras live in requirements-dev.txt.
+requests==2.33.0
+pyyaml==6.0.3
+fastapi==0.133.1
+jinja2==3.1.6              # dashboard templates (not a FastAPI base dependency)
+uvicorn==0.41.0
+python-multipart==0.0.27   # required by FastAPI for custom-list file uploads
+pydantic==2.13.4

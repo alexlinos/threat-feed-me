@@ -1,0 +1,192 @@
+"""
+Threat Feed Me! - Core Data Models
+"""
+import ipaddress
+from pydantic import BaseModel, ConfigDict
+from typing import Optional, List, Dict, Any, Set, Tuple
+from datetime import datetime
+from enum import Enum
+
+
+# Sentinel feed name meaning "all feeds" for a whitelist entry. A whitelist
+# entry scoped to ALL_FEEDS excludes the IP everywhere; an entry scoped to a
+# specific feed name only suppresses that feed's report of the IP.
+ALL_FEEDS = "*"
+
+# Why an IP was whitelisted. Only FALSE_POSITIVE feeds back into feed scoring
+# (it means the feed was wrong); the others mean the feed was right but the org
+# is choosing not to block, so the feed is not penalized.
+REASON_FALSE_POSITIVE = "false_positive"
+REASON_RISK_ACCEPTED = "risk_accepted"
+REASON_INTERNAL_ASSET = "internal_asset"
+REASON_OTHER = "other"
+WHITELIST_REASONS = {
+    REASON_FALSE_POSITIVE: "False positive (feed was wrong — lowers feed score)",
+    REASON_RISK_ACCEPTED: "Risk accepted (known-bad but allowed)",
+    REASON_INTERNAL_ASSET: "Internal/known asset",
+    REASON_OTHER: "Other",
+}
+
+
+class WhitelistMatcher(dict):
+    """Whitelist scoping map: exact ip (str) -> set(feed_names).
+
+    Subclasses ``dict`` so existing callers/tests that treat the whitelist map
+    as a plain dict (``.get(ip)``, ``in``, ``==`` comparison, iteration) keep
+    working unchanged. On top of the exact map it also holds parsed CIDR rules,
+    so that whitelisting a network (e.g. "10.0.0.0/8") suppresses every IP the
+    network contains -- mirroring the containment the Spamhaus overlap path
+    already does. A bare host or an explicit /32 (or /128) stays an exact
+    entry only.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Parsed CIDR rules: list of (ip_network, set(feed_names)). Built only
+        # from entries that are real networks with a non-host prefix.
+        self.cidr_rules: List[Tuple[Any, Set[str]]] = []
+
+    def add_cidr_rules_from_keys(self) -> None:
+        """(Re)build CIDR rules from the current exact keys.
+
+        An entry is treated as a CIDR rule when its stored ip parses as a
+        network whose prefix is shorter than a single host (so a plain host or
+        a /32 // /128 is left as an exact match only)."""
+        rules: List[Tuple[Any, Set[str]]] = []
+        for ip_key, feeds in self.items():
+            if "/" not in ip_key:
+                continue
+            try:
+                net = ipaddress.ip_network(ip_key, strict=False)
+            except ValueError:
+                continue
+            if net.prefixlen >= net.max_prefixlen:
+                continue  # a /32 or /128 is a single host -> exact only
+            rules.append((net, set(feeds)))
+        self.cidr_rules = rules
+
+    def scoped_feeds(self, ip: str) -> Set[str]:
+        """Feeds whitelisting ``ip``: exact match plus any containing CIDR rule.
+
+        Returns the union of the exact-match set and the feeds of every CIDR
+        rule that contains the IP. On parse failure the exact set is returned
+        alone. Empty set if nothing matches."""
+        exact = self.get(ip)
+        scoped: Set[str] = set(exact) if exact else set()
+        if not self.cidr_rules:
+            return scoped
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return scoped
+        for net, feeds in self.cidr_rules:
+            if addr.version == net.version and addr in net:
+                scoped |= feeds
+        return scoped
+
+
+def effective_sources(
+    ip: str, sources: List[str], whitelist_map: Dict[str, Set[str]]
+) -> Optional[List[str]]:
+    """Apply whitelist scoping to an indicator's sources.
+
+    Returns:
+      - None  if the IP is globally whitelisted (ALL_FEEDS) -> exclude entirely.
+      - the surviving sources otherwise (possibly empty if every reporting feed
+        has been whitelisted for this IP, which callers treat as "no evidence").
+
+    Uses CIDR-aware scoping when given a WhitelistMatcher; a plain dict falls
+    back to exact-string matching (so legacy callers keep working).
+    """
+    if hasattr(whitelist_map, "scoped_feeds"):
+        scoped = whitelist_map.scoped_feeds(ip)
+    else:
+        scoped = whitelist_map.get(ip) or set()
+    if not scoped:
+        return list(sources)
+    # Guard: scoped_feeds() must never return None — if it did, the ALL_FEEDS
+    # check below would raise TypeError.
+    if scoped is None:
+        return list(sources)
+    if ALL_FEEDS in scoped:
+        return None
+    return [s for s in sources if s not in scoped]
+
+
+class FeedType(str, Enum):
+    MALWARE = "malware"
+    SPAM = "spam"
+    PHISHING = "phishing"
+    THREAT_INTEL = "threat_intel"
+    CUSTOM = "custom"
+
+
+class ConfidenceTier(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class FeedSource(BaseModel):
+    name: str
+    url: str
+    feed_type: FeedType = FeedType.CUSTOM
+    weight: float = 1.0  # equal starting reputation; FP feedback earns it down
+    update_interval: int = 3600  # seconds
+    requires_auth: bool = False
+    local_file: bool = False
+    # When requires_auth is True, the API key is read from this environment
+    # variable and sent in this header. Keys are never stored in config/code.
+    auth_env: Optional[str] = None
+    auth_header: str = "Authorization"
+    # Custom scraper name for feeds that need special fetch logic (e.g. Talos
+    # Snort.org terms form). When set, fetch_feed uses the named scraper instead
+    # of a plain HTTP GET.
+    scraper: Optional[str] = None
+    # Disabled feeds are kept but skipped during ingestion.
+    enabled: bool = True
+
+    # Allow "type" in YAML to map to "feed_type"
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ThreatIndicator(BaseModel):
+    ip: str
+    sources: List[str]  # List of feed names that reported this IP
+    first_seen: datetime
+    last_seen: datetime
+    confidence_score: float
+    tier: ConfidenceTier
+    metadata: Dict[str, Any] = {}
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WhitelistEntry(BaseModel):
+    ip: str
+    reason: str
+    added_by: str
+    added_at: datetime
+    expires_at: Optional[datetime] = None
+    # ALL_FEEDS ("*") = whitelisted from every feed; otherwise a specific feed.
+    feed_name: str = ALL_FEEDS
+    # One of WHITELIST_REASONS; only false_positive affects feed scoring.
+    reason_code: str = REASON_OTHER
+
+
+class FeedStats(BaseModel):
+    feed_name: str
+    total_indicators: int
+    last_update: datetime
+    status: str  # success, error, skipped
+    error_message: Optional[str] = None
+
+
+class AggregationResult(BaseModel):
+    total_unique_ips: int
+    high_confidence_count: int
+    medium_confidence_count: int
+    low_confidence_count: int
+    whitelisted_count: int
+    feeds_processed: int
+    processing_time_seconds: float

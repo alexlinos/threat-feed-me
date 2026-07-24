@@ -1,0 +1,15 @@
+# Example honeypot-style local feed (illustrative data — replace with your own
+# honeypot's hit list). Demonstrates multi-source scoring: some entries overlap
+# with other feeds and get promoted to higher confidence tiers.
+
+# Overlapping with Spamhaus (will create medium/high confidence)
+62.60.226.15
+207.22.192.45
+205.142.136.128
+
+# Unique honeypot hits (low confidence - single source)
+45.156.87.216
+45.148.10.240
+91.92.40.240
+2.57.122.177
+185.246.128.133
