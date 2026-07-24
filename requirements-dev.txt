@@ -1,0 +1,4 @@
+# Development / test dependencies (not required at runtime).
+-r requirements.txt
+pytest>=8.0
+httpx>=0.26.0   # required by starlette TestClient for dashboard endpoint tests

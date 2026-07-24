@@ -1,0 +1,761 @@
+"""SQLite database layer for Threat Feed Me!
+"""
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Any, Set, Tuple
+import json
+import os
+
+from threatfeedme.models import (ThreatIndicator, WhitelistEntry, ConfidenceTier, FeedStats,
+                    FeedSource, FeedType, ALL_FEEDS, REASON_FALSE_POSITIVE, REASON_OTHER,
+                    WhitelistMatcher)
+
+
+def _utcnow_iso() -> str:
+    """Timezone-aware UTC timestamp as an ISO string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _meta_cidr(meta: Dict) -> str:
+    """Return the CIDR string from metadata, or None."""
+    return meta.get('cidr') if meta else None
+
+
+class Database:
+    def __init__(self, db_path: str = "./data/threatfeedme.db"):
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self._init_schema()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+    @contextmanager
+    def _cursor(self):
+        """Acquire cursor, commit on success, always close."""
+        conn = self._get_connection()
+        try:
+            yield conn.cursor()
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ---- Factory helpers ----
+
+    @staticmethod
+    def _row_to_indicator(row, tier_override=None) -> ThreatIndicator:
+        """Build a ThreatIndicator from a SQLite row (with sources_str or
+        separate source query)."""
+        meta = json.loads(row['metadata']) if row['metadata'] else {}
+        sources_str = row['sources_str'] if 'sources_str' in row.keys() else ''
+        sources = sources_str.split(',') if sources_str else []
+        tier = tier_override if tier_override is not None else ConfidenceTier(row['tier'])
+        return ThreatIndicator(
+            ip=row['ip'],
+            sources=sources,
+            first_seen=row['first_seen'],
+            last_seen=row['last_seen'],
+            confidence_score=row['confidence_score'],
+            tier=tier,
+            metadata=meta,
+        )
+
+    # ==================== SCHEMA ====================
+
+    def _init_schema(self):
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("PRAGMA journal_mode = WAL")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS indicators (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip TEXT UNIQUE NOT NULL,
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    confidence_score REAL DEFAULT 0.0,
+                    tier TEXT DEFAULT 'low',
+                    metadata TEXT DEFAULT '{}'
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS indicator_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    indicator_id INTEGER NOT NULL,
+                    source_name TEXT NOT NULL,
+                    reported_at TEXT NOT NULL,
+                    FOREIGN KEY (indicator_id) REFERENCES indicators(id) ON DELETE CASCADE,
+                    UNIQUE(indicator_id, source_name)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS whitelist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip TEXT NOT NULL,
+                    feed_name TEXT NOT NULL DEFAULT '*',
+                    reason TEXT NOT NULL,
+                    added_by TEXT NOT NULL,
+                    added_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    UNIQUE(ip, feed_name)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS feed_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    feed_name TEXT NOT NULL,
+                    total_indicators INTEGER DEFAULT 0,
+                    last_update TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error_message TEXT
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS feeds (
+                    name TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    feed_type TEXT NOT NULL DEFAULT 'custom',
+                    weight REAL NOT NULL DEFAULT 0.5,
+                    update_interval INTEGER NOT NULL DEFAULT 3600,
+                    requires_auth INTEGER NOT NULL DEFAULT 0,
+                    auth_env TEXT,
+                    auth_header TEXT DEFAULT 'Authorization',
+                    local_file INTEGER NOT NULL DEFAULT 0,
+                    scraper TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    added_by TEXT,
+                    added_at TEXT
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS feed_feedback (
+                    feed_name TEXT NOT NULL,
+                    ip TEXT NOT NULL,
+                    reason_code TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(feed_name, ip)
+                )
+            """)
+
+            # Legacy whitelist migration
+            existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
+            if existing_cols and 'feed_name' not in existing_cols:
+                try:
+                    cursor.executescript("""
+                        ALTER TABLE whitelist RENAME TO whitelist_legacy;
+                        CREATE TABLE whitelist (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ip TEXT NOT NULL,
+                            feed_name TEXT NOT NULL DEFAULT '*',
+                            reason TEXT NOT NULL,
+                            added_by TEXT NOT NULL,
+                            added_at TEXT NOT NULL,
+                            expires_at TEXT,
+                            UNIQUE(ip, feed_name)
+                        );
+                        INSERT INTO whitelist (id, ip, feed_name, reason, added_by, added_at, expires_at)
+                            SELECT id, ip, '*', reason, added_by, added_at, expires_at FROM whitelist_legacy;
+                        DROP TABLE whitelist_legacy;
+                    """)
+                except sqlite3.OperationalError:
+                    cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
+                    if 'feed_name' not in cols:
+                        raise
+
+            # Additive migrations
+            wl_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
+            if wl_cols and 'reason_code' not in wl_cols:
+                try:
+                    cursor.execute("ALTER TABLE whitelist ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'other'")
+                except sqlite3.OperationalError:
+                    pass
+
+            fs_cols = [r[1] for r in cursor.execute("PRAGMA table_info(feed_stats)").fetchall()]
+            for col in ('etag', 'last_modified'):
+                if fs_cols and col not in fs_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE feed_stats ADD COLUMN {col} TEXT")
+                    except sqlite3.OperationalError:
+                        pass
+
+            f_cols = [r[1] for r in cursor.execute("PRAGMA table_info(feeds)").fetchall()]
+            if f_cols and 'scraper' not in f_cols:
+                try:
+                    cursor.execute("ALTER TABLE feeds ADD COLUMN scraper TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_ip ON indicators(ip)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ==================== INDICATOR OPERATIONS ====================
+
+    def add_indicator(self, ip: str, source: str, metadata: Dict = None) -> int:
+        """Add or update an indicator from a feed source"""
+        now = _utcnow_iso()
+        meta_json = json.dumps(metadata or {})
+        with self._cursor() as cur:
+            cur.execute("SELECT id FROM indicators WHERE ip = ?", (ip,))
+            row = cur.fetchone()
+            if row:
+                indicator_id = row[0]
+                cur.execute(
+                    "UPDATE indicators SET last_seen = ?, metadata = json_patch(COALESCE(metadata, '{}'), ?) WHERE ip = ?",
+                    (now, meta_json, ip),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO indicators (ip, first_seen, last_seen, metadata) VALUES (?, ?, ?, ?)",
+                    (ip, now, now, meta_json),
+                )
+                indicator_id = cur.lastrowid
+            cur.execute(
+                "INSERT OR IGNORE INTO indicator_sources (indicator_id, source_name, reported_at) VALUES (?, ?, ?)",
+                (indicator_id, source, now),
+            )
+            return indicator_id
+
+    def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
+        """Get a single indicator by IP"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                "FROM indicators i WHERE i.ip = ?", (ip,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return self._row_to_indicator(row)
+
+    def get_all_indicators_by_tier(self, tier: ConfidenceTier) -> List[ThreatIndicator]:
+        """Get all indicators in a specific confidence tier"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                "FROM indicators i WHERE i.tier = ? ORDER BY i.confidence_score DESC", (tier.value,))
+            return [self._row_to_indicator(r, tier) for r in cur.fetchall()]
+
+    def get_all_indicators(self) -> List[ThreatIndicator]:
+        """Get all indicators regardless of tier"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                "FROM indicators i ORDER BY i.confidence_score DESC")
+            return [self._row_to_indicator(r) for r in cur.fetchall()]
+
+    def query_indicators(self, q: str = None, limit: int = 50, offset: int = 0,
+                         include_whitelisted: bool = False) -> Dict:
+        """Paginated/searchable view of merged indicators.
+
+        Excludes globally-whitelisted (removed) IPs by default. Returns
+        {'total': int, 'rows': [{ip, value, tier, confidence_score, sources}]}.
+        """
+        now = _utcnow_iso()
+        where, params = [], []
+        if not include_whitelisted:
+            where.append(
+                "i.ip NOT IN (SELECT ip FROM whitelist WHERE feed_name = ? "
+                "AND (expires_at IS NULL OR expires_at > ?))"
+            )
+            params.extend([ALL_FEEDS, now])
+        if q:
+            where.append("i.ip LIKE ?")
+            params.append(f"%{q}%")
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+        matcher = None
+        if not include_whitelisted:
+            matcher = self.get_whitelist_map()
+        has_global_cidr = matcher is not None and any(
+            ALL_FEEDS in feeds for _net, feeds in matcher.cidr_rules)
+
+        select_sql = f"""
+            SELECT i.ip, i.confidence_score, i.tier, i.metadata,
+                   (SELECT GROUP_CONCAT(source_name) FROM indicator_sources
+                    WHERE indicator_id = i.id) AS sources_str
+            FROM indicators i{where_sql}
+            ORDER BY i.confidence_score DESC, i.ip
+        """
+
+        with self._cursor() as cur:
+            if not has_global_cidr:
+                cur.execute(f"SELECT COUNT(*) FROM indicators i{where_sql}", params)
+                total = cur.fetchone()[0]
+                cur.execute(select_sql + " LIMIT ? OFFSET ?", params + [limit, offset])
+                page_rows = cur.fetchall()
+            else:
+                cur.execute(select_sql, params)
+                survivors = [r for r in cur.fetchall()
+                             if ALL_FEEDS not in matcher.scoped_feeds(r['ip'])]
+                total = len(survivors)
+                page_rows = survivors[offset:offset + limit]
+
+            rows = []
+            for row in page_rows:
+                ip = row['ip']
+                if matcher is not None and ALL_FEEDS in matcher.scoped_feeds(ip):
+                    continue
+                meta = json.loads(row['metadata']) if row['metadata'] else {}
+                rows.append({
+                    "ip": ip,
+                    "value": _meta_cidr(meta) or ip,
+                    "tier": row['tier'],
+                    "confidence_score": round(row['confidence_score'], 3),
+                    "sources": (row['sources_str'] or '').split(',') if row['sources_str'] else [],
+                })
+            return {"total": total, "rows": rows}
+
+    def set_indicator_score(self, ip: str, score: float, tier: str) -> None:
+        """Persist a single indicator's recalculated score/tier."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE indicators SET confidence_score = ?, tier = ? WHERE ip = ?",
+                (score, tier, ip),
+            )
+
+    def delete_indicator(self, ip: str) -> bool:
+        """Delete an indicator (and, via cascade, its source rows)."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM indicators WHERE ip = ?", (ip,))
+            return cur.rowcount > 0
+
+    def purge_stale_indicators(self, max_age_days: int) -> int:
+        """Delete indicators whose last_seen is older than max_age_days.
+
+        Manually-curated entries (any indicator with a 'manual' source) are
+        never purged. Returns rows deleted.
+        """
+        if max_age_days <= 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM indicators "
+                "WHERE last_seen < ? "
+                "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
+                "WHERE source_name = 'manual')",
+                (cutoff,),
+            )
+            return cur.rowcount
+
+    def touch_feed_indicators(self, feed_name: str) -> int:
+        """Refresh last_seen on every indicator attributed to a feed."""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE indicators SET last_seen = ? "
+                "WHERE id IN (SELECT indicator_id FROM indicator_sources "
+                "WHERE source_name = ?)",
+                (now, feed_name),
+            )
+            return cur.rowcount
+
+    # ==================== WHITELIST OPERATIONS ====================
+
+    def add_to_whitelist(self, ip: str, reason: str, added_by: str,
+                         expires_at: datetime = None, feed_name: str = ALL_FEEDS,
+                         reason_code: str = REASON_OTHER) -> bool:
+        """Add (or update) a whitelist entry."""
+        now = _utcnow_iso()
+        expires = expires_at.isoformat() if expires_at else None
+        feed_name = feed_name or ALL_FEEDS
+        with self._cursor() as cur:
+            cur.execute("""
+                INSERT INTO whitelist (ip, feed_name, reason, added_by, added_at, expires_at, reason_code)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ip, feed_name) DO UPDATE SET
+                    reason = excluded.reason,
+                    added_at = excluded.added_at,
+                    expires_at = excluded.expires_at,
+                    reason_code = excluded.reason_code
+            """, (ip, feed_name, reason, added_by, now, expires, reason_code))
+            return True
+
+    def is_whitelisted(self, ip: str) -> bool:
+        """True if the IP is globally (ALL_FEEDS) whitelisted and not expired."""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM whitelist WHERE ip = ? AND feed_name = ? AND (expires_at IS NULL OR expires_at > ?)",
+                (ip, ALL_FEEDS, now),
+            )
+            return cur.fetchone() is not None
+
+    def get_whitelisted_ips(self) -> Set[str]:
+        """Set of IPs whitelisted from ALL feeds (globally), non-expired."""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT ip FROM whitelist WHERE feed_name = ? AND (expires_at IS NULL OR expires_at > ?)",
+                (ALL_FEEDS, now),
+            )
+            return {row['ip'] for row in cur.fetchall()}
+
+    def get_whitelist_map(self) -> WhitelistMatcher:
+        """Map of ip -> set of whitelisted feed names (may include ALL_FEEDS)."""
+        now = _utcnow_iso()
+        mapping = WhitelistMatcher()
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT ip, feed_name FROM whitelist WHERE expires_at IS NULL OR expires_at > ?",
+                (now,),
+            )
+            for row in cur.fetchall():
+                mapping.setdefault(row['ip'], set()).add(row['feed_name'])
+        mapping.add_cidr_rules_from_keys()
+        return mapping
+
+    def get_whitelist(self) -> List[WhitelistEntry]:
+        """Get all active whitelist entries"""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM whitelist WHERE expires_at IS NULL OR expires_at > ? ORDER BY added_at DESC",
+                (now,),
+            )
+            results = []
+            for row in cur.fetchall():
+                results.append(WhitelistEntry(
+                    ip=row['ip'],
+                    reason=row['reason'],
+                    added_by=row['added_by'],
+                    added_at=row['added_at'],
+                    expires_at=row['expires_at'],
+                    feed_name=row['feed_name'],
+                    reason_code=row['reason_code'] if 'reason_code' in row.keys() else REASON_OTHER,
+                ))
+            return results
+
+    def remove_from_whitelist(self, ip: str, feed_name: str = None) -> bool:
+        """Remove whitelist entries for an IP.
+
+        feed_name=None removes every scope for the IP; otherwise only the given
+        scope (use ALL_FEEDS to remove just the global entry).
+        """
+        with self._cursor() as cur:
+            if feed_name is None:
+                cur.execute("DELETE FROM whitelist WHERE ip = ?", (ip,))
+            else:
+                cur.execute(
+                    "DELETE FROM whitelist WHERE ip = ? AND feed_name = ?", (ip, feed_name)
+                )
+            return cur.rowcount > 0
+
+    # ==================== FEED FALSE-POSITIVE FEEDBACK ====================
+
+    def record_false_positive(self, ip: str, feeds: List[str]) -> None:
+        """Attribute a false-positive report of `ip` to each of `feeds`."""
+        if not feeds:
+            return
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.executemany(
+                "INSERT INTO feed_feedback (feed_name, ip, reason_code, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(feed_name, ip) DO UPDATE SET created_at = excluded.created_at",
+                [(feed, ip, REASON_FALSE_POSITIVE, now) for feed in feeds],
+            )
+
+    def clear_feedback(self, ip: str, feed_name: str = None) -> None:
+        """Remove false-positive attributions for an IP.
+
+        feed_name=None clears every feed's attribution for the IP; pass a feed
+        name to clear only that one.
+        """
+        with self._cursor() as cur:
+            if feed_name and feed_name != ALL_FEEDS:
+                cur.execute(
+                    "DELETE FROM feed_feedback WHERE ip = ? AND feed_name = ?", (ip, feed_name)
+                )
+            else:
+                cur.execute("DELETE FROM feed_feedback WHERE ip = ?", (ip,))
+
+    def get_feed_fp_counts(self) -> Dict[str, int]:
+        """Distinct false-positive IP count per feed."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT feed_name, COUNT(DISTINCT ip) AS n FROM feed_feedback WHERE reason_code = ? GROUP BY feed_name",
+                (REASON_FALSE_POSITIVE,),
+            )
+            return {row['feed_name']: row['n'] for row in cur.fetchall()}
+
+    def get_feed_report_counts(self) -> Dict[str, int]:
+        """Distinct indicators reported per feed (denominator for FP rate)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT source_name, COUNT(DISTINCT indicator_id) AS n FROM indicator_sources GROUP BY source_name"
+            )
+            return {row['source_name']: row['n'] for row in cur.fetchall()}
+
+    # ==================== FEED STATS ====================
+
+    def update_feed_stats(self, feed_name: str, total_indicators: int, status: str, error_message: str = None):
+        """Update or create feed statistics"""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute("SELECT id FROM feed_stats WHERE feed_name = ?", (feed_name,))
+            row = cur.fetchone()
+            if row:
+                cur.execute(
+                    "UPDATE feed_stats SET total_indicators = ?, last_update = ?, status = ?, error_message = ? WHERE feed_name = ?",
+                    (total_indicators, now, status, error_message, feed_name),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO feed_stats (feed_name, total_indicators, last_update, status, error_message) VALUES (?, ?, ?, ?, ?)",
+                    (feed_name, total_indicators, now, status, error_message),
+                )
+
+    def get_feed_http_cache(self, feed_name: str) -> Tuple[Optional[str], Optional[str]]:
+        """Stored HTTP validators (etag, last_modified) for a feed."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT etag, last_modified FROM feed_stats WHERE feed_name = ?", (feed_name,)
+            )
+            row = cur.fetchone()
+            return (row['etag'], row['last_modified']) if row else (None, None)
+
+    def set_feed_http_cache(self, feed_name: str, etag: Optional[str],
+                            last_modified: Optional[str]) -> None:
+        """Store (or clear, with Nones) a feed's HTTP validators."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE feed_stats SET etag = ?, last_modified = ? WHERE feed_name = ?",
+                (etag, last_modified, feed_name),
+            )
+
+    def get_feed_last_updates(self) -> Dict[str, str]:
+        """Raw {feed_name: last_update} strings from feed_stats."""
+        with self._cursor() as cur:
+            cur.execute("SELECT feed_name, last_update FROM feed_stats")
+            return {row['feed_name']: row['last_update'] for row in cur.fetchall()}
+
+    def get_feed_stats(self) -> List[FeedStats]:
+        """Get statistics for all feeds"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM feed_stats ORDER BY last_update DESC")
+            return [FeedStats(
+                feed_name=row['feed_name'],
+                total_indicators=row['total_indicators'],
+                last_update=row['last_update'],
+                status=row['status'],
+                error_message=row['error_message'],
+            ) for row in cur.fetchall()]
+
+    # ==================== FEED SOURCE MANAGEMENT ====================
+
+    @staticmethod
+    def _row_to_feed(row) -> FeedSource:
+        return FeedSource(
+            name=row['name'],
+            url=row['url'],
+            feed_type=FeedType(row['feed_type']),
+            weight=row['weight'],
+            update_interval=row['update_interval'],
+            requires_auth=bool(row['requires_auth']),
+            auth_env=row['auth_env'],
+            auth_header=row['auth_header'] or 'Authorization',
+            local_file=bool(row['local_file']),
+            scraper=row['scraper'],
+            enabled=bool(row['enabled']),
+        )
+
+    def seed_feeds_from_config(self, config: Dict) -> int:
+        """Populate the feeds table from config.yaml on first run only."""
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM feeds")
+            if cur.fetchone()[0] > 0:
+                return 0
+            now = _utcnow_iso()
+            seeded = 0
+            for feed_cfg in config.get('feeds', []):
+                try:
+                    feed = FeedSource(**feed_cfg)
+                except Exception:
+                    continue
+                cur.execute(
+                    "INSERT OR IGNORE INTO feeds "
+                    "(name, url, feed_type, weight, update_interval, requires_auth, "
+                    "auth_env, auth_header, local_file, scraper, enabled, added_by, added_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?)",
+                    (feed.name, feed.url, feed.feed_type.value, feed.weight,
+                     feed.update_interval, int(feed.requires_auth), feed.auth_env,
+                     feed.auth_header, int(feed.local_file), feed.scraper,
+                     int(feed.enabled), now),
+                )
+                seeded += 1
+            return seeded
+
+    def restore_default_feeds(self, config: Dict) -> List[str]:
+        """Add any config feeds that are not already configured (merge, no clobber)."""
+        existing = {f.name for f in self.get_feed_sources()}
+        added = []
+        for feed_cfg in config.get('feeds', []):
+            try:
+                feed = FeedSource(**feed_cfg)
+            except Exception:
+                continue
+            if feed.name in existing:
+                continue
+            self.add_feed(feed, added_by='restore-defaults')
+            added.append(feed.name)
+        return added
+
+    def get_feed_sources(self, enabled_only: bool = False) -> List[FeedSource]:
+        """Return configured feed sources, optionally only enabled ones."""
+        with self._cursor() as cur:
+            if enabled_only:
+                cur.execute("SELECT * FROM feeds WHERE enabled = 1 ORDER BY name")
+            else:
+                cur.execute("SELECT * FROM feeds ORDER BY name")
+            return [self._row_to_feed(r) for r in cur.fetchall()]
+
+    def get_feed_source(self, name: str) -> Optional[FeedSource]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM feeds WHERE name = ?", (name,))
+            row = cur.fetchone()
+            return self._row_to_feed(row) if row else None
+
+    def add_feed(self, feed: FeedSource, added_by: str = "dashboard") -> None:
+        """Add or update a configured feed source (keyed by name)."""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute("SELECT url FROM feeds WHERE name = ?", (feed.name,))
+            row = cur.fetchone()
+            url_changed = row is not None and row['url'] != feed.url
+            cur.execute(
+                "INSERT INTO feeds "
+                "(name, url, feed_type, weight, update_interval, requires_auth, "
+                "auth_env, auth_header, local_file, scraper, enabled, added_by, added_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "url = excluded.url, feed_type = excluded.feed_type, weight = excluded.weight, "
+                "update_interval = excluded.update_interval, "
+                "requires_auth = excluded.requires_auth, auth_env = excluded.auth_env, "
+                "auth_header = excluded.auth_header, local_file = excluded.local_file, "
+                "scraper = excluded.scraper, enabled = excluded.enabled",
+                (feed.name, feed.url, feed.feed_type.value, feed.weight,
+                 feed.update_interval, int(feed.requires_auth), feed.auth_env,
+                 feed.auth_header, int(feed.local_file), feed.scraper,
+                 int(feed.enabled), added_by, now),
+            )
+            if url_changed:
+                cur.execute(
+                    "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
+                    (feed.name,),
+                )
+
+    def remove_feed(self, name: str) -> bool:
+        """Remove a configured feed and purge the data it contributed."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM feeds WHERE name = ?", (name,))
+            affected = cur.rowcount
+            cur.execute("DELETE FROM indicator_sources WHERE source_name = ?", (name,))
+            cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
+            cur.execute(
+                "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
+                (name,),
+            )
+            cur.execute(
+                "DELETE FROM indicators WHERE NOT EXISTS (SELECT 1 FROM indicator_sources WHERE indicator_id = indicators.id)"
+            )
+            return affected > 0
+
+    def set_feed_enabled(self, name: str, enabled: bool) -> bool:
+        with self._cursor() as cur:
+            cur.execute("UPDATE feeds SET enabled = ? WHERE name = ?", (int(enabled), name))
+            return cur.rowcount > 0
+
+    # ==================== SETTINGS ====================
+
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        with self._cursor() as cur:
+            cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cur.fetchone()
+            return row['value'] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, str(value)),
+            )
+
+    # ==================== BACKUP ====================
+
+    def backup_database(self, dest_dir: str, keep: int = 7) -> str:
+        """Write a consistent, WAL-safe snapshot of the DB to dest_dir."""
+        os.makedirs(dest_dir, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        dest = os.path.join(dest_dir, f'threat_feeds-{ts}.db')
+
+        src = sqlite3.connect(self.db_path)
+        try:
+            dst = sqlite3.connect(dest)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+
+        self._prune_backups(dest_dir, keep)
+        return dest
+
+    @staticmethod
+    def _prune_backups(dest_dir: str, keep: int) -> None:
+        """Keep only the newest `keep` backup files (by timestamped name)."""
+        if keep is None or keep <= 0:
+            return
+        try:
+            files = sorted(
+                [f for f in os.listdir(dest_dir) if f.startswith('threat_feeds-') and f.endswith('.db')],
+                key=lambda f: os.path.getmtime(os.path.join(dest_dir, f)),
+            )
+        except OSError:
+            return
+        for stale in files[:-keep]:
+            try:
+                os.remove(os.path.join(dest_dir, stale))
+            except OSError:
+                pass
+
+    # ==================== UTILITY ====================
+
+    def get_stats_summary(self) -> Dict[str, int]:
+        """Get a summary of all indicators by tier"""
+        with self._cursor() as cur:
+            stats = {}
+            for tier in ConfidenceTier:
+                cur.execute("SELECT COUNT(*) FROM indicators WHERE tier = ?", (tier.value,))
+                stats[f"{tier.value}_count"] = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM indicators")
+            stats["total"] = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM whitelist")
+            stats["whitelisted"] = cur.fetchone()[0]
+            return stats

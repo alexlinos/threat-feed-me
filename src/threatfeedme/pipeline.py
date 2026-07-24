@@ -1,0 +1,150 @@
+"""Shared ingestion -> scoring -> export pipeline.
+
+Used by both the CLI (main.py) and the dashboard's manual/scheduled refresh so
+they behave identically. Feed sources are read from the database (the runtime
+source of truth), not directly from config.
+"""
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+from threatfeedme.database import Database
+from threatfeedme.feed_ingestor import FeedIngestor
+from threatfeedme.scorer import ConfidenceScorer
+from threatfeedme.safety import SafetyFilter
+from threatfeedme.exporter import _write_text, _write_csv, _write_json, is_included
+from threatfeedme.models import ConfidenceTier
+
+logger = logging.getLogger(__name__)
+
+
+# ---- Pipeline helpers ----
+
+def scorer_config(db: Database, config: Dict) -> Dict:
+    """Build the scorer's config, sourcing per-feed reputation weights from the
+    database feeds (which may differ from the seed config after edits)."""
+    return {
+        'scoring': config.get('scoring', {}),
+        'feeds': [
+            {'name': f.name, 'weight': f.weight}
+            for f in db.get_feed_sources()
+        ],
+    }
+
+
+def due_feeds(db: Database, default_interval_seconds: int) -> List[str]:
+    """Names of enabled feeds that are currently due for a refresh."""
+    last_updates = db.get_feed_last_updates()
+    now = datetime.now(timezone.utc)
+    due: List[str] = []
+    for feed in db.get_feed_sources(enabled_only=True):
+        interval = feed.update_interval if (feed.update_interval or 0) > 0 else default_interval_seconds
+        raw = last_updates.get(feed.name)
+        if not raw:
+            due.append(feed.name)
+            continue
+        try:
+            last = datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            due.append(feed.name)
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if (now - last).total_seconds() >= interval:
+            due.append(feed.name)
+    return due
+
+
+def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
+    """Fetch and ingest enabled feeds (optionally a subset by name)."""
+    safety_cfg = config.get('safety', {}) or {}
+    ingestor = FeedIngestor(
+        db,
+        safety=SafetyFilter.from_config(config),
+        allow_private_urls=bool(safety_cfg.get('allow_private_feed_urls', False)),
+    )
+    feeds = db.get_feed_sources(enabled_only=True)
+    if only is not None:
+        wanted = set(only)
+        feeds = [f for f in feeds if f.name in wanted]
+
+    results = {}
+    for feed in feeds:
+        try:
+            count = ingestor.ingest_feed(feed)
+            results[feed.name] = {'status': 'success', 'count': count}
+            logger.info(f"[ok] {feed.name}: {count} indicators")
+        except Exception as e:
+            results[feed.name] = {'status': 'error', 'error': str(e)}
+            logger.error(f"[fail] {feed.name}: {e}")
+    return results
+
+
+def recalculate(db: Database, config: Dict) -> int:
+    """Recalculate confidence scores for all indicators."""
+    scorer = ConfidenceScorer(db, scorer_config(db, config))
+    return scorer.recalculate_all_scores()
+
+
+# ---- Export (inlined from the Exporter class) ----
+
+def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str, format: str = "text") -> str:
+    """Export a single confidence tier to a file. Returns filepath."""
+    indicators = db.get_all_indicators_by_tier(tier)
+    wl_map = db.get_whitelist_map()
+    indicators = [i for i in indicators if is_included(i, wl_map)]
+
+    filename = f"{tier.value}_confidence_ips.{format}"
+    filepath = os.path.join(output_dir, filename)
+    os.makedirs(output_dir, exist_ok=True)
+
+    if format == "text":
+        _write_text(indicators, filepath)
+    elif format == "csv":
+        _write_csv(indicators, filepath)
+    elif format == "json":
+        _write_json(indicators, tier, filepath)
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+    return filepath
+
+
+def export_tiers(db: Database, config: Dict) -> Dict:
+    """Export all tiers to every configured format."""
+    output_dir = config.get('output', {}).get('base_dir', './output')
+    formats = config.get('output', {}).get('formats', ['text'])
+    results = {}
+    for fmt in formats:
+        tier_results = {}
+        for tier in ConfidenceTier:
+            tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt)
+        results[fmt] = tier_results
+    return results
+
+
+def get_export_stats(db: Database) -> Dict:
+    """Get statistics about exported data"""
+    stats = {}
+    wl_map = db.get_whitelist_map()
+    for tier in ConfidenceTier:
+        indicators = db.get_all_indicators_by_tier(tier)
+        indicators = [i for i in indicators if is_included(i, wl_map)]
+        stats[f"{tier.value}_count"] = len(indicators)
+    stats["total_unique_ips"] = sum(stats.values())
+    stats["whitelisted_count"] = len(db.get_whitelist())
+    return stats
+
+
+# ---- Full refresh ----
+
+def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
+    """Full refresh: fetch -> score -> export. Returns per-feed fetch results."""
+    fetched = fetch_feeds(db, config, only=only)
+    max_age_days = config.get('retention', {}).get('max_age_days', 0)
+    if max_age_days > 0:
+        purged = db.purge_stale_indicators(max_age_days)
+        logger.info(f"[retention] purged {purged} stale indicators (> {max_age_days}d)")
+    recalculate(db, config)
+    export_tiers(db, config)
+    return fetched

@@ -1,0 +1,31 @@
+# Keep the image (and anything pushed to a registry) free of VCS history,
+# local databases, and dev-only files. Dockerfile does `COPY . .`.
+.git
+.gitignore
+.dockerignore
+.claude
+.venv
+venv
+env
+__pycache__
+*.pyc
+.pytest_cache
+build
+dist
+*.egg-info
+
+# Local runtime data — must come from the mounted volume, never the image.
+data
+output
+*.db
+*.db-*
+.env
+*.env
+
+# Dev/docs not needed at runtime
+tests
+requirements-dev.txt
+README.md
+LICENSE
+assets
+docker-compose.yml

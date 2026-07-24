@@ -1,0 +1,37 @@
+# Turnkey deploy:  docker compose up -d   then open http://<server>:8080
+services:
+  threat-feed-me:
+    build: .
+    container_name: threat-feed-me
+    ports:
+      - "8080:8080"
+    volumes:
+      - threat-data:/app/data
+      - threat-output:/app/output
+    environment:
+      # Optional. Leave blank for the out-of-box free feeds. For keyed feeds
+      # (e.g. AlienVault OTX) the easiest path is the dashboard's "Set key"
+      # button, which stores the key in the data volume's .env. Setting the
+      # variable here instead also works and takes precedence on restart.
+      - OTX_API_KEY=${OTX_API_KEY:-}
+      # Optional dashboard Basic auth (leave blank to keep the dashboard open on
+      # a trusted LAN). If set, also set dashboard.auth_required: true.
+      - DASHBOARD_USER=${DASHBOARD_USER:-}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests,sys; sys.exit(0 if requests.get('http://127.0.0.1:8080/feeds/all.txt', timeout=5).ok else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  threat-data:
+    name: threatfeedme-data
+  threat-output:
+    name: threatfeedme-output
+
+networks:
+  default:
+    name: threatfeedme-network

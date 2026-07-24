@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-label="Threat Feed Me! banner">
+  <title>Threat Feed Me! — a carnivorous blocklist for your firewall</title>
+  <defs>
+    <clipPath id="panel"><rect width="1200" height="300" rx="16"/></clipPath>
+  </defs>
+  <g clip-path="url(#panel)">
+    <rect width="1200" height="300" fill="#0a0a0d"/>
+    <g stroke="#141419" stroke-width="1">
+      <path d="M0 75 H1200 M0 150 H1200 M0 225 H1200"/>
+      <path d="M150 0 V300 M300 0 V300 M450 0 V300 M600 0 V300 M750 0 V300 M900 0 V300 M1050 0 V300"/>
+    </g>
+    <g transform="translate(190 160)">
+      <rect x="-56" y="52" width="112" height="48" rx="7" fill="#121216" stroke="#232329" stroke-width="2"/>
+      <circle cx="-41" cy="65" r="3.5" fill="#f87171"/>
+      <circle cx="-29" cy="65" r="3.5" fill="#fbbf24"/>
+      <circle cx="-17" cy="65" r="3.5" fill="#34d399"/>
+      <text x="-44" y="90" font-family="Consolas, monospace" font-size="15" font-weight="600" fill="#34d399">&gt;_</text>
+      <path d="M0 52 C-4 16 10 2 4 -34" fill="none" stroke="#10b981" stroke-width="8" stroke-linecap="round"/>
+      <path d="M0 34 C-24 28 -34 16 -37 2 C-17 4 -6 16 0 24 Z" fill="#0d9668"/>
+      <path d="M4 -34 C-34 -30 -60 -50 -60 -86 C-58 -90 -52 -92 -46 -92 C-12 -92 8 -68 6 -40 Z" fill="#10b981"/>
+      <path d="M8 -46 C16 -80 42 -102 74 -100 C78 -96 79 -90 78 -84 C72 -52 44 -34 12 -38 Z" fill="#34d399"/>
+      <path d="M-58 -88 L-48 -100 L-44 -87 L-33 -99 L-29 -85 L-18 -95 L-14 -82 L-4 -90 L0 -78" fill="none" stroke="#a7f3d0" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M72 -98 L60 -92 L60 -104 L47 -96 L46 -109 L34 -99 L32 -111 L21 -100 L18 -88" fill="none" stroke="#065f46" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <g transform="rotate(-12 46 -122)">
+        <rect x="4" y="-134" width="88" height="26" rx="4" fill="#1a0f10" stroke="#f87171" stroke-width="2"/>
+        <text x="48" y="-116" text-anchor="middle" font-family="Consolas, monospace" font-size="15" font-weight="600" fill="#f87171">45.13.2.9</text>
+      </g>
+    </g>
+    <text x="400" y="140" font-family="'Inter Tight', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="700" letter-spacing="1" fill="#ecedee">Threat Feed <tspan fill="#34d399">Me</tspan><tspan fill="#f87171">!</tspan></text>
+    <text x="402" y="182" font-family="Consolas, monospace" font-size="20" fill="#8b8b95">A carnivorous blocklist for your firewall.</text>
+    <text x="402" y="226" font-family="Consolas, monospace" font-size="15" fill="#5b5b64">// aggregate free threat feeds &#183; dedupe &#183; score &#183; serve one URL your firewall polls</text>
+    <rect width="1199" height="299" x="0.5" y="0.5" rx="16" fill="none" stroke="#232329" stroke-width="1"/>
+  </g>
+</svg>

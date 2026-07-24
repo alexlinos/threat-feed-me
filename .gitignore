@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Runtime data & generated output
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/whitelist.txt
+data/uploads/
+data/backups/
+output/
+
+# Secrets / local env
+.env
+*.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local tooling / agent settings
+.claude/

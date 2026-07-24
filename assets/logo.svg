@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 96" role="img" aria-label="Threat Feed Me! logo">
+  <title>Threat Feed Me!</title>
+  <g transform="translate(48 46)">
+    <path d="M-30 7.5 C-33 -13.5 -18 -28.5 0 -28.5 C18 -28.5 33 -13.5 30 7.5 L21 7.5 L16.5 -1.5 L10.5 7.5 L4.5 -1.5 L-1.5 7.5 L-7.5 -1.5 L-13.5 7.5 L-19.5 -1.5 L-25.5 7.5 Z"
+          fill="none" stroke="#10b981" stroke-width="5.5" stroke-linejoin="round"/>
+    <path d="M0 9 C-2 24 2 28 0 39" fill="none" stroke="#10b981" stroke-width="5.5" stroke-linecap="round"/>
+    <circle cx="0" cy="-9" r="4" fill="#f87171"/>
+  </g>
+  <text x="96" y="60" font-family="'Inter Tight', 'Segoe UI', system-ui, sans-serif" font-size="38" font-weight="700" letter-spacing="0.5" fill="#10b981">Threat Feed Me<tspan fill="#f87171">!</tspan></text>
+</svg>
