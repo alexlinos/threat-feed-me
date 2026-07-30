@@ -11,10 +11,27 @@ from typing import List
 from threatfeedme.models import ThreatIndicator, ConfidenceTier, effective_sources
 
 
-def is_included(indicator: ThreatIndicator, whitelist_map: dict) -> bool:
-    """Whether an indicator should appear in outputs after whitelist scoping."""
+def is_included(indicator: ThreatIndicator, whitelist_map: dict, tier: ConfidenceTier = None) -> bool:
+    """Whether an indicator should appear in outputs after whitelist scoping.
+
+    When `tier` is set, also checks for tier-scoped whitelist entries
+    (feed_name starting with 'tier:') that exclude the indicator from that
+    specific tier's output while allowing it in others.
+    """
     eff = effective_sources(indicator.ip, indicator.sources, whitelist_map)
-    return eff is not None and len(eff) > 0
+    if eff is None:
+        return False
+    if tier and len(eff) > 0:
+        # Check tier-scoped whitelist: feed_name="tier:high" means
+        # "exclude from high tier output only".
+        tier_scope = f"tier:{tier.value}"
+        if hasattr(whitelist_map, "scoped_feeds"):
+            scoped = whitelist_map.scoped_feeds(indicator.ip)
+            if scoped and tier_scope in scoped:
+                return False
+        elif whitelist_map.get(indicator.ip) and tier_scope in whitelist_map.get(indicator.ip, set()):
+            return False
+    return len(eff) > 0
 
 
 def firewall_value(indicator: ThreatIndicator) -> str:

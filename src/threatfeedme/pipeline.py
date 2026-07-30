@@ -93,7 +93,7 @@ def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str, format: st
     """Export a single confidence tier to a file. Returns filepath."""
     indicators = db.get_all_indicators_by_tier(tier)
     wl_map = db.get_whitelist_map()
-    indicators = [i for i in indicators if is_included(i, wl_map)]
+    indicators = [i for i in indicators if is_included(i, wl_map, tier=tier)]
 
     filename = f"{tier.value}_confidence_ips.{format}"
     filepath = os.path.join(output_dir, filename)

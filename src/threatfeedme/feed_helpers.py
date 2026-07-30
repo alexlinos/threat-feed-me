@@ -84,11 +84,10 @@ def _indicators_for(tier=None):
     wl_map = core.db.get_whitelist_map()
     if tier is None or tier == "all":
         indicators = core.db.get_all_indicators()
-    elif isinstance(tier, str):
-        indicators = core.db.get_all_indicators_by_tier(ConfidenceTier(tier))
-    else:
-        indicators = core.db.get_all_indicators_by_tier(tier)
-    return [i for i in indicators if is_included(i, wl_map)]
+        return [i for i in indicators if is_included(i, wl_map)]
+    tier_enum = ConfidenceTier(tier) if isinstance(tier, str) else tier
+    indicators = core.db.get_all_indicators_by_tier(tier_enum)
+    return [i for i in indicators if is_included(i, wl_map, tier=tier_enum)]
 
 
 def _lan_ip() -> str:

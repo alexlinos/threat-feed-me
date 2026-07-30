@@ -38,7 +38,8 @@ async function addWl(e) {
     return false;
 }
 async function removeWl(ip, feed) {
-    if (!confirm('Remove whitelist entry for ' + ip + ' (' + (feed === '*' ? 'all feeds' : feed) + ')?')) return;
+    const scopeLabel = feed === '*' ? 'all tiers' : feed.startsWith('tier:') ? feed.split(':')[1] + ' only' : feed;
+    if (!confirm('Remove whitelist entry for ' + ip + ' (' + scopeLabel + ')?')) return;
     const r = await apiFetch('/api/whitelist?ip=' + encodeURIComponent(ip) + '&feed=' + encodeURIComponent(feed), {method: 'DELETE'});
     if (r.ok) { location.reload(); }
     else { const j = await r.json().catch(() => ({})); alert('Could not remove: ' + (j.detail || r.status)); }
@@ -196,7 +197,10 @@ async function openWhitelistModal(ip) {
     document.getElementById('wl-modal-note').value = '';
     const scope = document.getElementById('wl-modal-scope');
     const srcBox = document.getElementById('wl-modal-sources');
-    scope.innerHTML = '<option value="*">All feeds</option>';
+    scope.innerHTML = '<option value="*">All tiers</option>' +
+        '<option value="tier:high">High only</option>' +
+        '<option value="tier:medium">Medium only</option>' +
+        '<option value="tier:low">Low only</option>';
     srcBox.textContent = 'Loading…';
     try {
         const j = await (await fetch('/api/indicators/' + encodeURIComponent(ip))).json();
@@ -204,12 +208,6 @@ async function openWhitelistModal(ip) {
         srcBox.innerHTML = sources.length
             ? sources.map(s => '<code>' + esc(s) + '</code>').join(' ')
             : '<span class="muted">no feed sources on record</span>';
-        sources.forEach(s => {
-            const o = document.createElement('option'); o.value = s;
-            o.textContent = 'Only ' + s; scope.appendChild(o);
-        });
-        // Default to the reporting feed when there is exactly one.
-        if (sources.length === 1) scope.value = sources[0];
     } catch (e) { srcBox.textContent = 'Could not load sources'; }
     document.getElementById('wl-modal').classList.add('open');
 }

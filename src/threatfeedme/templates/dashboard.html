@@ -142,8 +142,10 @@
     <form class="wl-form" onsubmit="return addWl(event)">
         <input class="ip" id="wl-ip" type="text" placeholder="IP or CIDR" required>
         <select id="wl-feed" title="Scope">
-            <option value="{{ all_feeds }}">All feeds</option>
-            {% for name in feed_names %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+            <option value="{{ all_feeds }}">All tiers</option>
+            <option value="tier:high">High only</option>
+            <option value="tier:medium">Medium only</option>
+            <option value="tier:low">Low only</option>
         </select>
         <select id="wl-reason-code" title="Reason">
             {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
@@ -158,7 +160,7 @@
         {% for w in whitelist_rows %}
             <tr>
                 <td><code>{{ w.ip }}</code> <a class="vt-btn" href="https://www.virustotal.com/gui/search/{{ w.ip }}" target="_blank" title="Look up on VirusTotal">VT</a></td>
-                <td>{% if w.feed_name == all_feeds %}All feeds{% else %}<code>{{ w.feed_name }}</code>{% endif %}</td>
+                <td>{% if w.feed_name == all_feeds %}All tiers{% elif w.feed_name.startswith('tier:') %}<code>{{ w.feed_name.split(':')[1]|capitalize }} only</code>{% else %}<code>{{ w.feed_name }}</code>{% endif %}</td>
                 <td><span class="{{ w.reason_class }}">{{ w.reason_label }}</span><span class="muted" style="font-size:.85em">{% if w.reason %} {{ w.reason }}{% endif %}</span></td>
                 <td>{{ w.added_by }}</td>
                 <td><button class="rm-btn" onclick='removeWl({{ w.ip|tojson }}, {{ w.feed_name|tojson }})'>Remove</button></td>
@@ -181,7 +183,7 @@
             <div class="sources" id="wl-modal-sources">—</div>
         </div>
         <div class="field">
-            <label>Scope — whitelist from which feed?</label>
+            <label>Scope — whitelist from which tier?</label>
             <select id="wl-modal-scope"></select>
         </div>
         <div class="field">

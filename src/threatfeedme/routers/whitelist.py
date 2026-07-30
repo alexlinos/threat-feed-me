@@ -49,7 +49,10 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
         if request.reason_code == REASON_FALSE_POSITIVE and cidr is None:
             ind = core.db.get_indicator(stored_ip)
             sources = ind.sources if ind else []
-            blamed = sources if feed_name == ALL_FEEDS else [feed_name]
+            if feed_name == ALL_FEEDS or feed_name.startswith('tier:'):
+                blamed = sources
+            else:
+                blamed = [feed_name]
             core.db.record_false_positive(stored_ip, [f for f in blamed if f])
         else:
             core.db.clear_feedback(stored_ip, feed_name=feed_name)  # not an attributable FP
@@ -78,7 +81,12 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
         # Re-export all tier feeds so whitelisted IPs disappear immediately.
         pipeline.export_tiers(core.db, core.config)
 
-        scope = "all feeds" if feed_name == ALL_FEEDS else f"feed '{feed_name}'"
+        if feed_name == ALL_FEEDS:
+            scope = "all tiers"
+        elif feed_name.startswith('tier:'):
+            scope = f"tier '{feed_name.split(':')[1]}' only"
+        else:
+            scope = f"feed '{feed_name}'"
         return WhitelistResponse(success=True, message=f"{wl_key} whitelisted from {scope}")
     except Exception as e:
         return WhitelistResponse(success=False, message=str(e))
