@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threat Feed Me! — a carnivorous blocklist for your firewall</title>
+<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 14 free, keyless threat feeds into High/Medium/Low confidence tiers — served as one URL your firewall polls. Docker, single container, no API keys.">
+<link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
+
+<!-- Open Graph / social -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Threat Feed Me! — a carnivorous blocklist for your firewall">
+<meta property="og:description" content="On-prem threat-intel aggregator: normalize, dedupe, and score 14 free keyless threat feeds into confidence tiers, served as one URL your firewall polls. Docker, single container, no API keys.">
+<meta property="og:url" content="https://threatfeedme.app/">
+<meta property="og:image" content="https://threatfeedme.app/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Threat Feed Me! — a carnivorous blocklist for your firewall">
+<meta name="twitter:description" content="On-prem threat-intel aggregator: 14 free keyless feeds, deduped and scored into confidence tiers, served as one URL your firewall polls.">
+<meta name="twitter:image" content="https://threatfeedme.app/assets/social-preview.png">
+
+<style>
+  :root{
+    --bg:#0a0a0d;
+    --panel:#121216;
+    --panel-2:#141419;
+    --border:#232329;
+    --border-soft:#1c1c22;
+    --text:#ecedee;
+    --muted:#8b8b95;
+    --dim:#5b5b64;
+    --green:#10b981;
+    --green-bright:#34d399;
+    --green-deep:#0d9668;
+    --red:#f87171;
+    --amber:#fbbf24;
+    --mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:"Inter Tight","Segoe UI",system-ui,-apple-system,sans-serif;
+    --maxw:960px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    /* subtle grid, echoing the banner */
+    background-image:
+      linear-gradient(var(--border-soft) 1px,transparent 1px),
+      linear-gradient(90deg,var(--border-soft) 1px,transparent 1px);
+    background-size:150px 75px;
+    background-position:-1px -1px;
+  }
+  a{color:var(--green-bright);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 20px}
+
+  /* ---- Hero ---- */
+  header{padding:56px 0 8px}
+  .banner{
+    width:100%;height:auto;display:block;border-radius:16px;
+    border:1px solid var(--border);
+  }
+  .pitch{
+    font-family:var(--mono);
+    color:var(--muted);
+    font-size:1.05rem;
+    text-align:center;
+    margin:26px auto 0;
+    max-width:760px;
+  }
+  .pitch b{color:var(--text);font-weight:600}
+  .tagline{
+    text-align:center;color:var(--dim);font-family:var(--mono);
+    font-size:.9rem;margin-top:10px;
+  }
+
+  .cta-row{
+    display:flex;gap:12px;justify-content:center;flex-wrap:wrap;
+    margin:30px 0 8px;
+  }
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:11px 20px;border-radius:9px;font-weight:600;font-size:.95rem;
+    border:1px solid var(--border);
+  }
+  .btn.primary{background:var(--green);color:#04120c;border-color:var(--green)}
+  .btn.primary:hover{background:var(--green-bright);text-decoration:none}
+  .btn.ghost{color:var(--text);background:var(--panel)}
+  .btn.ghost:hover{border-color:var(--green);text-decoration:none}
+
+  /* ---- Sections ---- */
+  section{padding:44px 0;border-top:1px solid var(--border-soft)}
+  h2{
+    font-size:1.5rem;font-weight:700;letter-spacing:.2px;margin:0 0 6px;
+  }
+  h2 .hash{color:var(--green);font-family:var(--mono);font-weight:600;margin-right:.4ch}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:1rem}
+
+  /* ---- Code block ---- */
+  .code{
+    position:relative;
+    background:#0d0d11;
+    border:1px solid var(--border);
+    border-radius:12px;
+    overflow:hidden;
+  }
+  .code-head{
+    display:flex;align-items:center;gap:8px;
+    padding:10px 14px;border-bottom:1px solid var(--border);
+    background:var(--panel);
+  }
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:var(--red)} .dot.y{background:var(--amber)} .dot.g{background:var(--green-bright)}
+  .code-title{margin-left:6px;font-family:var(--mono);font-size:.8rem;color:var(--dim)}
+  .copy-btn{
+    margin-left:auto;font-family:var(--mono);font-size:.78rem;
+    background:var(--panel-2);color:var(--muted);border:1px solid var(--border);
+    border-radius:7px;padding:5px 11px;cursor:pointer;transition:.15s;
+  }
+  .copy-btn:hover{color:var(--green-bright);border-color:var(--green)}
+  .copy-btn.done{color:var(--green-bright);border-color:var(--green)}
+  pre{
+    margin:0;padding:16px 18px;overflow-x:auto;
+    font-family:var(--mono);font-size:.9rem;line-height:1.65;color:#d6d7da;
+  }
+  pre .c{color:var(--dim)}      /* comment */
+  pre .k{color:var(--green-bright)} /* keyword/binary */
+  pre .s{color:var(--amber)}    /* string-ish */
+  .after-code{color:var(--muted);font-size:.92rem;margin-top:14px}
+  .after-code code{font-family:var(--mono);font-size:.85em;background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--green-bright)}
+
+  /* ---- Tiers ---- */
+  .tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .tier{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:18px 18px 20px;position:relative;overflow:hidden;
+  }
+  .tier::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+  .tier.high::before{background:var(--red)}
+  .tier.med::before{background:var(--amber)}
+  .tier.low::before{background:var(--green-bright)}
+  .tier h3{margin:0 0 4px;font-size:1.05rem;display:flex;align-items:center;gap:8px}
+  .badge{font-family:var(--mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.5px;padding:2px 7px;border-radius:5px;border:1px solid}
+  .tier.high .badge{color:var(--red);border-color:#3a1a1c}
+  .tier.med .badge{color:var(--amber);border-color:#3a2f12}
+  .tier.low .badge{color:var(--green-bright);border-color:#123a2c}
+  .tier p{margin:8px 0 0;color:var(--muted);font-size:.92rem}
+  .tier .url{font-family:var(--mono);font-size:.82rem;color:var(--green-bright);margin-top:12px;word-break:break-all}
+  .scoring{margin:22px 0 0;color:var(--muted);font-size:.95rem}
+  .scoring li{margin:6px 0}
+
+  /* ---- Firewalls ---- */
+  .fw-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .fw{
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:14px 16px;
+  }
+  .fw .name{font-weight:600;color:var(--text)}
+  .fw .path{font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-top:4px;display:block}
+
+  /* ---- Feature chips ---- */
+  .chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+  .chip{
+    font-size:.88rem;color:var(--muted);background:var(--panel);
+    border:1px solid var(--border);border-radius:999px;padding:7px 14px;
+  }
+  .chip b{color:var(--green-bright);font-weight:600}
+
+  /* ---- Footer ---- */
+  footer{
+    border-top:1px solid var(--border-soft);padding:34px 0 60px;
+    text-align:center;color:var(--dim);font-size:.88rem;
+  }
+  footer a{color:var(--muted)}
+  footer .logo{height:30px;width:auto;margin-bottom:14px;opacity:.9}
+
+  @media (max-width:720px){
+    .tiers{grid-template-columns:1fr}
+    .fw-grid{grid-template-columns:1fr}
+    header{padding:32px 0 4px}
+    h2{font-size:1.3rem}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <img class="banner" src="assets/banner.svg" alt="Threat Feed Me! — a carnivorous blocklist for your firewall">
+    <p class="pitch">
+      An <b>on-prem threat-intelligence aggregator</b> that normalizes, dedupes, and scores
+      <b>14 free, keyless threat feeds</b> into High / Medium / Low confidence tiers —
+      then serves them as <b>one URL your firewall polls</b>.
+    </p>
+    <p class="tagline">// Feed it threats. It's always hungry.</p>
+    <div class="cta-row">
+      <a class="btn primary" href="#deploy">Deploy in one command</a>
+      <a class="btn ghost" href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">View on GitHub →</a>
+    </div>
+    <div class="chips" style="justify-content:center;margin-top:22px">
+      <span class="chip"><b>Docker</b> · single container</span>
+      <span class="chip">FastAPI + <b>SQLite</b></span>
+      <span class="chip">No accounts · <b>no API keys</b></span>
+      <span class="chip">Auto-refresh every <b>60 min</b></span>
+      <span class="chip">Everything stays <b>on-prem</b></span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- DEPLOY -->
+  <section id="deploy">
+    <div class="wrap">
+      <h2><span class="hash">$</span>Deploy</h2>
+      <p class="sub">Runs on a small on-prem box or VM. No tuning, no keys. Copy, paste, done.</p>
+
+      <div class="code">
+        <div class="code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="code-title">bash — run the published image</span>
+          <button class="copy-btn" data-copy="run">Copy</button>
+        </div>
+<pre id="run"><span class="k">docker</span> run -d --name threat-feed-me -p <span class="s">8080:8080</span> \
+  -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest
+<span class="c"># then open the dashboard at http://&lt;this-server-ip&gt;:8080</span></pre>
+      </div>
+
+      <p class="after-code">
+        Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
+        On first start it fetches the 14 feeds, dedupes and scores them, and begins serving block lists —
+        then auto-refreshes every 60 minutes. Prefer compose? See the
+        <a href="https://github.com/alexlinos/threat-feed-me#deploy" target="_blank" rel="noopener">README</a>.
+      </p>
+    </div>
+  </section>
+
+  <!-- TIERS -->
+  <section id="tiers">
+    <div class="wrap">
+      <h2><span class="hash">#</span>Confidence tiers</h2>
+      <p class="sub">Every deduped IP is scored and published as a live feed URL. Paste the tier that fits your risk appetite into your firewall.</p>
+
+      <div class="tiers">
+        <div class="tier high">
+          <h3>High <span class="badge">strictest</span></h3>
+          <p>3+ sources agree, threat-intel validated. The cleanest list — near-zero false positives.</p>
+          <div class="url">/feeds/high.txt</div>
+        </div>
+        <div class="tier med">
+          <h3>Medium <span class="badge">recommended</span></h3>
+          <p>2+ reputable sources. The balanced default most firewalls should poll.</p>
+          <div class="url">/feeds/medium.txt</div>
+        </div>
+        <div class="tier low">
+          <h3>Low <span class="badge">high volume</span></h3>
+          <p>Every deduped IP, seen at least once (including your custom lists). Widest net.</p>
+          <div class="url">/feeds/low.txt</div>
+        </div>
+      </div>
+
+      <ul class="scoring">
+        <li>Scored on <b>number of sources</b> reporting the IP (including netblock overlap across feeds),</li>
+        <li><b>feed reputation</b> — equal by default and <i>earned</i>: flagging a false positive lowers that feed's weight,</li>
+        <li>and <b>age decay</b>. Whitelist false positives globally or per-feed; the list self-heals.</li>
+      </ul>
+      <p class="after-code" style="margin-top:18px">
+        Each URL returns plain text, one IP or CIDR per line, generated live with the whitelist applied.
+        <code>.csv</code> and <code>.json</code> variants are available for SIEM use.
+      </p>
+    </div>
+  </section>
+
+  <!-- FIREWALLS -->
+  <section id="firewalls">
+    <div class="wrap">
+      <h2><span class="hash">&gt;</span>Wire it into your firewall</h2>
+      <p class="sub">Paste a feed URL into your firewall's external threat-feed / block-list setting. The dashboard shows the exact URLs and per-vendor steps.</p>
+
+      <div class="fw-grid">
+        <div class="fw"><span class="name">FortiGate</span><span class="path">Security Fabric → External Connectors → IP Address Threat Feed</span></div>
+        <div class="fw"><span class="name">Sophos Firewall (SFOS 21.0+)</span><span class="path">Active threat response → Third-party threat feeds → Add</span></div>
+        <div class="fw"><span class="name">SonicWall (SonicOS 7)</span><span class="path">Object → Match Objects → Dynamic External Object</span></div>
+        <div class="fw"><span class="name">Palo Alto</span><span class="path">Objects → External Dynamic Lists → IP List</span></div>
+        <div class="fw"><span class="name">Cisco Secure Firewall (FMC)</span><span class="path">Objects → Security Intelligence → Network Lists and Feeds</span></div>
+        <div class="fw"><span class="name">Check Point (R81+)</span><span class="path">Threat Prevention → Indicators → External IOC Feed</span></div>
+        <div class="fw"><span class="name">pfSense (pfBlockerNG)</span><span class="path">Firewall → pfBlockerNG → IPv4 → add the URL as a source</span></div>
+        <div class="fw"><span class="name">OPNsense</span><span class="path">Firewall → Aliases → URL Table (IPs)</span></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <img class="logo" src="assets/logo.svg" alt="Threat Feed Me!">
+    <div>
+      Free &amp; open source (MIT) ·
+      <a href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">github.com/alexlinos/threat-feed-me</a>
+    </div>
+    <div style="margin-top:8px">Feed it threats. It's always hungry.</div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.copy-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var el = document.getElementById(btn.dataset.copy);
+      navigator.clipboard.writeText(el.innerText).then(function(){
+        var old = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        btn.classList.add('done');
+        setTimeout(function(){ btn.textContent = old; btn.classList.remove('done'); }, 1800);
+      });
+    });
+  });
+</script>
+</body>
+</html>
