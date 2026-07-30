@@ -151,7 +151,7 @@ async function loadIndicators() {
                 '<td><span class="badge ' + badge + '">' + esc(i.tier) + '</span></td>' +
                 '<td>' + esc(i.confidence_score) + '</td>' +
                 '<td class="muted" style="font-size:.82em">' + esc(i.sources.join(', ')) + '</td>' +
-                '<td><button class="mini-btn" data-ip="' + esc(i.ip) + '" onclick="openWhitelistModal(this.dataset.ip)">Whitelist…</button></td></tr>';
+                '<td><button class="mini-btn" data-ip="' + esc(i.ip) + '" onclick="openWhitelistModal(this.dataset.ip)">Whitelist…</button> <a class="vt-btn" href="https://www.virustotal.com/gui/search/' + encodeURIComponent(i.value) + '" target="_blank" title="Look up on VirusTotal">VT</a></td></tr>';
         }).join('');
     }
     const start = indTotal ? indOffset + 1 : 0;

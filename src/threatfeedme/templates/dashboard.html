@@ -157,7 +157,7 @@
         <tbody>
         {% for w in whitelist_rows %}
             <tr>
-                <td><code>{{ w.ip }}</code></td>
+                <td><code>{{ w.ip }}</code> <a class="vt-btn" href="https://www.virustotal.com/gui/search/{{ w.ip }}" target="_blank" title="Look up on VirusTotal">VT</a></td>
                 <td>{% if w.feed_name == all_feeds %}All feeds{% else %}<code>{{ w.feed_name }}</code>{% endif %}</td>
                 <td><span class="{{ w.reason_class }}">{{ w.reason_label }}</span><span class="muted" style="font-size:.85em">{% if w.reason %} {{ w.reason }}{% endif %}</span></td>
                 <td>{{ w.added_by }}</td>

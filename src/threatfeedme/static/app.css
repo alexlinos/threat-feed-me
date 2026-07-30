@@ -129,6 +129,10 @@ input::placeholder { color:var(--dim); }
 .rm-btn { padding:4px 10px; border:1px solid rgba(248,113,113,.35); border-radius:4px;
            background:transparent; color:var(--red); cursor:pointer; font-size:.8em; }
 .rm-btn:hover { background:rgba(248,113,113,.12); }
+.vt-btn { padding:2px 8px; border:1px solid rgba(96,165,250,.5); border-radius:3px;
+           background:transparent; color:var(--blue); cursor:pointer; font-size:.78em;
+           font-weight:600; text-decoration:none; margin-left:6px; font-family:var(--mono); }
+.vt-btn:hover { background:rgba(96,165,250,.12); }
 .mini-btn { padding:4px 10px; border:1px solid rgba(16,185,129,.35); border-radius:4px;
              background:transparent; color:var(--accent-hi); cursor:pointer; font-size:.8em; }
 .mini-btn:hover { background:rgba(16,185,129,.12); }
