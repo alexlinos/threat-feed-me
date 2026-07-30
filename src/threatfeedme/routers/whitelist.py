@@ -75,6 +75,9 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
             score, tier = scorer.calculate_score(stored_ip)
             core.db.set_indicator_score(stored_ip, score, tier.value)
 
+        # Re-export all tier feeds so whitelisted IPs disappear immediately.
+        pipeline.export_tiers(core.db, core.config)
+
         scope = "all feeds" if feed_name == ALL_FEEDS else f"feed '{feed_name}'"
         return WhitelistResponse(success=True, message=f"{wl_key} whitelisted from {scope}")
     except Exception as e:
@@ -90,8 +93,20 @@ def remove_from_whitelist(ip: str, feed: Optional[str] = None, _=Depends(require
     Pass feed=<name> (or feed=* for the global entry) to remove a single scope;
     omit it to remove all scopes for the IP."""
     if core.db.remove_from_whitelist(ip, feed_name=feed):
-        # Withdraw only the matching scope's false-positive feedback so the
-        # penalty for OTHER feeds on the same IP is preserved.
+        # Withdraw false-positive feedback so the penalty is removed.
         core.db.clear_feedback(ip, feed_name=feed)
-        return {"success": True, "message": f"Whitelist entry for {ip} removed"}
+        # Rescore the IP and re-export all tier feeds so the IP reappears
+        # in the correct tier immediately (not just on the next pipeline run).
+        try:
+            stored_ip, _ = _normalize_indicator(ip)  # strip /cidr
+        except ValueError:
+            stored_ip = ip
+        if '/' not in stored_ip:  # bare IP — CIDR ranges excluded live by matcher
+            from threatfeedme.scorer import ConfidenceScorer
+            scorer = ConfidenceScorer(core.db, pipeline.scorer_config(core.db, core.config))
+            score, tier = scorer.calculate_score(stored_ip)
+            core.db.set_indicator_score(stored_ip, score, tier.value)
+        # Re-export all tier feeds so the change is reflected immediately.
+        pipeline.export_tiers(core.db, core.config)
+        return {"success": True, "message": f"Whitelist entry for {ip} removed — rescored and re-exported"}
     raise HTTPException(status_code=404, detail="IP not found in whitelist")
