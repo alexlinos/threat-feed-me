@@ -35,7 +35,9 @@ class FeedRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
-    refresh_interval_minutes: int
+    # Both optional so a client can update either setting independently.
+    refresh_interval_minutes: Optional[int] = None
+    retention_max_age_days: Optional[int] = None
 
 
 class ApiKeyRequest(BaseModel):

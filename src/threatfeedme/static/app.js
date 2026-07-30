@@ -101,6 +101,13 @@ async function saveInterval() {
         body: JSON.stringify({refresh_interval_minutes: v})});
     alert(r.ok ? 'Auto-refresh set to every ' + v + ' min' : 'Could not save');
 }
+async function saveRetention() {
+    const v = parseInt(document.getElementById('retention-days').value, 10);
+    if (isNaN(v) || v < 0 || v > 3650) { alert('Enter a whole number of days (0-3650; 0 = keep forever)'); return; }
+    const r = await apiFetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({retention_max_age_days: v})});
+    alert(r.ok ? (v === 0 ? 'Retention set to keep IPs forever' : 'Retention set to ' + v + ' days') : 'Could not save');
+}
 function refreshAll() { startRefresh(null); }
 function refreshFeed(name) { startRefresh(name); }
 async function startRefresh(name) {

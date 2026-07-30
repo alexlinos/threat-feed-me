@@ -72,6 +72,11 @@
             <input id="interval-min" type="number" min="1" value="{{ interval_min }}">
             min <button class="mini-btn" onclick="saveInterval()">Save</button>
         </span>
+        <span class="interval-box" title="How long an IP is kept after it was last seen in any feed. 0 = keep forever.">
+            Keep IPs for
+            <input id="retention-days" type="number" min="0" max="3650" value="{{ retention_days }}">
+            days <button class="mini-btn" onclick="saveRetention()">Save</button>
+        </span>
     </div>
     <table>
         <thead><tr><th>Feed</th><th>Type</th><th>Enabled</th><th>Indicators</th><th>Last run</th><th></th></tr></thead>

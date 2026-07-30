@@ -43,8 +43,10 @@ firewalls can poll them.
 - **Feed Aggregation**: Pull from multiple sources (OSINT, commercial, custom)
 - **Runtime feed management**: Add, remove, enable/disable, and mix-and-match
   feeds from the dashboard — including your own custom URL or local-file feeds
-- **Force refresh & scheduling**: Refresh all feeds (or one) on demand, and set
-  an auto-refresh interval (default 60 minutes)
+- **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
+  demand, set the auto-refresh interval (default 60 minutes), and set how long
+  an IP is kept after it drops out of every feed (default 7 days; `0` = keep
+  forever) — all from the dashboard toolbar, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
 - **Confidence Scoring**: High/Medium/Low tiers based on:
   - Number of sources reporting the IP (including netblock overlap across feeds)
@@ -204,6 +206,16 @@ Edit `config.yaml` to customize:
 - Confidence scoring weights
 - Whitelist rules
 - Export formats and paths
+- **Retention** (`retention.max_age_days`, default **7**) — how long an IP is
+  kept after it was last seen in *any* feed. Because `last_seen` is refreshed
+  whenever any feed re-reports an IP, this mostly evicts transient high-churn
+  entries (scanners, brute-force) while continuously-listed feeds stay put. Set
+  `0` to keep indefinitely.
+
+Values in `config.yaml` are the **seed defaults**. Runtime-adjustable settings —
+the auto-refresh interval and the retention window — can be changed live from
+the dashboard toolbar (or `POST /api/settings`); the stored value then takes
+precedence over the file, so it survives restarts without editing config.
 
 ## License
 

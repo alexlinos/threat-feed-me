@@ -208,7 +208,14 @@ output:
     - json
 
 retention:
-  max_age_days: 30
+  # How long an IP is kept after it was last seen in ANY feed. Because last_seen
+  # is refreshed whenever any feed re-reports an IP, this mainly evicts transient
+  # high-churn entries (scanners, brute-force) while continuously-listed feeds
+  # (Spamhaus, Talos, ...) are effectively immune. 0 = keep forever.
+  #
+  # This is the seed default only. The live value is editable at runtime from the
+  # dashboard (Feeds toolbar) and stored in the DB, which then takes precedence.
+  max_age_days: 7
 
 database:
   path: ./data/threatfeedme.db

@@ -12,6 +12,7 @@ from threatfeedme.exporter import is_included
 from threatfeedme.feed_helpers import TIER_FEEDS, _feed_base
 from threatfeedme.models import ALL_FEEDS, ConfidenceTier, FeedType, WHITELIST_REASONS
 from threatfeedme.scheduler import REFRESH_INTERVAL_KEY, _refresh_interval_minutes, _run_backup
+from threatfeedme.pipeline import RETENTION_MAX_AGE_KEY, retention_max_age_days
 from threatfeedme.schemas import SettingsRequest
 from threatfeedme.scorer import fp_penalty_factor, FP_DEGRADED_FACTOR
 
@@ -120,6 +121,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "feed_rows": feed_rows,
         "feed_types": [t.value for t in FeedType],
         "interval_min": _refresh_interval_minutes(),
+        "retention_days": retention_max_age_days(core.db, core.config),
         "whitelist_rows": whitelist_rows,
         "feed_names": [fsrc.name for fsrc in feed_sources],
         "all_feeds": ALL_FEEDS,
@@ -138,15 +140,27 @@ def get_stats(_=Depends(require_auth)):
 
 @router.get("/api/settings")
 def get_settings(_=Depends(require_auth)):
-    return {"refresh_interval_minutes": _refresh_interval_minutes()}
+    return {
+        "refresh_interval_minutes": _refresh_interval_minutes(),
+        "retention_max_age_days": retention_max_age_days(core.db, core.config),
+    }
 
 
 @router.post("/api/settings")
 def update_settings(request: SettingsRequest, _=Depends(require_auth), _csrf=Depends(csrf_check)):
-    if request.refresh_interval_minutes < 1:
-        raise HTTPException(status_code=400, detail="refresh_interval_minutes must be >= 1")
-    core.db.set_setting(REFRESH_INTERVAL_KEY, request.refresh_interval_minutes)
-    return {"success": True, "refresh_interval_minutes": request.refresh_interval_minutes}
+    if request.refresh_interval_minutes is not None:
+        if request.refresh_interval_minutes < 1:
+            raise HTTPException(status_code=400, detail="refresh_interval_minutes must be >= 1")
+        core.db.set_setting(REFRESH_INTERVAL_KEY, request.refresh_interval_minutes)
+    if request.retention_max_age_days is not None:
+        if not (0 <= request.retention_max_age_days <= 3650):
+            raise HTTPException(status_code=400, detail="retention_max_age_days must be 0-3650 (0 = keep forever)")
+        core.db.set_setting(RETENTION_MAX_AGE_KEY, request.retention_max_age_days)
+    return {
+        "success": True,
+        "refresh_interval_minutes": _refresh_interval_minutes(),
+        "retention_max_age_days": retention_max_age_days(core.db, core.config),
+    }
 
 
 @router.post("/api/recalculate-scores")

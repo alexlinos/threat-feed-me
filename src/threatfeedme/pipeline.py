@@ -136,12 +136,34 @@ def get_export_stats(db: Database) -> Dict:
     return stats
 
 
+# ---- Retention ----
+
+RETENTION_MAX_AGE_KEY = "retention_max_age_days"
+DEFAULT_RETENTION_DAYS = 7  # fallback if neither the DB setting nor config sets it
+
+
+def retention_max_age_days(db: Database, config: Dict) -> int:
+    """Effective retention window in days.
+
+    A runtime DB setting (editable from the dashboard) takes precedence; the
+    config's ``retention.max_age_days`` is the seed default. Returns 0 to mean
+    "keep forever" (purge disabled). Invalid values fall back to the default.
+    """
+    val = db.get_setting(RETENTION_MAX_AGE_KEY)
+    if val is None or val == "":
+        val = (config.get('retention', {}) or {}).get('max_age_days', DEFAULT_RETENTION_DAYS)
+    try:
+        return max(0, int(val))
+    except (ValueError, TypeError):
+        return DEFAULT_RETENTION_DAYS
+
+
 # ---- Full refresh ----
 
 def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
     """Full refresh: fetch -> score -> export. Returns per-feed fetch results."""
     fetched = fetch_feeds(db, config, only=only)
-    max_age_days = config.get('retention', {}).get('max_age_days', 0)
+    max_age_days = retention_max_age_days(db, config)
     if max_age_days > 0:
         purged = db.purge_stale_indicators(max_age_days)
         logger.info(f"[retention] purged {purged} stale indicators (> {max_age_days}d)")
