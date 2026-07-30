@@ -41,16 +41,19 @@ def dashboard(request: Request, _=Depends(require_auth)):
     feed_stats = {fs.feed_name: fs for fs in core.db.get_feed_stats()}
     whitelist = core.db.get_whitelist()
 
-    # Per-feed counts, whitelist-scoped so they match what the URLs serve.
+    # Per-feed counts, whitelist-scoped (including tier-scoped entries) so
+    # each card's number matches what its URL actually serves.
     wl_map = core.db.get_whitelist_map()
     counts = {}
     for f in TIER_FEEDS:
         tier_key = f["key"]
         if tier_key == "all":
             inds = core.db.get_all_indicators()
+            counts[tier_key] = sum(1 for i in inds if is_included(i, wl_map))
         else:
-            inds = core.db.get_all_indicators_by_tier(ConfidenceTier(tier_key))
-        counts[tier_key] = sum(1 for i in inds if is_included(i, wl_map))
+            tier_enum = ConfidenceTier(tier_key)
+            inds = core.db.get_all_indicators_by_tier(tier_enum)
+            counts[tier_key] = sum(1 for i in inds if is_included(i, wl_map, tier=tier_enum))
 
     # ---- Feed URL cards (the hero of the page) ----
     total_inds = len(core.db.get_all_indicators())

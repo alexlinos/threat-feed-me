@@ -121,11 +121,48 @@ def test_feed_base_honors_reverse_proxy_without_port():
     assert base == "https://feeds.example.org"
 
 
-def test_homepage_has_whitelist_form_with_feed_scope(client):
+def test_homepage_has_whitelist_form_with_tier_scope(client):
     body = client.get("/").text
     assert 'id="wl-feed"' in body
-    assert "All feeds" in body
-    assert "custom_honeypot" in body  # a configured feed appears as a scope option
+    assert "All tiers" in body
+    for tier_option in ("tier:high", "tier:medium", "tier:low"):
+        assert tier_option in body  # tier scopes replace per-feed scopes
+
+
+def test_tier_scoped_fp_feedback_cleared_on_remove(client):
+    """Regression: a tier-scoped FP blames every reporting feed; removing the
+    whitelist entry must clear that feedback (clearing by the literal
+    'tier:...' scope matches nothing and left the FP penalty stuck)."""
+    from threatfeedme import dashboard
+    db = dashboard.db
+    db.add_indicator("198.51.100.77", "spamhaus_drop", {})
+    r = client.post("/api/whitelist", json={
+        "ip": "198.51.100.77", "feed_name": "tier:high",
+        "reason_code": "false_positive",
+    })
+    assert r.status_code == 200 and r.json()["success"] is True, r.text
+    assert db.get_feed_fp_counts().get("spamhaus_drop", 0) >= 1
+
+    r = client.delete("/api/whitelist?ip=198.51.100.77&feed=tier:high")
+    assert r.status_code == 200, r.text
+    assert db.get_feed_fp_counts().get("spamhaus_drop", 0) == 0
+
+
+def test_tier_scoped_entry_excludes_from_that_tier_only(client):
+    """A tier:medium entry hides the IP from medium.txt but not all.txt."""
+    from threatfeedme import dashboard
+    db = dashboard.db
+    # 45.66.230.99 is medium in this fixture (honeypot IP inside spamhaus /24).
+    assert "45.66.230.99" in client.get("/feeds/medium.txt").text
+    r = client.post("/api/whitelist", json={
+        "ip": "45.66.230.99", "feed_name": "tier:medium", "reason_code": "other",
+    })
+    assert r.status_code == 200 and r.json()["success"] is True, r.text
+    try:
+        assert "45.66.230.99" not in client.get("/feeds/medium.txt").text
+        assert "45.66.230.99" in client.get("/feeds/all.txt").text
+    finally:
+        client.delete("/api/whitelist?ip=45.66.230.99&feed=tier:medium")
 
 
 def test_feed_source_api_crud(client):

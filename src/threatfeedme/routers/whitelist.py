@@ -14,6 +14,21 @@ from threatfeedme.schemas import WhitelistRequest, WhitelistResponse
 router = APIRouter()
 
 
+def _feedback_scope(feed_name: Optional[str]) -> Optional[str]:
+    """Map a whitelist scope to the feed_feedback scope it governs.
+
+    Feedback rows are keyed by REAL feed names. Global ('*') and tier-scoped
+    ('tier:high') entries attribute a false positive to every feed that
+    reported the IP, so withdrawing/clearing them must clear the IP's
+    feedback across all feeds (None). Only a real feed-name scope clears
+    narrowly — passing 'tier:high' through literally would match nothing and
+    leave the feed penalty (and its FP badge) stuck forever.
+    """
+    if feed_name and feed_name != ALL_FEEDS and not feed_name.startswith('tier:'):
+        return feed_name
+    return None
+
+
 @router.get("/api/whitelist")
 def get_whitelist(_=Depends(require_auth)):
     """Get all whitelist entries"""
@@ -55,7 +70,9 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
                 blamed = [feed_name]
             core.db.record_false_positive(stored_ip, [f for f in blamed if f])
         else:
-            core.db.clear_feedback(stored_ip, feed_name=feed_name)  # not an attributable FP
+            # Not an attributable FP: clear any prior FP attribution this
+            # scope governs (all feeds for */tier: scopes, one feed otherwise).
+            core.db.clear_feedback(stored_ip, feed_name=_feedback_scope(feed_name))
 
         core.db.add_to_whitelist(
             ip=wl_key,
@@ -101,8 +118,11 @@ def remove_from_whitelist(ip: str, feed: Optional[str] = None, _=Depends(require
     Pass feed=<name> (or feed=* for the global entry) to remove a single scope;
     omit it to remove all scopes for the IP."""
     if core.db.remove_from_whitelist(ip, feed_name=feed):
-        # Withdraw false-positive feedback so the penalty is removed.
-        core.db.clear_feedback(ip, feed_name=feed)
+        # Withdraw the false-positive feedback this entry's scope governs.
+        # Tier/global scopes blamed every reporting feed at add time, so they
+        # must clear feedback for all feeds — clearing by the literal scope
+        # name would match nothing and leave the penalty stuck.
+        core.db.clear_feedback(ip, feed_name=_feedback_scope(feed))
         # Rescore the IP and re-export all tier feeds so the IP reappears
         # in the correct tier immediately (not just on the next pipeline run).
         try:

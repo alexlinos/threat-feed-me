@@ -80,7 +80,8 @@ th { background:var(--card-2); color:var(--muted); font-size:.7em; font-weight:6
 tr:last-child td { border-bottom:none; }
 tbody tr:hover td { background:rgba(255,255,255,.015); }
 .badge { padding:2px 9px; border-radius:3px; font-size:.78em; font-weight:600;
-          font-family:var(--mono); border:1px solid transparent; }
+          font-family:var(--mono); border:1px solid transparent;
+          white-space:nowrap; display:inline-block; }
 .badge-success { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
 .badge-error { background:rgba(248,113,113,.1); color:var(--red); border-color:rgba(248,113,113,.3); }
 .badge.tier-high { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
