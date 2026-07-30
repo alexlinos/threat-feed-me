@@ -109,7 +109,10 @@ firewalls can poll them.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+## Run from source (without Docker)
+
+For development, or to run without containers. The Docker paths under
+[Deploy](#deploy) are the quick way; this is the manual alternative.
 
 ```bash
 # Clone and setup
@@ -128,6 +131,11 @@ python -m threatfeedme.main --export
 # Start dashboard
 python -m threatfeedme.dashboard
 ```
+
+> **Note:** run this way, the dashboard binds to `dashboard.host` / `dashboard.port`
+> from `config.yaml` — **`127.0.0.1:8080` by default**, i.e. localhost only. To
+> reach it from another machine, set `dashboard.host: 0.0.0.0` (the Docker
+> entrypoint already binds `0.0.0.0:8080`, so this note doesn't apply there).
 
 ## Using the feeds in your firewall
 
