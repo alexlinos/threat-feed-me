@@ -6,17 +6,30 @@
 
 On-prem threat intelligence aggregator that normalizes, dedupes, and scores threat feeds into confidence tiers — then serves them as one URL your firewall polls. Feed it threats. It's always hungry.
 
-## Deploy in 3 steps (out of the box)
+## Deploy
 
 Designed to run on a small on-prem box or VM with no tuning and no API keys.
 
+**Fastest — run the published image** (nothing to clone or build):
+
 ```bash
-docker compose up -d           # 1. start it
-# 2. open the dashboard:
-#    http://<this-server-ip>:8080
-# 3. copy the "Medium confidence" feed URL into your firewall's threat-feed
-#    setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco, pfSense, ...)
+docker run -d --name threat-feed-me -p 8080:8080 \
+  -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest
+# then open the dashboard at http://<this-server-ip>:8080
 ```
+
+**Or with docker compose** (clone first — gives you `config.yaml` to edit):
+
+```bash
+git clone https://github.com/alexlinos/threat-feed-me.git
+cd threat-feed-me
+docker compose pull      # use the published image ...
+docker compose up -d     # ... or `up -d --build` to build from source instead
+```
+
+Then open the dashboard and copy the **"Medium confidence"** feed URL into your
+firewall's threat-feed setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco,
+pfSense, ...).
 
 That's it. On first start it fetches **14 free, keyless threat feeds**, dedupes
 and scores them, and begins serving block lists. It **auto-refreshes every 60
