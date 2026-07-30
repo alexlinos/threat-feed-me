@@ -1,6 +1,10 @@
-# Turnkey deploy:  docker compose up -d   then open http://<server>:8080
+# Turnkey deploy — build from source:  docker compose up -d   then open http://<server>:8080
+# Or run the published image without building:  docker compose pull && docker compose up -d
 services:
   threat-feed-me:
+    # 'image' is both what a local build is tagged as and what `docker compose pull` fetches
+    # from Docker Hub; 'build: .' is kept so the repo still builds from source on demand.
+    image: alexlinos/threat-feed-me:latest
     build: .
     container_name: threat-feed-me
     ports:
