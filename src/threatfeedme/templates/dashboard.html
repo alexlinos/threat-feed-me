@@ -27,7 +27,7 @@
         <div class="feed-head">
             <span class="feed-label">{{ f.label }}</span>
             {% if f.recommended %}<span class="rec">Recommended</span>{% endif %}
-            <span class="feed-count">{{ '{:,}'.format(f.count) }} entries</span>
+            <span class="feed-count">{% if f.count == 0 and f.processing %}<span class="processing">Processing…</span>{% else %}{{ '{:,}'.format(f.count) }} entries{% endif %}</span>
         </div>
         <p class="feed-blurb">{{ f.blurb }}</p>
         <div class="url-row">

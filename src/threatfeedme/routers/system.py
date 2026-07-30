@@ -53,6 +53,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
         counts[tier_key] = sum(1 for i in inds if is_included(i, wl_map))
 
     # ---- Feed URL cards (the hero of the page) ----
+    total_inds = len(core.db.get_all_indicators())
     feed_cards = [
         {
             "name": f["key"],
@@ -60,6 +61,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "blurb": f["description"],
             "recommended": f["recommended"],
             "count": counts[f["key"]],
+            "processing": f["key"] != "all" and counts[f["key"]] == 0 and total_inds > 0,
         }
         for f in TIER_FEEDS
     ]

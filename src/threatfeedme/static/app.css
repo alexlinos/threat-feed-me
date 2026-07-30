@@ -46,6 +46,7 @@ h2::before { content:"// "; color:var(--accent-hi); }
 .feed-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .feed-label { font-weight:650; font-size:1.02em; }
 .feed-count { margin-left:auto; color:var(--muted); font-size:.85em; font-family:var(--mono); }
+.processing { color:var(--amber); animation:pulse 1.8s ease-in-out infinite; display:inline-block; }
 .rec { background:rgba(16,185,129,.12); color:var(--accent-hi); font-size:.68em; font-weight:600;
         border:1px solid rgba(16,185,129,.35); padding:2px 8px; border-radius:3px;
         text-transform:uppercase; letter-spacing:.08em; }
