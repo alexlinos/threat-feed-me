@@ -15,6 +15,7 @@ therefore swap in a different database/config without subprocess isolation.
 Lifespan (app.py) explicitly warms the singletons so the server path is
 unchanged.
 """
+import logging
 import os
 
 import yaml
@@ -22,6 +23,8 @@ from fastapi.templating import Jinja2Templates
 
 from threatfeedme.database import Database
 from threatfeedme.safety import SafetyFilter
+
+logger = logging.getLogger(__name__)
 
 # Internal state: None until first access or explicit init().
 _config = None
@@ -96,8 +99,19 @@ def init(config_path: str = None):
     # realpath (not abspath) so symlinked components are resolved for containment.
     _upload_dir = os.path.realpath(os.path.join(os.path.dirname(_db_path) or ".", "uploads"))
 
-    # Seed feed sources from config on first run; the DB is authoritative after.
+    # Seed feed sources from config on first run; the DB is authoritative for
+    # user state after that. On every startup, merge changes to the SHIPPED
+    # defaults (new feeds, updated URLs) into the DB without touching user
+    # customizations, deletions, or accumulated data — so updating the app
+    # never requires wiping the database.
     _db.seed_feeds_from_config(_config)
+    sync = _db.sync_default_feeds(_config)
+    if sync["added"] or sync["updated"]:
+        logger.info(
+            "Default feed sync: added %s; updated %s",
+            ", ".join(sync["added"]) or "none",
+            ", ".join(sync["updated"]) or "none",
+        )
 
     # Safety guard for manual adds (config-toggleable; see config.yaml `safety`).
     _safety = SafetyFilter.from_config(_config)

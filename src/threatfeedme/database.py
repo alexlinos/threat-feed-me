@@ -22,6 +22,28 @@ def _meta_cidr(meta: Dict) -> str:
     return meta.get('cidr') if meta else None
 
 
+def _feed_fingerprint(feed: FeedSource) -> str:
+    """Stable digest of a feed definition's seedable fields.
+
+    Stored on the feeds row when a default is seeded/synced. A row whose
+    CURRENT values still hash to its stored fingerprint is an untouched
+    default, which sync_default_feeds may safely update when the shipped
+    config changes; any user edit (URL, weight, enabled toggle, ...) makes
+    the values diverge from the fingerprint and the row is left alone."""
+    return json.dumps({
+        'url': feed.url,
+        'feed_type': feed.feed_type.value,
+        'weight': feed.weight,
+        'update_interval': feed.update_interval,
+        'requires_auth': bool(feed.requires_auth),
+        'auth_env': feed.auth_env,
+        'auth_header': feed.auth_header or 'Authorization',
+        'local_file': bool(feed.local_file),
+        'scraper': feed.scraper,
+        'enabled': bool(feed.enabled),
+    }, sort_keys=True)
+
+
 class Database:
     def __init__(self, db_path: str = "./data/threatfeedme.db"):
         self.db_path = db_path
@@ -135,7 +157,18 @@ class Database:
                     scraper TEXT,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     added_by TEXT,
-                    added_at TEXT
+                    added_at TEXT,
+                    seed_fingerprint TEXT
+                )
+            """)
+
+            # Tombstones for deliberately removed default feeds, so an app
+            # update (sync_default_feeds) never resurrects a feed the operator
+            # deleted. Cleared when the feed is explicitly re-added.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS deleted_feeds (
+                    name TEXT PRIMARY KEY,
+                    deleted_at TEXT NOT NULL
                 )
             """)
 
@@ -201,6 +234,15 @@ class Database:
             if f_cols and 'scraper' not in f_cols:
                 try:
                     cursor.execute("ALTER TABLE feeds ADD COLUMN scraper TEXT")
+                except sqlite3.OperationalError:
+                    pass
+            # Upgrade migration: pre-existing databases get the fingerprint
+            # column with NULL values, which sync_default_feeds treats as
+            # "possibly customized" — existing rows are never auto-updated,
+            # only genuinely new defaults are added.
+            if f_cols and 'seed_fingerprint' not in f_cols:
+                try:
+                    cursor.execute("ALTER TABLE feeds ADD COLUMN seed_fingerprint TEXT")
                 except sqlite3.OperationalError:
                     pass
 
@@ -600,18 +642,69 @@ class Database:
                 cur.execute(
                     "INSERT OR IGNORE INTO feeds "
                     "(name, url, feed_type, weight, update_interval, requires_auth, "
-                    "auth_env, auth_header, local_file, scraper, enabled, added_by, added_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?)",
+                    "auth_env, auth_header, local_file, scraper, enabled, added_by, "
+                    "added_at, seed_fingerprint) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?, ?)",
                     (feed.name, feed.url, feed.feed_type.value, feed.weight,
                      feed.update_interval, int(feed.requires_auth), feed.auth_env,
                      feed.auth_header, int(feed.local_file), feed.scraper,
-                     int(feed.enabled), now),
+                     int(feed.enabled), now, _feed_fingerprint(feed)),
                 )
                 seeded += 1
             return seeded
 
+    def sync_default_feeds(self, config: Dict) -> Dict[str, List[str]]:
+        """Merge the shipped default feeds into an existing database on app
+        update, without touching user data or customizations.
+
+        Runs on every startup. For each feed in config:
+          - tombstoned (operator deleted it)     -> skipped, stays deleted
+          - missing from the DB                  -> added (a new default)
+          - present and still an untouched
+            default (row matches its stored
+            fingerprint) but config changed      -> updated to the new default
+          - present but customized, or predating
+            fingerprints (NULL)                  -> left exactly as-is
+
+        Indicators, whitelist entries, feedback, scores, and HTTP validators
+        are never modified here — accumulated state (e.g. a multi-day rolling
+        union of DShield netblocks) survives updates.
+        """
+        actions = {"added": [], "updated": [], "skipped_deleted": []}
+        existing = {f.name: f for f in self.get_feed_sources()}
+        with self._cursor() as cur:
+            cur.execute("SELECT name FROM deleted_feeds")
+            tombstoned = {r['name'] for r in cur.fetchall()}
+            fingerprints = {
+                r['name']: r['seed_fingerprint']
+                for r in cur.execute("SELECT name, seed_fingerprint FROM feeds").fetchall()
+            }
+        for feed_cfg in config.get('feeds', []):
+            try:
+                feed = FeedSource(**feed_cfg)
+            except Exception:
+                continue
+            if feed.name in tombstoned:
+                actions["skipped_deleted"].append(feed.name)
+                continue
+            new_fp = _feed_fingerprint(feed)
+            if feed.name not in existing:
+                self.add_feed(feed, added_by='sync-defaults', seed_fingerprint=new_fp)
+                actions["added"].append(feed.name)
+                continue
+            stored_fp = fingerprints.get(feed.name)
+            current_fp = _feed_fingerprint(existing[feed.name])
+            # Update only untouched defaults: the row must still match the
+            # fingerprint it was seeded with (NULL = unknown provenance ->
+            # treat as customized), and the shipped default must have changed.
+            if stored_fp and stored_fp == current_fp and new_fp != stored_fp:
+                self.add_feed(feed, added_by='sync-defaults', seed_fingerprint=new_fp)
+                actions["updated"].append(feed.name)
+        return actions
+
     def restore_default_feeds(self, config: Dict) -> List[str]:
-        """Add any config feeds that are not already configured (merge, no clobber)."""
+        """Add any config feeds that are not already configured (merge, no
+        clobber). Explicit user action: restores even tombstoned defaults."""
         existing = {f.name for f in self.get_feed_sources()}
         added = []
         for feed_cfg in config.get('feeds', []):
@@ -621,7 +714,8 @@ class Database:
                 continue
             if feed.name in existing:
                 continue
-            self.add_feed(feed, added_by='restore-defaults')
+            self.add_feed(feed, added_by='restore-defaults',
+                          seed_fingerprint=_feed_fingerprint(feed))
             added.append(feed.name)
         return added
 
@@ -640,8 +734,15 @@ class Database:
             row = cur.fetchone()
             return self._row_to_feed(row) if row else None
 
-    def add_feed(self, feed: FeedSource, added_by: str = "dashboard") -> None:
-        """Add or update a configured feed source (keyed by name)."""
+    def add_feed(self, feed: FeedSource, added_by: str = "dashboard",
+                 seed_fingerprint: Optional[str] = None) -> None:
+        """Add or update a configured feed source (keyed by name).
+
+        seed_fingerprint marks the row as an untouched default (set by
+        seed/sync/restore paths); user-driven adds/edits leave it NULL, which
+        excludes the row from automatic default-sync updates. Any explicit
+        add also clears a deletion tombstone — the feed is wanted again.
+        """
         now = _utcnow_iso()
         with self._cursor() as cur:
             cur.execute("SELECT url FROM feeds WHERE name = ?", (feed.name,))
@@ -650,19 +751,22 @@ class Database:
             cur.execute(
                 "INSERT INTO feeds "
                 "(name, url, feed_type, weight, update_interval, requires_auth, "
-                "auth_env, auth_header, local_file, scraper, enabled, added_by, added_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "auth_env, auth_header, local_file, scraper, enabled, added_by, "
+                "added_at, seed_fingerprint) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(name) DO UPDATE SET "
                 "url = excluded.url, feed_type = excluded.feed_type, weight = excluded.weight, "
                 "update_interval = excluded.update_interval, "
                 "requires_auth = excluded.requires_auth, auth_env = excluded.auth_env, "
                 "auth_header = excluded.auth_header, local_file = excluded.local_file, "
-                "scraper = excluded.scraper, enabled = excluded.enabled",
+                "scraper = excluded.scraper, enabled = excluded.enabled, "
+                "seed_fingerprint = excluded.seed_fingerprint",
                 (feed.name, feed.url, feed.feed_type.value, feed.weight,
                  feed.update_interval, int(feed.requires_auth), feed.auth_env,
                  feed.auth_header, int(feed.local_file), feed.scraper,
-                 int(feed.enabled), added_by, now),
+                 int(feed.enabled), added_by, now, seed_fingerprint),
             )
+            cur.execute("DELETE FROM deleted_feeds WHERE name = ?", (feed.name,))
             if url_changed:
                 cur.execute(
                     "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
@@ -670,10 +774,19 @@ class Database:
                 )
 
     def remove_feed(self, name: str) -> bool:
-        """Remove a configured feed and purge the data it contributed."""
+        """Remove a configured feed and purge the data it contributed.
+
+        Leaves a tombstone so sync_default_feeds never resurrects a default
+        the operator deliberately deleted (the dashboard's restore-defaults
+        button, or manually re-adding the feed, clears it)."""
         with self._cursor() as cur:
             cur.execute("DELETE FROM feeds WHERE name = ?", (name,))
             affected = cur.rowcount
+            if affected:
+                cur.execute(
+                    "INSERT OR REPLACE INTO deleted_feeds (name, deleted_at) VALUES (?, ?)",
+                    (name, _utcnow_iso()),
+                )
             cur.execute("DELETE FROM indicator_sources WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
             cur.execute(

@@ -170,6 +170,33 @@ in `config.yaml` under `database.backup` (default: every 24h, keep 7, to
 `POST /api/backup` or `python -m threatfeedme.main --backup`. **Restore:** stop the app and
 copy a backup file over `data/threatfeedme.db`.
 
+## Upgrading
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+That's the whole procedure — **your data survives updates**. The database
+lives on the `threatfeedme-data` volume, so whitelist entries, false-positive
+feedback, scores, feed history, and accumulated indicators (e.g. the rolling
+multi-day union of DShield netblocks) all carry over. Never delete the volume
+to upgrade.
+
+Changes to the *shipped default feeds* are merged into your database
+automatically on startup:
+
+- **New default feeds** are added.
+- **Changed defaults** (e.g. an upstream URL moved) are updated — but only if
+  you never customized that feed. Any edit you made (URL, weight, interval,
+  enable/disable) exempts the feed from automatic updates permanently.
+- **Feeds you deleted stay deleted.** An update never resurrects them; the
+  dashboard's *Restore default feeds* button brings them back explicitly.
+
+Schema migrations run automatically and are additive. Running from a plain
+checkout instead of Docker? Same story: `git pull` never touches the `data/`
+directory.
+
 ## Configuration
 
 Edit `config.yaml` to customize:

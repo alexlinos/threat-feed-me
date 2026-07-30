@@ -61,6 +61,11 @@ def main():
     seeded = db.seed_feeds_from_config(cfg)
     if seeded:
         logger.info(f"Seeded {seeded} feed sources from config")
+    # Merge shipped-default changes into an existing DB (app update path);
+    # never touches user customizations, deletions, or accumulated data.
+    sync = db.sync_default_feeds(cfg)
+    if sync["added"] or sync["updated"]:
+        logger.info(f"Default feed sync: added {sync['added']}; updated {sync['updated']}")
 
     if args.full or args.fetch:
         logger.info("Fetching feeds...")

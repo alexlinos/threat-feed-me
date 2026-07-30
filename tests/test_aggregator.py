@@ -308,6 +308,85 @@ def test_restore_default_feeds_merges_without_clobber(db):
     assert db.get_feed_source("b").url == "http://b/custom.txt"  # customization kept
 
 
+# ------------------------------------------------- default-feed upgrade sync ----
+
+def test_sync_adds_new_defaults_and_preserves_user_data(db):
+    """App update: a new default feed appears in the shipped config. Sync adds
+    it to an existing DB without touching indicators, whitelist, or scores —
+    updating must never require wiping the database."""
+    v1 = {"feeds": [{"name": "a", "url": "http://a/x.txt"}]}
+    db.seed_feeds_from_config(v1)
+    db.add_indicator("203.0.113.5", "a", {"cidr": "203.0.113.0/24"})
+    db.add_to_whitelist("198.51.100.9", "mail relay", "alex")
+
+    v2 = {"feeds": [{"name": "a", "url": "http://a/x.txt"},
+                    {"name": "new_default", "url": "http://n/y.txt"}]}
+    actions = db.sync_default_feeds(v2)
+    assert actions["added"] == ["new_default"]
+    assert actions["updated"] == []
+    # Accumulated state survives (the multi-day rolling DShield case).
+    assert db.get_indicator("203.0.113.5") is not None
+    assert "198.51.100.9" in db.get_whitelisted_ips()
+
+
+def test_sync_updates_untouched_default(db):
+    """A default the user never customized follows shipped changes (e.g. the
+    upstream URL moved)."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/old.txt"}]})
+    actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/new.txt"}]})
+    assert actions["updated"] == ["a"]
+    assert db.get_feed_source("a").url == "http://a/new.txt"
+    # Idempotent: a second sync with the same config changes nothing.
+    again = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/new.txt"}]})
+    assert again["updated"] == [] and again["added"] == []
+
+
+def test_sync_never_clobbers_customized_feed(db):
+    """Any user edit (here: URL and weight via the dashboard add/update path)
+    exempts the feed from default-sync updates forever after."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    db.add_feed(FeedSource(name="a", url="http://a/mine.txt", weight=0.4))
+    actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/moved.txt"}]})
+    assert actions["updated"] == []
+    feed = db.get_feed_source("a")
+    assert feed.url == "http://a/mine.txt" and feed.weight == 0.4
+
+
+def test_sync_enabled_toggle_counts_as_customization(db):
+    """Disabling a default from the dashboard must stick across app updates."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    db.set_feed_enabled("a", False)
+    db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                      "update_interval": 60}]})
+    feed = db.get_feed_source("a")
+    assert feed.enabled is False and feed.update_interval == 3600
+
+
+def test_sync_respects_deletion_tombstones(db):
+    """A default the operator deleted stays deleted across updates; only the
+    explicit restore-defaults action (or re-adding) brings it back."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    db.remove_feed("a")
+    actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    assert actions["skipped_deleted"] == ["a"] and db.get_feed_source("a") is None
+    # Explicit restore clears the tombstone...
+    assert db.restore_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt"}]}) == ["a"]
+    # ...so subsequent syncs treat it as a live default again.
+    assert db.sync_default_feeds(
+        {"feeds": [{"name": "a", "url": "http://a/x.txt"}]})["skipped_deleted"] == []
+
+
+def test_sync_treats_pre_upgrade_rows_as_customized(db):
+    """Rows from databases that predate fingerprints (NULL) are never
+    auto-updated — conservative default for unknown provenance."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    with db._cursor() as cur:
+        cur.execute("UPDATE feeds SET seed_fingerprint = NULL WHERE name = 'a'")
+    actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/moved.txt"}]})
+    assert actions["updated"] == []
+    assert db.get_feed_source("a").url == "http://a/x.txt"
+
+
 def test_query_indicators_search_and_paginate(db):
     for i in range(5):
         db.add_indicator(f"10.0.0.{i}", "cins_army", {})
