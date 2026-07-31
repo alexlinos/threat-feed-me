@@ -1,0 +1,102 @@
+# Build and publish the multi-arch image to Docker Hub.
+#
+# The published image is the deploy path the README recommends first, so it
+# must never drift behind main. Pushing a version tag ships it:
+#
+#     git tag v1.2.0 && git push origin v1.2.0
+#
+# Requires two repository secrets:
+#   DOCKERHUB_USERNAME - Docker Hub account name (alexlinos)
+#   DOCKERHUB_TOKEN    - a Docker Hub access token with Read/Write scope
+#                        (hub.docker.com -> Account Settings -> Personal
+#                        access tokens), NOT the account password
+name: Publish Docker image
+
+on:
+  push:
+    # Version tags only. Pushes to main deliberately do NOT publish: :latest
+    # should track releases, not every intermediate commit.
+    tags:
+      - 'v*.*.*'
+  # Manual runs from the Actions tab, for rebuilding without cutting a tag
+  # (e.g. to pick up a base-image security update).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to publish (e.g. 1.2.0). Also updates :latest.'
+        required: true
+
+concurrency:
+  # Never let two publishes race to overwrite :latest.
+  group: docker-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU lets the amd64 runner build the arm64 half of the manifest, so
+      # the image works on Raspberry Pi / ARM VPS hosts as well as x86.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"   # refs/tags/v1.2.0 -> 1.2.0
+          fi
+          # Reject anything that isn't a clean semver, so a stray tag can't
+          # publish a garbage image name.
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$VERSION' is not a semver version (expected N.N.N)"
+            exit 1
+          fi
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/threat-feed-me"
+          echo "tags=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Guard against the version drifting from the package metadata: the
+      # image tag and pyproject.toml must agree.
+      - name: Check tag matches pyproject version
+        run: |
+          set -euo pipefail
+          PYPROJECT_VERSION=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          if [ "$PYPROJECT_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::tag ${{ steps.meta.outputs.version }} != pyproject.toml version $PYPROJECT_VERSION — bump pyproject.toml first"
+            exit 1
+          fi
+
+      # Fail before publishing rather than shipping a broken image.
+      - name: Run tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . -r requirements-dev.txt
+          python -m pytest tests -q
+
+      - name: Build and push (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "Published \`${{ steps.meta.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"

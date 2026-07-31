@@ -197,6 +197,14 @@ copy a backup file over `data/threatfeedme.db`.
 
 ## Upgrading
 
+Running the published image? Pull the new one:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Building from source? Rebuild in place:
+
 ```bash
 git pull
 docker compose up -d --build
@@ -221,6 +229,24 @@ automatically on startup:
 Schema migrations run automatically and are additive. Running from a plain
 checkout instead of Docker? Same story: `git pull` never touches the `data/`
 directory.
+
+## Releasing (maintainers)
+
+Publishing the Docker image is automated by
+[`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml):
+
+1. Bump `version` in `pyproject.toml` (the workflow refuses to publish if the
+   tag and that version disagree).
+2. `git tag v1.2.0 && git push origin v1.2.0`
+
+The workflow runs the test suite, then builds and pushes `linux/amd64` +
+`linux/arm64` images tagged with the version and `:latest`. Pushes to `main`
+deliberately do *not* publish — `:latest` tracks releases, not every commit.
+A manual run (Actions → Publish Docker image → Run workflow) can rebuild
+without cutting a tag, e.g. to pick up a base-image security update.
+
+Requires repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a
+Docker Hub *access token* with Read/Write scope, not the account password).
 
 ## Configuration
 
