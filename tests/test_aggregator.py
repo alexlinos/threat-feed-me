@@ -376,6 +376,41 @@ def test_sync_respects_deletion_tombstones(db):
         {"feeds": [{"name": "a", "url": "http://a/x.txt"}]})["skipped_deleted"] == []
 
 
+def test_purge_orphaned_feedback_self_heals_stale_penalties(db):
+    """FP attributions must not outlive the whitelist entry that justified
+    them. Rows stranded by the old tier-scoped-removal bug are cleared at
+    startup; live ones (entry still present) are kept."""
+    db.add_indicator("203.0.113.31", "cins_army", {})
+    db.add_indicator("203.0.113.32", "cins_army", {})
+    # One with a surviving whitelist entry, one orphaned.
+    db.add_to_whitelist("203.0.113.31", "fp", "alex")
+    db.record_false_positive("203.0.113.31", ["cins_army"])
+    db.record_false_positive("203.0.113.32", ["cins_army"])
+    assert db.get_feed_fp_counts()["cins_army"] == 2
+
+    assert db.purge_orphaned_feedback() == 1
+    assert db.get_feed_fp_counts()["cins_army"] == 1
+    entries = db.get_feed_false_positives("cins_army")
+    assert [e["ip"] for e in entries] == ["203.0.113.31"]
+    assert entries[0]["whitelisted"] is True
+    # Idempotent.
+    assert db.purge_orphaned_feedback() == 0
+
+
+def test_clear_feed_feedback_restores_reputation(db):
+    from threatfeedme.scorer import ConfidenceScorer, DEFAULT_SOURCE_WEIGHT
+    for i in range(10):
+        db.add_indicator(f"7.7.7.{i}", "cins_army", {})
+    db.record_false_positive("7.7.7.0", ["cins_army"])
+    db.record_false_positive("7.7.7.1", ["cins_army"])
+    assert ConfidenceScorer(db, CONFIG).source_weights["cins_army"] < DEFAULT_SOURCE_WEIGHT
+
+    assert db.clear_feed_feedback("cins_army") == 2
+    assert db.get_feed_fp_counts() == {}
+    scorer = ConfidenceScorer(db, CONFIG)
+    assert scorer.source_weights.get("cins_army", DEFAULT_SOURCE_WEIGHT) == DEFAULT_SOURCE_WEIGHT
+
+
 def test_sync_treats_pre_upgrade_rows_as_customized(db):
     """Rows from databases that predate fingerprints (NULL) are never
     auto-updated — conservative default for unknown provenance."""

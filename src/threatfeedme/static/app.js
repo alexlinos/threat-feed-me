@@ -196,6 +196,42 @@ async function removeIndicator(ip) {
     if (r.ok) { loadIndicators(); } else { alert('Could not remove'); }
 }
 
+// ---- False-positive modal (opened from a feed row's "N FP" badge) ----
+// Lets an operator review what a feed was penalized for and forgive it,
+// without touching the whitelist entries themselves.
+let fpModalFeed = null;
+async function openFpModal(feed) {
+    fpModalFeed = feed;
+    document.getElementById('fp-modal-feed').textContent = feed;
+    document.getElementById('fp-modal-summary').textContent = '';
+    const list = document.getElementById('fp-modal-list');
+    list.textContent = 'Loading…';
+    document.getElementById('fp-modal').classList.add('open');
+    try {
+        const j = await (await fetch('/api/feeds/' + encodeURIComponent(feed) + '/false-positives')).json();
+        document.getElementById('fp-modal-summary').textContent =
+            j.count + ' flagged of ' + j.reported.toLocaleString() + ' reported — reputation reduced ~' + j.penalty_pct + '%';
+        list.innerHTML = j.entries.length ? j.entries.map(e =>
+            '<div class="fp-row"><code>' + esc(e.ip) + '</code>' +
+            (e.whitelisted ? '' : ' <span class="badge badge-warn" title="No whitelist entry remains for this IP">orphaned</span>') +
+            ' <button class="rm-btn" data-ip="' + esc(e.ip) + '" onclick="clearOneFp(this.dataset.ip)">Clear</button></div>'
+        ).join('') : '<span class="muted">none</span>';
+    } catch (e) { list.textContent = 'Could not load false positives'; }
+}
+function closeFpModal() { document.getElementById('fp-modal').classList.remove('open'); fpModalFeed = null; }
+async function clearOneFp(ip) {
+    if (!fpModalFeed) return;
+    const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) +
+        '/false-positives?ip=' + encodeURIComponent(ip), {method: 'DELETE'});
+    if (r.ok) { location.reload(); } else { alert('Could not clear'); }
+}
+async function clearAllFp() {
+    if (!fpModalFeed) return;
+    if (!confirm('Clear all false-positive flags against "' + fpModalFeed + '"?\n\nThe feed\'s reputation penalty is removed. Whitelisted IPs stay whitelisted.')) return;
+    const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) + '/false-positives', {method: 'DELETE'});
+    if (r.ok) { location.reload(); } else { alert('Could not clear'); }
+}
+
 // ---- Whitelist modal (shows which feed reported the IP) ----
 let wlModalIp = null;
 async function openWhitelistModal(ip) {

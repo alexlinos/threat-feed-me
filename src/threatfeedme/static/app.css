@@ -138,6 +138,12 @@ input::placeholder { color:var(--dim); }
 .mini-btn { padding:4px 10px; border:1px solid rgba(16,185,129,.35); border-radius:4px;
              background:transparent; color:var(--accent-hi); cursor:pointer; font-size:.8em; }
 .mini-btn:hover { background:rgba(16,185,129,.12); }
+/* The FP badge is a button (opens the review/clear modal) but must look
+   identical to the static badges beside it. */
+.fp-badge { cursor:pointer; font-family:var(--mono); }
+.fp-badge:hover { filter:brightness(1.25); }
+.fp-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
+.fp-row code { flex:0 0 auto; }
 .hint { color:var(--muted); font-size:.84em; margin:0 0 10px; }
 
 .feed-url { color:var(--dim); font-size:.76em; font-family:var(--mono); max-width:340px;

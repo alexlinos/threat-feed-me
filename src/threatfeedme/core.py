@@ -113,6 +113,14 @@ def init(config_path: str = None):
             ", ".join(sync["updated"]) or "none",
         )
 
+    # Drop false-positive attributions whose whitelist entry is gone. The FP
+    # penalty is only supposed to last as long as that entry, but rows could
+    # outlive it (pre-fix tier-scoped removals cleared nothing), leaving feeds
+    # permanently penalized. Self-heals existing databases on startup.
+    orphaned = _db.purge_orphaned_feedback()
+    if orphaned:
+        logger.info("Cleared %d orphaned false-positive attribution(s)", orphaned)
+
     # Safety guard for manual adds (config-toggleable; see config.yaml `safety`).
     _safety = SafetyFilter.from_config(_config)
 

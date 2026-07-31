@@ -88,7 +88,7 @@
                 <td><label class="switch"><input type="checkbox" {% if row.enabled %}checked{% endif %}
                     onchange='toggleFeed({{ row.name|tojson }}, this.checked)'><span></span></label></td>
                 <td>{% if row.indicators is none %}—{% else %}{{ '{:,}'.format(row.indicators) }}{% endif %}</td>
-                <td>{% if row.status is none %}<span class="muted">never run</span>{% else %}<span class="badge {{ 'badge-success' if row.status == 'success' else 'badge-error' }}">{{ row.status }}</span>{% endif %}{% if row.fp_count %} <span class="badge badge-warn" title="{{ row.fp_count }} IP(s) flagged as false positives">⚠ {{ row.fp_count }} FP</span>{% endif %}{% if row.degraded_pct is not none %} <span class="badge badge-error" title="reputation reduced ~{{ row.degraded_pct }}%">degraded</span>{% endif %}</td>
+                <td>{% if row.status is none %}<span class="muted">never run</span>{% else %}<span class="badge {{ 'badge-success' if row.status == 'success' else 'badge-error' }}">{{ row.status }}</span>{% endif %}{% if row.fp_count %} <button class="badge badge-warn fp-badge" title="{{ row.fp_count }} IP(s) flagged as false positives — click to review or clear" onclick='openFpModal({{ row.name|tojson }})'>⚠ {{ row.fp_count }} FP</button>{% endif %}{% if row.degraded_pct is not none %} <span class="badge badge-error" title="reputation reduced ~{{ row.degraded_pct }}%">degraded</span>{% endif %}</td>
                 <td>
                     {% if row.auth_env %}
                     <button class="mini-btn" title="API key is read from ${{ row.auth_env }}; saved keys go to the server's data-volume .env"
@@ -204,6 +204,23 @@
         <div class="actions">
             <button class="cancel" onclick="closeWlModal()">Cancel</button>
             <button class="btn" onclick="confirmWlModal()">Whitelist</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="fp-modal">
+    <div class="modal">
+        <h3>False positives — <span id="fp-modal-feed"></span></h3>
+        <p class="muted" id="fp-modal-summary">—</p>
+        <div class="field">
+            <label>Flagged IPs</label>
+            <div id="fp-modal-list" class="sources">Loading…</div>
+        </div>
+        <p class="hint">Clearing forgives this feed's penalty and rescores immediately.
+           Whitelist entries are untouched — the IPs stay excluded from your feeds.</p>
+        <div class="actions">
+            <button class="cancel" onclick="closeFpModal()">Close</button>
+            <button class="btn" onclick="clearAllFp()">Clear all</button>
         </div>
     </div>
 </div>

@@ -129,6 +129,47 @@ def test_homepage_has_whitelist_form_with_tier_scope(client):
         assert tier_option in body  # tier scopes replace per-feed scopes
 
 
+def test_fp_review_and_clear_one(client):
+    """The FP badge's modal lists a feed's flagged IPs and can forgive one,
+    leaving the whitelist entry (and the feed exclusion) in place."""
+    from threatfeedme import dashboard
+    db = dashboard.db
+    db.add_indicator("203.0.113.211", "spamhaus_drop", {})
+    client.post("/api/whitelist", json={
+        "ip": "203.0.113.211", "reason_code": "false_positive",
+    })
+    j = client.get("/api/feeds/spamhaus_drop/false-positives").json()
+    assert j["count"] >= 1
+    entry = next(e for e in j["entries"] if e["ip"] == "203.0.113.211")
+    assert entry["whitelisted"] is True  # still whitelisted -> not orphaned
+
+    r = client.delete("/api/feeds/spamhaus_drop/false-positives?ip=203.0.113.211")
+    assert r.status_code == 200 and r.json()["cleared"] == 1
+    assert db.get_feed_fp_counts().get("spamhaus_drop", 0) == 0
+    # Forgiving the feed does NOT un-whitelist the IP.
+    assert "203.0.113.211" in db.get_whitelisted_ips()
+    client.delete("/api/whitelist?ip=203.0.113.211")
+
+
+def test_fp_clear_all_for_feed(client):
+    from threatfeedme import dashboard
+    db = dashboard.db
+    for ip in ("203.0.113.212", "203.0.113.213"):
+        db.add_indicator(ip, "custom_honeypot", {})
+        client.post("/api/whitelist", json={"ip": ip, "reason_code": "false_positive"})
+    assert db.get_feed_fp_counts().get("custom_honeypot", 0) == 2
+    r = client.delete("/api/feeds/custom_honeypot/false-positives")
+    assert r.status_code == 200 and r.json()["cleared"] == 2
+    assert db.get_feed_fp_counts().get("custom_honeypot", 0) == 0
+    for ip in ("203.0.113.212", "203.0.113.213"):
+        client.delete("/api/whitelist?ip=" + ip)
+
+
+def test_fp_endpoints_404_for_unknown_feed(client):
+    assert client.get("/api/feeds/nope/false-positives").status_code == 404
+    assert client.delete("/api/feeds/nope/false-positives").status_code == 404
+
+
 def test_tier_scoped_fp_feedback_cleared_on_remove(client):
     """Regression: a tier-scoped FP blames every reporting feed; removing the
     whitelist entry must clear that feedback (clearing by the literal

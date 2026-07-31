@@ -72,7 +72,9 @@ firewalls can poll them.
   (false positive / risk accepted / internal asset). Flagging a **false
   positive** lowers that feed's reputation, so a noisy feed's IPs score lower
   and drop out of the higher-confidence firewall feeds (self-heals when the
-  whitelist entry is removed).
+  whitelist entry is removed). Click a feed's **⚠ N FP** badge to review what
+  it was penalized for and forgive individual flags or all of them — the
+  whitelist entries stay in place, only the blame is withdrawn.
 - **Multi-format Export**: Text files, CSV, JSON for firewall/SIEM integration
 - **Basic Dashboard**: Web UI for viewing feeds, managing whitelists, seeing stats
 - **Containerized**: Docker deployment for easy on-prem install

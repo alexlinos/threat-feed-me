@@ -12,6 +12,7 @@ from threatfeedme.feed_ingestor import parse_feed_content
 from threatfeedme.models import FeedSource, FeedType
 from threatfeedme.scheduler import _refresh_state, start_refresh_async
 from threatfeedme.schemas import ApiKeyRequest, FeedRequest, WhitelistResponse
+from threatfeedme.scorer import fp_penalty_factor
 
 router = APIRouter()
 
@@ -239,6 +240,56 @@ def _write_env_var(path: str, var: str, value: Optional[str]) -> None:
         os.chmod(path, 0o600)
     except OSError:
         pass
+
+
+# ---------------------- Feed false-positive attributions ----------------------
+# Flagging an IP as a false positive penalizes the feeds that reported it.
+# The penalty is meant to last only as long as the whitelist entry, but an
+# operator may also want to forgive a feed directly — these endpoints back the
+# dashboard's clickable "N FP" badge.
+
+@router.get("/api/feeds/{name}/false-positives")
+def feed_false_positives(name: str, _=Depends(require_auth)):
+    """List the false positives attributed to a feed, with its current
+    reputation penalty. `orphaned` entries have no whitelist entry left."""
+    if core.db.get_feed_source(name) is None:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    entries = core.db.get_feed_false_positives(name)
+    reported = core.db.get_feed_report_counts().get(name, 0)
+    factor = fp_penalty_factor(len(entries), reported)
+    return {
+        "feed": name,
+        "count": len(entries),
+        "reported": reported,
+        "penalty_pct": int(round((1 - factor) * 100)),
+        "entries": entries,
+    }
+
+
+@router.delete("/api/feeds/{name}/false-positives")
+def clear_feed_false_positives(name: str, ip: Optional[str] = None,
+                               _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Forgive false positives against a feed: one with ?ip=<ip>, or all of
+    them. Restores the feed's reputation and rescores immediately so the
+    change shows up in the served tiers without waiting for a refresh.
+
+    The whitelist entries themselves are left alone — an IP stays whitelisted
+    (still excluded from the feeds); only the blame against this feed is
+    withdrawn.
+    """
+    if core.db.get_feed_source(name) is None:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    if ip:
+        core.db.clear_feedback(ip, feed_name=name)
+        cleared = 1
+    else:
+        cleared = core.db.clear_feed_feedback(name)
+    if cleared:
+        # Reputation changed for this feed, so every indicator it reported
+        # can shift tier — full rescore, then re-export the tier files.
+        pipeline.recalculate(core.db, core.config)
+        pipeline.export_tiers(core.db, core.config)
+    return {"success": True, "cleared": cleared, "feed": name}
 
 
 @router.get("/api/feeds/{name}/api-key")

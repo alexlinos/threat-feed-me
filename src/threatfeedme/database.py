@@ -536,6 +536,53 @@ class Database:
             else:
                 cur.execute("DELETE FROM feed_feedback WHERE ip = ?", (ip,))
 
+    def get_feed_false_positives(self, feed_name: str) -> List[Dict[str, Any]]:
+        """False positives attributed to one feed, newest first.
+
+        `whitelisted` reports whether the IP still has a whitelist entry: a
+        False here means the attribution is orphaned (the whitelist entry that
+        justified it is gone) and the penalty should not still apply.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT f.ip, f.created_at, "
+                "       EXISTS(SELECT 1 FROM whitelist w WHERE w.ip = f.ip) AS whitelisted "
+                "FROM feed_feedback f "
+                "WHERE f.feed_name = ? AND f.reason_code = ? "
+                "ORDER BY f.created_at DESC",
+                (feed_name, REASON_FALSE_POSITIVE),
+            )
+            return [
+                {"ip": r["ip"], "created_at": r["created_at"],
+                 "whitelisted": bool(r["whitelisted"])}
+                for r in cur.fetchall()
+            ]
+
+    def clear_feed_feedback(self, feed_name: str) -> int:
+        """Drop every false-positive attribution against one feed, restoring
+        its reputation. Returns the number of attributions removed."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (feed_name,))
+            return cur.rowcount
+
+    def purge_orphaned_feedback(self) -> int:
+        """Delete false-positive attributions whose whitelist entry no longer
+        exists, and return how many were removed.
+
+        The FP penalty is meant to last exactly as long as the whitelist entry
+        that justified it ("self-heals when the entry is removed"). Rows can
+        outlive their entry — notably from the pre-fix bug where removing a
+        tier-scoped entry cleared feedback by the literal 'tier:...' scope and
+        matched nothing. Runs at startup so existing databases self-heal
+        without operator action.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM feed_feedback "
+                "WHERE NOT EXISTS (SELECT 1 FROM whitelist w WHERE w.ip = feed_feedback.ip)"
+            )
+            return cur.rowcount
+
     def get_feed_fp_counts(self) -> Dict[str, int]:
         """Distinct false-positive IP count per feed."""
         with self._cursor() as cur:
