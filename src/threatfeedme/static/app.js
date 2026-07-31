@@ -8,6 +8,15 @@ function apiFetch(url, opts) {
     return fetch(url, opts);
 }
 
+// Refresh the page after a mutation. NOT location.reload(): Firefox restores
+// form field values (including the file input) across a reload, so a form
+// that was just submitted comes back still populated, looking like the
+// action didn't take. Reset the forms, then navigate fresh.
+function reloadPage() {
+    document.querySelectorAll('form').forEach(f => f.reset());
+    location.replace(location.pathname + location.search);
+}
+
 function copyUrl(btn) {
     const url = btn.parentElement.querySelector('.url-box').value;
     const done = () => { const t = btn.textContent; btn.textContent = 'Copied!';
@@ -33,7 +42,7 @@ async function addWl(e) {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.success !== false) { location.reload(); }
+    if (r.ok && j.success !== false) { reloadPage(); }
     else { alert('Could not add: ' + (j.message || j.detail || r.status)); }
     return false;
 }
@@ -41,7 +50,7 @@ async function removeWl(ip, feed) {
     const scopeLabel = feed === '*' ? 'all tiers' : feed.startsWith('tier:') ? feed.split(':')[1] + ' only' : feed;
     if (!confirm('Remove whitelist entry for ' + ip + ' (' + scopeLabel + ')?')) return;
     const r = await apiFetch('/api/whitelist?ip=' + encodeURIComponent(ip) + '&feed=' + encodeURIComponent(feed), {method: 'DELETE'});
-    if (r.ok) { location.reload(); }
+    if (r.ok) { reloadPage(); }
     else { const j = await r.json().catch(() => ({})); alert('Could not remove: ' + (j.detail || r.status)); }
 }
 
@@ -56,7 +65,7 @@ async function addFeed(e) {
     };
     const r = await apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.success !== false) { location.reload(); }
+    if (r.ok && j.success !== false) { reloadPage(); }
     else { alert('Could not add feed: ' + (j.message || j.detail || r.status)); }
     return false;
 }
@@ -70,14 +79,14 @@ async function uploadFeed(e) {
     fd.append('file', file);
     const r = await apiFetch('/api/feeds/upload', {method:'POST', body: fd});
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.success !== false) { alert(j.message || 'Uploaded'); location.reload(); }
+    if (r.ok && j.success !== false) { alert(j.message || 'Uploaded'); reloadPage(); }
     else { alert('Upload failed: ' + (j.message || j.detail || r.status)); }
     return false;
 }
 async function removeFeed(name) {
     if (!confirm('Remove feed "' + name + '"? Existing indicators stay until the next refresh.')) return;
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(name), {method:'DELETE'});
-    if (r.ok) { location.reload(); } else { alert('Could not remove feed'); }
+    if (r.ok) { reloadPage(); } else { alert('Could not remove feed'); }
 }
 async function toggleFeed(name, enabled) {
     await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/enabled?enabled=' + enabled, {method:'POST'});
@@ -91,7 +100,7 @@ async function setApiKey(name, envVar) {
         body: JSON.stringify({api_key: key}),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { location.reload(); }
+    if (r.ok) { reloadPage(); }
     else { alert('Could not save key: ' + (j.detail || r.status)); }
 }
 async function saveInterval() {
@@ -129,14 +138,14 @@ async function pollRefresh() {
     else {
         btn.disabled = false;
         status.textContent = j.last_error ? ('Last refresh error: ' + j.last_error) : 'Refresh complete.';
-        if (!j.last_error) setTimeout(() => location.reload(), 800);
+        if (!j.last_error) setTimeout(() => reloadPage(), 800);
     }
 }
 async function restoreDefaults() {
     if (!confirm('Re-add the curated default feeds that are currently missing?')) return;
     const r = await apiFetch('/api/feeds/restore-defaults', {method:'POST'});
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { alert(j.count ? ('Added: ' + j.added.join(', ')) : 'All default feeds already present'); location.reload(); }
+    if (r.ok) { alert(j.count ? ('Added: ' + j.added.join(', ')) : 'All default feeds already present'); reloadPage(); }
     else { alert('Could not restore defaults'); }
 }
 
@@ -223,13 +232,13 @@ async function clearOneFp(ip) {
     if (!fpModalFeed) return;
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) +
         '/false-positives?ip=' + encodeURIComponent(ip), {method: 'DELETE'});
-    if (r.ok) { location.reload(); } else { alert('Could not clear'); }
+    if (r.ok) { reloadPage(); } else { alert('Could not clear'); }
 }
 async function clearAllFp() {
     if (!fpModalFeed) return;
     if (!confirm('Clear all false-positive flags against "' + fpModalFeed + '"?\n\nThe feed\'s reputation penalty is removed. Whitelisted IPs stay whitelisted.')) return;
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) + '/false-positives', {method: 'DELETE'});
-    if (r.ok) { location.reload(); } else { alert('Could not clear'); }
+    if (r.ok) { reloadPage(); } else { alert('Could not clear'); }
 }
 
 // ---- Whitelist modal (shows which feed reported the IP) ----
@@ -266,6 +275,6 @@ async function confirmWlModal() {
     };
     const r = await apiFetch('/api/whitelist', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.success !== false) { closeWlModal(); location.reload(); }
+    if (r.ok && j.success !== false) { closeWlModal(); reloadPage(); }
     else { alert('Could not whitelist: ' + (j.message || j.detail || r.status)); }
 }
