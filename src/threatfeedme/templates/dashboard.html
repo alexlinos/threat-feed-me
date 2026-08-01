@@ -57,6 +57,70 @@
         <span class="muted">Opens the indicators page filtered to that address.</span>
     </form>
 
+    <h2>Feed intelligence</h2>
+    <p class="hint">Which feeds are earning their keep. <b>Exclusive</b> is what you would lose by
+       removing a feed; <b>first to report</b> is who warns you early rather than confirming what
+       you already had; <b>new</b> and <b>health</b> catch a feed that has quietly gone stale.</p>
+
+    {% if telemetry.redundant_pairs %}
+    <div class="callout">
+        <b>Overlapping sources.</b> These feeds report nearly the same indicators, so agreement
+        between them is closer to one source voting twice than to independent corroboration:
+        {% for p in telemetry.redundant_pairs[:4] %}
+        <code>{{ p.a }}</code> ≈ <code>{{ p.b }}</code> ({{ p.pct }}%){% if not loop.last %}, {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="table-scroll">
+    <table class="telemetry">
+        <thead><tr>
+            <th>Feed</th>
+            <th title="Indicators this feed currently reports">Indicators</th>
+            <th title="Indicators no other feed reports — what you lose if you remove it">Exclusive</th>
+            <th title="Indicators this feed was first to report in the last {{ telemetry.first_report_window_days }} days">First to report ({{ telemetry.first_report_window_days }}d)</th>
+            <th title="Indicators first reported by this feed in the last {{ telemetry.new_window_hours }} hours">New ({{ telemetry.new_window_hours }}h)</th>
+            <th>Health</th>
+        </tr></thead>
+        <tbody>
+        {% for r in telemetry.rows %}
+            <tr{% if not r.enabled %} class="row-off"{% endif %}>
+                <td><b>{{ r.name }}</b>{% if not r.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
+                <td>{{ '{:,}'.format(r.indicators) }}</td>
+                <td>
+                    {{ '{:,}'.format(r.exclusive) }}
+                    <span class="muted">{{ r.exclusive_pct }}%</span>
+                    <span class="bar" title="{{ r.exclusive_pct }}% of this feed's indicators are unique to it"><i style="width:{{ r.exclusive_pct }}%"></i></span>
+                </td>
+                <td>{{ '{:,}'.format(r.first_reports) }}</td>
+                <td>{{ '{:,}'.format(r.new) }}</td>
+                <td><span class="badge health-{{ r.health.level }}" title="{{ r.health.detail }}">{{ r.health.state }}</span></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="6" class="muted">No feeds configured.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    <details class="howto">
+        <summary><b>Overlap matrix</b> — how much each pair of feeds agrees</summary>
+        {% if telemetry.overlap %}
+        <div class="table-scroll">
+        <table class="overlap">
+            <thead><tr><th>Feed A</th><th>Feed B</th><th>Shared indicators</th></tr></thead>
+            <tbody>
+            {% for p in telemetry.overlap[:25] %}
+                <tr><td><code>{{ p.a }}</code></td><td><code>{{ p.b }}</code></td><td>{{ '{:,}'.format(p.n) }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p class="muted">No two feeds currently report the same indicator.</p>
+        {% endif %}
+    </details>
+
     <h2>Feeds</h2>
     <p class="hint">Mix and match sources. Toggle a feed on/off, refresh on demand, or add your own
        (an HTTP URL, or a local file path with "local file" checked).</p>
@@ -76,6 +140,7 @@
             days <button class="mini-btn" onclick="saveRetention()">Save</button>
         </span>
     </div>
+    <div class="table-scroll">
     <table>
         <thead><tr><th>Feed</th><th>Type</th><th>Enabled</th><th>Indicators</th><th>Last run</th><th></th></tr></thead>
         <tbody>
@@ -101,6 +166,7 @@
         {% endfor %}
         </tbody>
     </table>
+    </div>
 
     <form class="wl-form" onsubmit="return addFeed(event)" style="margin-top:12px">
         <input class="ip" id="f-name" type="text" placeholder="feed name" required>

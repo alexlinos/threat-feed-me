@@ -600,6 +600,81 @@ class Database:
             )
             return {row['source_name']: row['n'] for row in cur.fetchall()}
 
+    # ==================== FEED TELEMETRY ====================
+    # Which feeds are actually earning their keep. All of this is derived from
+    # data already on disk — indicator_sources carries a per-(indicator, feed)
+    # `reported_at` that is written INSERT OR IGNORE, so it preserves the first
+    # time that feed reported that IP. No history table, no cold start.
+
+    def get_feed_exclusive_counts(self) -> Dict[str, int]:
+        """Indicators only this feed reports. A feed with a high exclusive
+        count is pulling weight no other feed covers; near-zero means it is
+        contributing nothing you don't already have."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT s.source_name, COUNT(*) AS n FROM indicator_sources s "
+                "JOIN (SELECT indicator_id FROM indicator_sources "
+                "      GROUP BY indicator_id HAVING COUNT(*) = 1) solo "
+                "  ON solo.indicator_id = s.indicator_id "
+                "GROUP BY s.source_name"
+            )
+            return {r['source_name']: r['n'] for r in cur.fetchall()}
+
+    def get_feed_first_report_counts(self, since: Optional[str] = None) -> Dict[str, int]:
+        """How often each feed was the FIRST to report an indicator — i.e. who
+        gives you early warning versus who confirms what you already knew.
+
+        `since` (ISO timestamp) restricts to indicators first seen in a window.
+        Use it: a feed added last week cannot have been first for anything
+        older, so an all-time count unfairly favours long-installed feeds.
+        """
+        params: List[Any] = []
+        window = ""
+        if since:
+            window = "WHERE t >= ?"
+            params.append(since)
+        with self._cursor() as cur:
+            cur.execute(
+                "WITH firsts AS ("
+                "  SELECT indicator_id, MIN(reported_at) AS t "
+                "  FROM indicator_sources GROUP BY indicator_id"
+                f") SELECT s.source_name, COUNT(*) AS n "
+                "FROM indicator_sources s "
+                f"JOIN (SELECT * FROM firsts {window}) f "
+                "  ON s.indicator_id = f.indicator_id AND s.reported_at = f.t "
+                "GROUP BY s.source_name",
+                params,
+            )
+            return {r['source_name']: r['n'] for r in cur.fetchall()}
+
+    def get_feed_new_counts(self, since: str) -> Dict[str, int]:
+        """Indicators each feed reported for the first time since `since` —
+        the feed's churn / freshness. A feed whose new count is flat at zero
+        for days is serving a stale list (or silently 304ing forever)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT source_name, COUNT(*) AS n FROM indicator_sources "
+                "WHERE reported_at >= ? GROUP BY source_name",
+                (since,),
+            )
+            return {r['source_name']: r['n'] for r in cur.fetchall()}
+
+    def get_feed_overlap(self) -> List[Dict[str, Any]]:
+        """Pairwise overlap: how many indicators each pair of feeds both
+        report. Two feeds overlapping near-totally are not two independent
+        votes — several public feeds aggregate each other (Emerging Threats
+        bundles Spamhaus/DShield, BBcan177 aggregates other lists), so this
+        is how you tell real corroboration from an echo."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT a.source_name AS x, b.source_name AS y, COUNT(*) AS n "
+                "FROM indicator_sources a "
+                "JOIN indicator_sources b "
+                "  ON a.indicator_id = b.indicator_id AND a.source_name < b.source_name "
+                "GROUP BY a.source_name, b.source_name"
+            )
+            return [{"a": r['x'], "b": r['y'], "n": r['n']} for r in cur.fetchall()]
+
     # ==================== FEED STATS ====================
 
     def update_feed_stats(self, feed_name: str, total_indicators: int, status: str, error_message: str = None):

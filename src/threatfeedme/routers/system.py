@@ -15,6 +15,7 @@ from threatfeedme.scheduler import REFRESH_INTERVAL_KEY, _refresh_interval_minut
 from threatfeedme.pipeline import RETENTION_MAX_AGE_KEY, retention_max_age_days
 from threatfeedme.schemas import SettingsRequest
 from threatfeedme.scorer import fp_penalty_factor, FP_DEGRADED_FACTOR
+from threatfeedme.telemetry import feed_telemetry
 
 router = APIRouter()
 
@@ -102,6 +103,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
 
     return core.templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
+        "telemetry": feed_telemetry(core.db),
         "feed_base": feed_base,
         "counts": counts,
         "whitelist_count": len(whitelist),
@@ -152,6 +154,12 @@ def indicators_page(request: Request, q: str = "", _=Depends(require_auth)):
 def get_stats(_=Depends(require_auth)):
     """Get statistics summary"""
     return core.db.get_stats_summary()
+
+
+@router.get("/api/telemetry")
+def get_telemetry(_=Depends(require_auth)):
+    """Per-feed contribution, freshness, health, and pairwise overlap."""
+    return feed_telemetry(core.db)
 
 
 # ---------------------- Settings ----------------------

@@ -142,6 +142,28 @@ def test_dashboard_is_not_a_wall_of_ips(client):
     assert "<details" in body                    # firewall instructions collapsed
 
 
+def test_dashboard_shows_feed_intelligence_panel(client):
+    body = client.get("/").text
+    assert "Feed intelligence" in body
+    assert "Exclusive" in body and "First to report" in body
+    assert 'class="telemetry"' in body
+    # Wide tables scroll inside their own container, not the page.
+    assert 'class="table-scroll"' in body
+
+
+def test_telemetry_api_reports_contribution_and_health(client):
+    j = client.get("/api/telemetry").json()
+    assert {"rows", "overlap", "redundant_pairs"} <= set(j)
+    by_name = {r["name"]: r for r in j["rows"]}
+    # The fixture seeds spamhaus_drop + custom_honeypot with overlapping data.
+    assert "spamhaus_drop" in by_name
+    row = by_name["spamhaus_drop"]
+    assert {"indicators", "exclusive", "exclusive_pct", "first_reports",
+            "new", "health"} <= set(row)
+    assert row["health"]["state"] in {"ok", "no new", "stale", "error",
+                                      "never run", "disabled", "unknown"}
+
+
 def test_indicators_page_prefills_search_from_query(client):
     """The dashboard lookup box deep-links here with ?q=<ip>."""
     body = client.get("/indicators?q=203.0.113.7").text

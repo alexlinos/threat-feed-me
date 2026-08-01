@@ -155,6 +155,23 @@ input::placeholder { color:var(--dim); }
    identical to the static badges beside it. */
 .fp-badge { cursor:pointer; font-family:var(--mono); }
 .fp-badge:hover { filter:brightness(1.25); }
+/* --- Feed telemetry panel --- */
+.callout { background:rgba(251,191,36,.06); border:1px solid rgba(251,191,36,.25);
+           border-radius:var(--radius); padding:12px 16px; margin:12px 0; font-size:.9em; }
+.callout b { color:var(--amber); }
+/* Cells are nowrap so numbers stay readable; the wrapper scrolls instead of
+   the page on narrow screens. */
+.table-scroll { overflow-x:auto; }
+.telemetry td, .telemetry th { white-space:nowrap; }
+.telemetry .bar { display:inline-block; width:70px; height:6px; border-radius:3px;
+                  background:rgba(255,255,255,.07); margin-left:8px; vertical-align:middle; }
+.telemetry .bar i { display:block; height:100%; border-radius:3px; background:var(--accent-hi); }
+.row-off td { opacity:.5; }
+.health-good { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
+.health-warn { background:rgba(251,191,36,.1); color:var(--amber); border-color:rgba(251,191,36,.3); }
+.health-bad  { background:rgba(248,113,113,.1); color:var(--red); border-color:rgba(248,113,113,.3); }
+.health-muted { color:var(--muted); }
+.overlap { margin-top:10px; }
 .fp-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
 .fp-row code { flex:0 0 auto; }
 .hint { color:var(--muted); font-size:.84em; margin:0 0 10px; }

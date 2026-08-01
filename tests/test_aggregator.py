@@ -376,6 +376,81 @@ def test_sync_respects_deletion_tombstones(db):
         {"feeds": [{"name": "a", "url": "http://a/x.txt"}]})["skipped_deleted"] == []
 
 
+# ------------------------------------------------------- feed telemetry ----
+
+def _telemetry_db(db):
+    """Three feeds: 'solo' reports uniquely, 'echo_a'/'echo_b' report the same
+    two IPs as each other (the aggregator-of-aggregators case)."""
+    for name in ("solo", "echo_a", "echo_b"):
+        db.add_feed(FeedSource(name=name, url=f"http://{name}/x.txt",
+                               feed_type=FeedType.THREAT_INTEL, weight=1.0))
+    db.add_indicator("203.0.113.1", "solo", {})
+    db.add_indicator("203.0.113.2", "solo", {})
+    db.add_indicator("203.0.113.3", "solo", {})
+    for ip in ("198.51.100.1", "198.51.100.2"):
+        db.add_indicator(ip, "echo_a", {})
+        db.add_indicator(ip, "echo_b", {})
+    return db
+
+
+def test_exclusive_counts_identify_unique_contribution(db):
+    _telemetry_db(db)
+    excl = db.get_feed_exclusive_counts()
+    assert excl.get("solo") == 3          # nothing else reports these
+    assert excl.get("echo_a", 0) == 0     # every IP is corroborated by echo_b
+    assert excl.get("echo_b", 0) == 0
+
+
+def test_overlap_detects_redundant_feed_pairs(db):
+    from threatfeedme.telemetry import feed_telemetry
+    _telemetry_db(db)
+    t = feed_telemetry(db)
+    pairs = {(p["a"], p["b"]): p["n"] for p in t["overlap"]}
+    assert pairs.get(("echo_a", "echo_b")) == 2
+    # solo shares nothing, so it must not appear in any pair.
+    assert not any("solo" in (p["a"], p["b"]) for p in t["overlap"])
+    # ...and the redundancy callout flags the echo pair at 100%.
+    assert [(p["a"], p["b"], p["pct"]) for p in t["redundant_pairs"]] == \
+        [("echo_a", "echo_b", 100)]
+
+
+def test_first_report_window_excludes_older_indicators(db):
+    """A feed added recently must not be credited for indicators that predate
+    it — the window keeps 'first to report' fair across install dates."""
+    _telemetry_db(db)
+    with db._cursor() as cur:  # age everything solo reported
+        cur.execute("UPDATE indicator_sources SET reported_at = '2020-01-01T00:00:00+00:00' "
+                    "WHERE source_name = 'solo'")
+    recent = db.get_feed_first_report_counts(since="2026-01-01T00:00:00+00:00")
+    assert recent.get("solo", 0) == 0
+    assert db.get_feed_first_report_counts().get("solo") == 3  # all-time still counts them
+
+
+def test_telemetry_rows_rank_by_exclusive_contribution(db):
+    from threatfeedme.telemetry import feed_telemetry
+    _telemetry_db(db)
+    rows = feed_telemetry(db)["rows"]
+    assert rows[0]["name"] == "solo"
+    assert rows[0]["exclusive"] == 3 and rows[0]["exclusive_pct"] == 100
+    echo = next(r for r in rows if r["name"] == "echo_a")
+    assert echo["exclusive"] == 0 and echo["exclusive_pct"] == 0
+
+
+def test_telemetry_health_flags_stale_and_failed_feeds(db):
+    from threatfeedme.telemetry import feed_telemetry
+    _telemetry_db(db)
+    db.update_feed_stats("solo", 3, "success")
+    db.update_feed_stats("echo_a", 0, "error", error_message="boom")
+    _set_last_update(db, "echo_b", "2020-01-01T00:00:00+00:00")
+    db.update_feed_stats("echo_b", 2, "success")
+    _set_last_update(db, "echo_b", "2020-01-01T00:00:00+00:00")
+
+    health = {r["name"]: r["health"] for r in feed_telemetry(db)["rows"]}
+    assert health["echo_a"]["state"] == "error"
+    assert health["echo_b"]["state"] == "stale"
+    assert health["solo"]["state"] in ("ok", "no new")  # ran now, freshness varies
+
+
 def test_purge_orphaned_feedback_self_heals_stale_penalties(db):
     """FP attributions must not outlive the whitelist entry that justified
     them. Rows stranded by the old tier-scoped-removal bug are cleared at
