@@ -759,6 +759,46 @@ def test_legacy_whitelist_is_migrated(tmp_path):
     assert len(db2.get_whitelist()) == 1
 
 
+def test_legacy_db_gets_reported_at_migration(tmp_path):
+    """A database whose indicator_sources predates reported_at gains the
+    column on open, so ingest and the telemetry queries work against it.
+
+    Defensive: every released version has shipped reported_at in the CREATE
+    TABLE (since v1.0.0), so no real upgrade path hits this. It guards
+    hand-built or hand-repaired databases and keeps the migration block
+    uniform with the other additive column adds.
+    """
+    dbp = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(dbp)
+    conn.executescript(
+        "CREATE TABLE indicators (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " ip TEXT UNIQUE NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,"
+        " confidence_score REAL DEFAULT 0.0, tier TEXT DEFAULT 'low', metadata TEXT DEFAULT '{}');"
+        " CREATE TABLE indicator_sources (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " indicator_id INTEGER NOT NULL, source_name TEXT NOT NULL,"
+        " UNIQUE(indicator_id, source_name));"
+    )
+    conn.execute("INSERT INTO indicators (ip, first_seen, last_seen) VALUES ('203.0.113.1','2026-01-01','2026-01-01')")
+    conn.commit()
+    conn.close()
+
+    db = Database(dbp)  # must ALTER TABLE to add reported_at
+
+    # The ingest path that fills reported_at must work on the migrated table.
+    db.add_indicator("203.0.113.2", "talos_snort", {})
+
+    # Telemetry queries must work against the migrated column.
+    # The pre-existing row has NULL reported_at, so it is excluded from the
+    # freshness window (NULL >= ? is false); only the newly-ingested one counts.
+    new = db.get_feed_new_counts("2026-01-01T00:00:00+00:00")
+    assert new.get("talos_snort", 0) == 1
+
+    # Re-opening (a second process/init) must not crash or double-migrate.
+    db2 = Database(dbp)
+    db2.add_indicator("203.0.113.3", "talos_snort", {})
+    assert db2.get_feed_new_counts("2026-01-01T00:00:00+00:00").get("talos_snort", 0) == 2
+
+
 # ---------------------------------------------------------------- export ----
 
 def test_csv_export_quotes_multiple_sources(db, tmp_path):

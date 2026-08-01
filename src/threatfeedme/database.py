@@ -246,6 +246,19 @@ class Database:
                 except sqlite3.OperationalError:
                     pass
 
+            # Defensive: every released version ships reported_at in the CREATE TABLE
+            # above (since v1.0.0), so no real upgrade lacks it. This keeps the block
+            # uniform with the other additive column adds and covers a hand-built or
+            # hand-repaired database. Backfilled rows get NULL, which the telemetry
+            # freshness window filters out (NULL >= ? is false); fetches fill it going
+            # forward.
+            is_cols = [r[1] for r in cursor.execute("PRAGMA table_info(indicator_sources)").fetchall()]
+            if is_cols and 'reported_at' not in is_cols:
+                try:
+                    cursor.execute("ALTER TABLE indicator_sources ADD COLUMN reported_at TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_ip ON indicators(ip)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
