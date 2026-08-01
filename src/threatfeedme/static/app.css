@@ -174,6 +174,12 @@ input::placeholder { color:var(--dim); }
    Full name is in the title. */
 .feeds .twin { display:block; max-width:104px; margin-top:4px; overflow:hidden;
                text-overflow:ellipsis; white-space:nowrap; }
+/* The feed's own name is a long unbroken string (emerging_threats_compromised);
+   with white-space:nowrap on the cell it renders full-width and pushes the
+   whole table past the 1000px container — the scrollbar that keeps coming back.
+   Cap it so it ellipsises instead of inflating the first column. */
+.feeds td:first-child > b { display:block; max-width:200px; overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
 .row-off td { opacity:.5; }
 
 /* Overlap heatmap (collapsed by default) */
