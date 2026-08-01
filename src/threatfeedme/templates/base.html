@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>{% block title %}Threat Feed Me!{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="container">
+    <h1><svg class="logo-mark" viewBox="0 0 128 128" aria-hidden="true"><g transform="translate(64 60)"><path d="M-40 10 C-44 -18 -24 -38 0 -38 C24 -38 44 -18 40 10 L28 10 L22 -2 L14 10 L6 -2 L-2 10 L-10 -2 L-18 10 L-26 -2 L-34 10 Z" fill="none" stroke="#34d399" stroke-width="9" stroke-linejoin="round"/><path d="M0 12 C-3 32 3 38 0 52" fill="none" stroke="#34d399" stroke-width="9" stroke-linecap="round"/><circle class="prey" cx="0" cy="-12" r="6.5" fill="#f87171"/></g></svg>Threat Feed Me!</h1>
+    <nav class="nav">
+        <a href="/" {% if page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="/indicators" {% if page == 'indicators' %}class="active"{% endif %}>Indicators</a>
+    </nav>
+    <p class="sub">{% block subtitle %}{% endblock %}</p>
+
+{% block content %}{% endblock %}
+
+    <footer>Generated {{ generated_at }}</footer>
+</div>
+{% block modals %}{% endblock %}
+<script src="/static/app.js"></script>
+</body>
+</html>

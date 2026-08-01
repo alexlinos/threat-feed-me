@@ -100,7 +100,32 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "key_configured": bool(fsrc.auth_env and os.environ.get(fsrc.auth_env)),
         })
 
-    # ---- Whitelist rows ----
+    return core.templates.TemplateResponse(request, "dashboard.html", {
+        "page": "dashboard",
+        "feed_base": feed_base,
+        "counts": counts,
+        "whitelist_count": len(whitelist),
+        "feed_cards": feed_cards,
+        "feed_rows": feed_rows,
+        "feed_types": [t.value for t in FeedType],
+        "interval_min": _refresh_interval_minutes(),
+        "retention_days": retention_max_age_days(core.db, core.config),
+        "feed_names": [fsrc.name for fsrc in feed_sources],
+        "all_feeds": ALL_FEEDS,
+        "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
+    })
+
+
+@router.get("/indicators", response_class=HTMLResponse)
+def indicators_page(request: Request, q: str = "", _=Depends(require_auth)):
+    """Merged indicators and whitelist management.
+
+    Split off the dashboard: a 50-row page of a 50,000-row list is data
+    exhaust, not an answer, and it buried the feed URLs that are the point of
+    the landing page. `q` pre-fills the search so the dashboard's lookup box
+    can deep-link straight to one address.
+    """
+    whitelist = core.db.get_whitelist()
     whitelist_rows = []
     for w in whitelist[:50]:
         badge_class, badge_label = _REASON_BADGES.get(w.reason_code, _REASON_BADGES["other"])
@@ -113,17 +138,10 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "reason_label": badge_label,
         })
 
-    return core.templates.TemplateResponse(request, "dashboard.html", {
-        "feed_base": feed_base,
-        "counts": counts,
-        "whitelist_count": len(whitelist),
-        "feed_cards": feed_cards,
-        "feed_rows": feed_rows,
-        "feed_types": [t.value for t in FeedType],
-        "interval_min": _refresh_interval_minutes(),
-        "retention_days": retention_max_age_days(core.db, core.config),
+    return core.templates.TemplateResponse(request, "indicators.html", {
+        "page": "indicators",
+        "q": q,
         "whitelist_rows": whitelist_rows,
-        "feed_names": [fsrc.name for fsrc in feed_sources],
         "all_feeds": ALL_FEEDS,
         "reason_options": WHITELIST_REASONS,
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),

@@ -1,18 +1,7 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <title>Threat Feed Me!</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-<div class="container">
-    <h1><svg class="logo-mark" viewBox="0 0 128 128" aria-hidden="true"><g transform="translate(64 60)"><path d="M-40 10 C-44 -18 -24 -38 0 -38 C24 -38 44 -18 40 10 L28 10 L22 -2 L14 10 L6 -2 L-2 10 L-10 -2 L-18 10 L-26 -2 L-34 10 Z" fill="none" stroke="#34d399" stroke-width="9" stroke-linejoin="round"/><path d="M0 12 C-3 32 3 38 0 52" fill="none" stroke="#34d399" stroke-width="9" stroke-linecap="round"/><circle class="prey" cx="0" cy="-12" r="6.5" fill="#f87171"/></g></svg>Threat Feed Me!</h1>
-    <p class="sub">Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.</p>
+{% extends "base.html" %}
+{% block subtitle %}Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.{% endblock %}
 
+{% block content %}
     <div class="stats">
         <div class="stat"><div class="n">{{ '{:,}'.format(counts['all']) }}</div><div class="l">Total blockable</div></div>
         <div class="stat"><div class="n">{{ '{:,}'.format(counts['high']) }}</div><div class="l">High confidence</div></div>
@@ -42,8 +31,9 @@
     </div>
     {% endfor %}
 
-    <div class="howto">
-        <b>How to use these</b>
+    <!-- Read once per deployment, then pure noise: collapsed by default. -->
+    <details class="howto">
+        <summary><b>How to use these</b> — firewall-by-firewall instructions</summary>
         <ul>
             <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i>, then paste the URL.</li>
             <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i>, action <i>Block</i>, paste the URL.</li>
@@ -57,7 +47,15 @@
         The list is plain text, one IP or CIDR per line, refreshed each pipeline run and with whitelisted IPs removed automatically.
         Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feed.
         If the URL shows a loopback address, replace the host with this server's LAN IP or hostname.
-    </div>
+    </details>
+
+    <!-- The common question ("is this IP in my feeds?") without the 51k-row list. -->
+    <form class="lookup" onsubmit="return lookupIndicator(event)">
+        <label for="lookup-ip">Look up an IP</label>
+        <input id="lookup-ip" type="text" class="text-input" placeholder="e.g. 203.0.113.10">
+        <button class="mini-btn" type="submit">Search</button>
+        <span class="muted">Opens the indicators page filtered to that address.</span>
+    </form>
 
     <h2>Feeds</h2>
     <p class="hint">Mix and match sources. Toggle a feed on/off, refresh on demand, or add your own
@@ -121,93 +119,9 @@
         <button type="submit">⬆ Upload list</button>
     </form>
     <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one IP or CIDR.</p>
+{% endblock %}
 
-    <h2>Merged indicators</h2>
-    <p class="hint">The deduplicated result across all feeds. Add an IP/CIDR manually, or remove one
-       (removing globally whitelists it so a refresh won't bring it back).</p>
-    <div class="toolbar">
-        <input id="ind-q" type="text" class="text-input" placeholder="Search IP / CIDR…">
-        <form onsubmit="return addIndicator(event)" style="display:flex;gap:8px;align-items:center">
-            <input id="ind-add" type="text" class="text-input" placeholder="add IP or CIDR">
-            <button class="mini-btn" type="submit">+ Add</button>
-        </form>
-        <span class="grow"></span>
-        <span id="ind-pageinfo" class="muted"></span>
-        <button class="mini-btn" id="ind-prev" onclick="indPage(-1)">‹ Prev</button>
-        <button class="mini-btn" id="ind-next" onclick="indPage(1)">Next ›</button>
-    </div>
-    <table>
-        <thead><tr><th>IP / CIDR</th><th>Tier</th><th>Score</th><th>Sources</th><th></th></tr></thead>
-        <tbody id="ind-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
-    </table>
-
-    <h2>Whitelist</h2>
-    <p class="hint">Whitelist an IP from <b>all feeds</b> (excluded everywhere) or from a
-       <b>single feed</b> (only that feed's report is ignored — other feeds still count).</p>
-    <form class="wl-form" onsubmit="return addWl(event)">
-        <input class="ip" id="wl-ip" type="text" placeholder="IP or CIDR" required>
-        <select id="wl-feed" title="Scope">
-            <option value="{{ all_feeds }}">All tiers</option>
-            <option value="tier:high">High only</option>
-            <option value="tier:medium">Medium only</option>
-            <option value="tier:low">Low only</option>
-        </select>
-        <select id="wl-reason-code" title="Reason">
-            {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
-        </select>
-        <input class="reason" id="wl-reason" type="text" placeholder="Note (optional)">
-        <input id="wl-by" type="text" placeholder="Added by" value="dashboard" style="width:120px">
-        <button type="submit">Add</button>
-    </form>
-    <table>
-        <thead><tr><th>IP</th><th>Scope</th><th>Reason</th><th>Added by</th><th></th></tr></thead>
-        <tbody>
-        {% for w in whitelist_rows %}
-            <tr>
-                <td><code>{{ w.ip }}</code> <a class="vt-btn" href="https://www.virustotal.com/gui/search/{{ w.ip }}" target="_blank" title="Look up on VirusTotal">VT</a></td>
-                <td>{% if w.feed_name == all_feeds %}All tiers{% elif w.feed_name.startswith('tier:') %}<code>{{ w.feed_name.split(':')[1]|capitalize }} only</code>{% else %}<code>{{ w.feed_name }}</code>{% endif %}</td>
-                <td><span class="{{ w.reason_class }}">{{ w.reason_label }}</span><span class="muted" style="font-size:.85em">{% if w.reason %} {{ w.reason }}{% endif %}</span></td>
-                <td>{{ w.added_by }}</td>
-                <td><button class="rm-btn" onclick='removeWl({{ w.ip|tojson }}, {{ w.feed_name|tojson }})'>Remove</button></td>
-            </tr>
-        {% else %}
-            <tr><td colspan="5" class="muted">No whitelist entries.</td></tr>
-        {% endfor %}
-        </tbody>
-    </table>
-
-    <footer>Generated {{ generated_at }}</footer>
-</div>
-
-<div class="modal-overlay" id="wl-modal">
-    <div class="modal">
-        <h3>Whitelist indicator</h3>
-        <p class="muted" id="wl-modal-ip"></p>
-        <div class="field">
-            <label>Reported by</label>
-            <div class="sources" id="wl-modal-sources">—</div>
-        </div>
-        <div class="field">
-            <label>Scope — whitelist from which tier?</label>
-            <select id="wl-modal-scope"></select>
-        </div>
-        <div class="field">
-            <label>Reason</label>
-            <select id="wl-modal-reason">
-                {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
-            </select>
-        </div>
-        <div class="field">
-            <label>Note (optional)</label>
-            <input id="wl-modal-note" type="text" placeholder="e.g. our mail relay, decommissioned host">
-        </div>
-        <div class="actions">
-            <button class="cancel" onclick="closeWlModal()">Cancel</button>
-            <button class="btn" onclick="confirmWlModal()">Whitelist</button>
-        </div>
-    </div>
-</div>
-
+{% block modals %}
 <div class="modal-overlay" id="fp-modal">
     <div class="modal">
         <h3>False positives — <span id="fp-modal-feed"></span></h3>
@@ -224,6 +138,4 @@
         </div>
     </div>
 </div>
-<script src="/static/app.js"></script>
-</body>
-</html>
+{% endblock %}

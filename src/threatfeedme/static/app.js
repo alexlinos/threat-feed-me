@@ -182,13 +182,26 @@ function indPage(dir) {
     loadIndicators();
 }
 let indDebounce;
+// The indicators table lives on /indicators only, so this bootstrap must be
+// a no-op on the dashboard (app.js is shared by both pages).
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('ind-q').addEventListener('input', () => {
+    const q = document.getElementById('ind-q');
+    if (!q) return;
+    q.addEventListener('input', () => {
         clearTimeout(indDebounce);
         indDebounce = setTimeout(() => { indOffset = 0; loadIndicators(); }, 300);
     });
-    loadIndicators();
+    loadIndicators();  // honors any ?q= the dashboard lookup box deep-linked with
 });
+
+// Dashboard lookup box: jump to the indicators page filtered to one address,
+// so the common "is this IP in my feeds?" question never needs the full list.
+function lookupIndicator(e) {
+    e.preventDefault();
+    const ip = document.getElementById('lookup-ip').value.trim();
+    location.href = '/indicators' + (ip ? '?q=' + encodeURIComponent(ip) : '');
+    return false;
+}
 async function addIndicator(e) {
     e.preventDefault();
     const ip = document.getElementById('ind-add').value.trim();

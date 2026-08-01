@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Indicators — Threat Feed Me!{% endblock %}
+{% block subtitle %}The deduplicated result across all feeds. Search for an IP, add one manually,
+   or remove one (removing globally whitelists it so a refresh won't bring it back).{% endblock %}
+
+{% block content %}
+    <h2>Merged indicators</h2>
+    <div class="toolbar">
+        <input id="ind-q" type="text" class="text-input" placeholder="Search IP / CIDR…" value="{{ q }}">
+        <form onsubmit="return addIndicator(event)" style="display:flex;gap:8px;align-items:center">
+            <input id="ind-add" type="text" class="text-input" placeholder="add IP or CIDR">
+            <button class="mini-btn" type="submit">+ Add</button>
+        </form>
+        <span class="grow"></span>
+        <span id="ind-pageinfo" class="muted"></span>
+        <button class="mini-btn" id="ind-prev" onclick="indPage(-1)">‹ Prev</button>
+        <button class="mini-btn" id="ind-next" onclick="indPage(1)">Next ›</button>
+    </div>
+    <table>
+        <thead><tr><th>IP / CIDR</th><th>Tier</th><th>Score</th><th>Sources</th><th></th></tr></thead>
+        <tbody id="ind-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table>
+
+    <h2>Whitelist</h2>
+    <p class="hint">Whitelist an IP from <b>all tiers</b> (excluded everywhere) or from a
+       <b>single tier</b> (only that tier's feed drops it — the others still list it).</p>
+    <form class="wl-form" onsubmit="return addWl(event)">
+        <input class="ip" id="wl-ip" type="text" placeholder="IP or CIDR" required>
+        <select id="wl-feed" title="Scope">
+            <option value="{{ all_feeds }}">All tiers</option>
+            <option value="tier:high">High only</option>
+            <option value="tier:medium">Medium only</option>
+            <option value="tier:low">Low only</option>
+        </select>
+        <select id="wl-reason-code" title="Reason">
+            {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+        </select>
+        <input class="reason" id="wl-reason" type="text" placeholder="Note (optional)">
+        <input id="wl-by" type="text" placeholder="Added by" value="dashboard" style="width:120px">
+        <button type="submit">Add</button>
+    </form>
+    <table>
+        <thead><tr><th>IP</th><th>Scope</th><th>Reason</th><th>Added by</th><th></th></tr></thead>
+        <tbody>
+        {% for w in whitelist_rows %}
+            <tr>
+                <td><code>{{ w.ip }}</code> <a class="vt-btn" href="https://www.virustotal.com/gui/search/{{ w.ip }}" target="_blank" title="Look up on VirusTotal">VT</a></td>
+                <td>{% if w.feed_name == all_feeds %}All tiers{% elif w.feed_name.startswith('tier:') %}<code>{{ w.feed_name.split(':')[1]|capitalize }} only</code>{% else %}<code>{{ w.feed_name }}</code>{% endif %}</td>
+                <td><span class="{{ w.reason_class }}">{{ w.reason_label }}</span><span class="muted" style="font-size:.85em">{% if w.reason %} {{ w.reason }}{% endif %}</span></td>
+                <td>{{ w.added_by }}</td>
+                <td><button class="rm-btn" onclick='removeWl({{ w.ip|tojson }}, {{ w.feed_name|tojson }})'>Remove</button></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5" class="muted">No whitelist entries.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}
+
+{% block modals %}
+<div class="modal-overlay" id="wl-modal">
+    <div class="modal">
+        <h3>Whitelist indicator</h3>
+        <p class="muted" id="wl-modal-ip"></p>
+        <div class="field">
+            <label>Reported by</label>
+            <div class="sources" id="wl-modal-sources">—</div>
+        </div>
+        <div class="field">
+            <label>Scope — whitelist from which tier?</label>
+            <select id="wl-modal-scope"></select>
+        </div>
+        <div class="field">
+            <label>Reason</label>
+            <select id="wl-modal-reason">
+                {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="field">
+            <label>Note (optional)</label>
+            <input id="wl-modal-note" type="text" placeholder="e.g. our mail relay, decommissioned host">
+        </div>
+        <div class="actions">
+            <button class="cancel" onclick="closeWlModal()">Cancel</button>
+            <button class="btn" onclick="confirmWlModal()">Whitelist</button>
+        </div>
+    </div>
+</div>
+{% endblock %}

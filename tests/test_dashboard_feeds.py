@@ -121,12 +121,32 @@ def test_feed_base_honors_reverse_proxy_without_port():
     assert base == "https://feeds.example.org"
 
 
-def test_homepage_has_whitelist_form_with_tier_scope(client):
-    body = client.get("/").text
+def test_indicators_page_has_whitelist_form_with_tier_scope(client):
+    body = client.get("/indicators").text
     assert 'id="wl-feed"' in body
     assert "All tiers" in body
     for tier_option in ("tier:high", "tier:medium", "tier:low"):
         assert tier_option in body  # tier scopes replace per-feed scopes
+
+
+def test_dashboard_is_not_a_wall_of_ips(client):
+    """The landing page answers 'what is this doing for me' — feed URLs and
+    feed health. The 50k-row indicator list and whitelist live on their own
+    page, reachable from the nav and the lookup box."""
+    body = client.get("/").text
+    assert "Firewall feed URLs" in body
+    assert 'href="/indicators"' in body          # nav link
+    assert 'id="lookup-ip"' in body              # single-IP lookup, not a list
+    assert 'id="ind-body"' not in body           # indicator table gone
+    assert 'id="wl-feed"' not in body            # whitelist form gone
+    assert "<details" in body                    # firewall instructions collapsed
+
+
+def test_indicators_page_prefills_search_from_query(client):
+    """The dashboard lookup box deep-links here with ?q=<ip>."""
+    body = client.get("/indicators?q=203.0.113.7").text
+    assert 'id="ind-body"' in body
+    assert 'value="203.0.113.7"' in body
 
 
 def test_fp_review_and_clear_one(client):
@@ -397,7 +417,7 @@ def test_whitelist_free_text_is_html_escaped(client):
         "ip": "45.11.22.33", "reason_code": "other",
         "added_by": "<script>alert(1)</script>",
     })
-    body = client.get("/").text
+    body = client.get("/indicators").text  # whitelist table moved off the dashboard
     assert "<script>alert(1)</script>" not in body
     assert "&lt;script&gt;" in body
 

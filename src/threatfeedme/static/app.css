@@ -29,6 +29,14 @@ h2 { margin:44px 0 12px; font-size:.85em; font-weight:600; text-transform:upperc
      letter-spacing:.16em; color:var(--ink); }
 h2::before { content:"// "; color:var(--accent-hi); }
 .sub { color:var(--muted); margin:0 0 28px; }
+.nav { display:flex; gap:4px; margin:10px 0 14px; border-bottom:1px solid var(--line); }
+.nav a { padding:7px 14px; color:var(--muted); text-decoration:none; font-size:.9em;
+         border-bottom:2px solid transparent; margin-bottom:-1px; }
+.nav a:hover { color:var(--ink); }
+.nav a.active { color:var(--accent-hi); border-bottom-color:var(--accent-hi); }
+.lookup { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:18px 0 4px; }
+.lookup label { font-size:.9em; color:var(--muted); }
+.lookup .text-input { min-width:220px; }
 
 .stats { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 12px; }
 .stat { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
@@ -70,6 +78,11 @@ h2::before { content:"// "; color:var(--accent-hi); }
 .howto b { color:var(--blue); }
 .howto ul { margin:8px 0 0; padding-left:20px; }
 .howto li { margin:4px 0; }
+/* Collapsed by default (<details>): the vendor list is read once per deploy. */
+.howto > summary { cursor:pointer; color:var(--blue); list-style:none; }
+.howto > summary::-webkit-details-marker { display:none; }
+.howto > summary::before { content:"▸ "; }
+.howto[open] > summary::before { content:"▾ "; }
 
 table { width:100%; border-collapse:collapse; background:var(--card);
          border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
