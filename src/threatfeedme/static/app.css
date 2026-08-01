@@ -162,10 +162,18 @@ input::placeholder { color:var(--dim); }
 /* Cells are nowrap so numbers stay readable; the wrapper scrolls instead of
    the page on narrow screens. */
 .table-scroll { overflow-x:auto; }
-.feeds td, .feeds th { white-space:nowrap; vertical-align:top; }
+/* Eight columns in a 1000px container: tighter gutters here so the table fits
+   without a horizontal scrollbar at desktop width. */
+.feeds td, .feeds th { white-space:nowrap; vertical-align:top; padding:10px 8px; }
+.feeds .mini-btn, .feeds .rm-btn { padding:4px 7px; }
 .feeds .bar { display:inline-block; width:64px; height:6px; border-radius:3px;
               background:rgba(255,255,255,.07); vertical-align:middle; }
 .feeds .bar i { display:block; height:100%; border-radius:3px; background:var(--accent-hi); }
+/* The twin partner's name is often long (emerging_threats_compromised); cap it
+   so the Unique column can't drive the whole table into horizontal scroll.
+   Full name is in the title. */
+.feeds .twin { display:block; max-width:104px; margin-top:4px; overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
 .row-off td { opacity:.5; }
 
 /* Overlap heatmap (collapsed by default) */
@@ -202,7 +210,7 @@ input::placeholder { color:var(--dim); }
 .fp-row code { flex:0 0 auto; }
 .hint { color:var(--muted); font-size:.84em; margin:0 0 10px; }
 
-.feed-url { color:var(--dim); font-size:.76em; font-family:var(--mono); max-width:340px;
+.feed-url { color:var(--dim); font-size:.76em; font-family:var(--mono); max-width:230px;
              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
 .toolbar .grow { flex:1; }

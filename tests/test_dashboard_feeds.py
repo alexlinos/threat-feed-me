@@ -148,7 +148,7 @@ def test_feeds_table_carries_telemetry_inline(client):
     body = client.get("/").text
     assert "Feed intelligence" not in body      # merged away
     assert 'class="feeds"' in body
-    for col in ("Unique", "First (7d)", "New (24h)", "Status"):
+    for col in ("Unique", "First 7d", "New 24h", "Status"):
         assert col in body
     assert "Overlap map" in body                # heatmap behind a disclosure
     # Wide tables scroll inside their own container, not the page.

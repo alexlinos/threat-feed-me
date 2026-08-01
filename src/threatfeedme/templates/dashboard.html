@@ -83,10 +83,10 @@
         <thead><tr>
             <th>Feed</th>
             <th>On</th>
-            <th>Indicators</th>
+            <th title="Indicators this feed currently reports">IPs</th>
             <th title="Share of this feed's indicators that no other feed reports">Unique</th>
-            <th title="Times this feed was first to report an indicator in the last {{ telemetry.first_report_window_days }} days">First ({{ telemetry.first_report_window_days }}d)</th>
-            <th title="Indicators first reported by this feed in the last {{ telemetry.new_window_hours }} hours">New ({{ telemetry.new_window_hours }}h)</th>
+            <th title="Times this feed was first to report an indicator in the last {{ telemetry.first_report_window_days }} days">First {{ telemetry.first_report_window_days }}d</th>
+            <th title="Indicators first reported by this feed in the last {{ telemetry.new_window_hours }} hours">New {{ telemetry.new_window_hours }}h</th>
             <th>Status</th>
             <th></th>
         </tr></thead>
@@ -111,7 +111,9 @@
                         <span class="bar" title="{{ '{:,}'.format(row.tele.exclusive) }} of {{ '{:,}'.format(row.tele.indicators) }} indicators are unique to this feed"><i style="width:{{ row.tele.exclusive_pct }}%"></i></span>
                         <span class="muted">{{ row.tele.exclusive_pct }}%</span>
                         {% if row.tele.twin %}
-                        <div><span class="badge badge-warn" title="{{ row.tele.twin.pct }}% of this feed is already inside {{ row.tele.twin.name }} — agreement between them is not independent corroboration">≈ {{ row.tele.twin.name }}</span></div>
+                        {# Compact on purpose: the partner's full name here made
+                           this the widest column and forced the table to scroll. #}
+                        <span class="badge badge-warn twin" title="{{ row.tele.twin.pct }}% of this feed is already inside {{ row.tele.twin.name }} — agreement between them is not independent corroboration, so it inflates confidence tiers without adding evidence">≈ {{ row.tele.twin.name }}</span>
                         {% endif %}
                     {% else %}<span class="muted">—</span>{% endif %}
                 </td>
