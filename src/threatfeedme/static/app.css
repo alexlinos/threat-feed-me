@@ -155,23 +155,49 @@ input::placeholder { color:var(--dim); }
    identical to the static badges beside it. */
 .fp-badge { cursor:pointer; font-family:var(--mono); }
 .fp-badge:hover { filter:brightness(1.25); }
-/* --- Feed telemetry panel --- */
+/* --- Feed table telemetry (merged into the feeds table, not a separate panel) --- */
 .callout { background:rgba(251,191,36,.06); border:1px solid rgba(251,191,36,.25);
            border-radius:var(--radius); padding:12px 16px; margin:12px 0; font-size:.9em; }
 .callout b { color:var(--amber); }
 /* Cells are nowrap so numbers stay readable; the wrapper scrolls instead of
    the page on narrow screens. */
 .table-scroll { overflow-x:auto; }
-.telemetry td, .telemetry th { white-space:nowrap; }
-.telemetry .bar { display:inline-block; width:70px; height:6px; border-radius:3px;
-                  background:rgba(255,255,255,.07); margin-left:8px; vertical-align:middle; }
-.telemetry .bar i { display:block; height:100%; border-radius:3px; background:var(--accent-hi); }
+.feeds td, .feeds th { white-space:nowrap; vertical-align:top; }
+.feeds .bar { display:inline-block; width:64px; height:6px; border-radius:3px;
+              background:rgba(255,255,255,.07); vertical-align:middle; }
+.feeds .bar i { display:block; height:100%; border-radius:3px; background:var(--accent-hi); }
 .row-off td { opacity:.5; }
+
+/* Overlap heatmap (collapsed by default) */
+.heat { display:grid; gap:2px; align-items:center; }
+.heat .hl-row { font-family:var(--mono); font-size:.72em; color:var(--muted);
+                text-align:right; padding-right:6px; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap; }
+.heat .hl-col { font-family:var(--mono); font-size:.68em; color:var(--muted);
+                writing-mode:vertical-rl; transform:rotate(180deg);
+                height:86px; overflow:hidden; white-space:nowrap; }
+.heat .hc { width:18px; height:18px; border-radius:2px; background:rgba(255,255,255,.03);
+            border:1px solid rgba(255,255,255,.04); }
+/* Diagonal is structure, not data — keep it dimmer than any real value. */
+.heat .hc.diag { background:rgba(255,255,255,.06); border-color:transparent; }
+/* Alphas start high enough that a 1% overlap is still visible against the
+   dark surface; most cells are zero, so the ones that aren't must carry. */
+/* Must out-specify `.heat .hc` above, which sets the empty-cell background —
+   otherwise every bucket renders grey and the map looks blank. The legend
+   swatches live outside .heat, so they need their own selector. */
+.heat .hc.ov-0, .heat-legend i.ov-0 { background:rgba(255,255,255,.03); }
+.heat .hc.ov-1, .heat-legend i.ov-1 { background:rgba(251,191,36,.34); }
+.heat .hc.ov-2, .heat-legend i.ov-2 { background:rgba(251,191,36,.55); }
+.heat .hc.ov-3, .heat-legend i.ov-3 { background:rgba(251,191,36,.78); }
+.heat .hc.ov-4, .heat-legend i.ov-4 { background:rgba(248,113,113,.72); }
+.heat .hc.ov-5, .heat-legend i.ov-5 { background:rgba(248,113,113,1); }
+.heat-legend { display:flex; align-items:center; gap:4px; margin-top:10px;
+               font-family:var(--mono); font-size:.72em; color:var(--muted); }
+.heat-legend i { width:16px; height:12px; border-radius:2px; display:inline-block; }
 .health-good { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
 .health-warn { background:rgba(251,191,36,.1); color:var(--amber); border-color:rgba(251,191,36,.3); }
 .health-bad  { background:rgba(248,113,113,.1); color:var(--red); border-color:rgba(248,113,113,.3); }
 .health-muted { color:var(--muted); }
-.overlap { margin-top:10px; }
 .fp-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
 .fp-row code { flex:0 0 auto; }
 .hint { color:var(--muted); font-size:.84em; margin:0 0 10px; }

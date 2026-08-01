@@ -27,6 +27,11 @@ STALE_INTERVAL_MULTIPLE = 3
 # Overlap at or above this fraction of the smaller feed means the two are
 # substantially the same list — their agreement is not independent evidence.
 REDUNDANT_OVERLAP = 0.9
+# ...but only once the smaller feed is big enough for the ratio to mean
+# anything. A feed with one indicator that happens to appear elsewhere is
+# trivially "100% contained" and would otherwise dominate the redundancy list
+# (abuse.ch Feodo's recommended list is routinely a single IP).
+MIN_REDUNDANT_SIZE = 25
 
 
 def _iso_ago(**kwargs) -> str:
@@ -114,22 +119,50 @@ def feed_telemetry(db: Database) -> Dict[str, Any]:
         })
     rows.sort(key=lambda r: (-r["exclusive"], -r["indicators"], r["name"]))
 
-    # Pairs whose overlap is large relative to the smaller feed: agreement
-    # between these is close to a single source voting twice.
-    redundant = []
+    # Overlap as a share of the SMALLER feed: "how much of the little list is
+    # already inside the big one". Ratio-to-smaller is the meaningful direction
+    # — a 1,600-entry feed fully contained in a 24,000-entry one is redundant;
+    # the big feed is not.
+    by_pair: Dict[tuple, int] = {}
     for pair in overlap:
         smaller = min(reported.get(pair["a"], 0), reported.get(pair["b"], 0))
-        if not smaller:
+        pair["pct"] = round(pair["n"] / smaller * 100) if smaller else 0
+        by_pair[(pair["a"], pair["b"])] = pair["pct"]
+        by_pair[(pair["b"], pair["a"])] = pair["pct"]
+
+    # A feed's closest twin, recorded on the SMALLER feed only: it is the one
+    # whose removal would cost you almost nothing.
+    twins: Dict[str, Dict[str, Any]] = {}
+    redundant = []
+    for pair in overlap:
+        a, b = pair["a"], pair["b"]
+        smaller, larger = (a, b) if reported.get(a, 0) <= reported.get(b, 0) else (b, a)
+        if (pair["pct"] < REDUNDANT_OVERLAP * 100
+                or reported.get(smaller, 0) < MIN_REDUNDANT_SIZE):
             continue
-        frac = pair["n"] / smaller
-        if frac >= REDUNDANT_OVERLAP:
-            redundant.append({**pair, "pct": round(frac * 100)})
+        redundant.append(pair)
+        if pair["pct"] > twins.get(smaller, {}).get("pct", 0):
+            twins[smaller] = {"name": larger, "pct": pair["pct"]}
     redundant.sort(key=lambda p: -p["pct"])
+    for row in rows:
+        row["twin"] = twins.get(row["name"])
+
+    # Square matrix for the heatmap: ordered like the rows so the grid and the
+    # feeds table read in the same sequence.
+    names = [r["name"] for r in rows]
+    matrix = [
+        {"name": a,
+         "cells": [{"other": b, "pct": (None if a == b else by_pair.get((a, b), 0))}
+                   for b in names]}
+        for a in names
+    ]
 
     return {
         "rows": rows,
         "overlap": sorted(overlap, key=lambda p: -p["n"]),
         "redundant_pairs": redundant,
+        "matrix": matrix,
+        "names": names,
         "first_report_window_days": FIRST_REPORT_WINDOW_DAYS,
         "new_window_hours": NEW_WINDOW_HOURS,
     }

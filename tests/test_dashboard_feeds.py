@@ -142,11 +142,15 @@ def test_dashboard_is_not_a_wall_of_ips(client):
     assert "<details" in body                    # firewall instructions collapsed
 
 
-def test_dashboard_shows_feed_intelligence_panel(client):
+def test_feeds_table_carries_telemetry_inline(client):
+    """Telemetry lives inside the feeds table — no separate intelligence
+    section competing with the feed management surface."""
     body = client.get("/").text
-    assert "Feed intelligence" in body
-    assert "Exclusive" in body and "First to report" in body
-    assert 'class="telemetry"' in body
+    assert "Feed intelligence" not in body      # merged away
+    assert 'class="feeds"' in body
+    for col in ("Unique", "First (7d)", "New (24h)", "Status"):
+        assert col in body
+    assert "Overlap map" in body                # heatmap behind a disclosure
     # Wide tables scroll inside their own container, not the page.
     assert 'class="table-scroll"' in body
 

@@ -57,73 +57,11 @@
         <span class="muted">Opens the indicators page filtered to that address.</span>
     </form>
 
-    <h2>Feed intelligence</h2>
-    <p class="hint">Which feeds are earning their keep. <b>Exclusive</b> is what you would lose by
-       removing a feed; <b>first to report</b> is who warns you early rather than confirming what
-       you already had; <b>new</b> and <b>health</b> catch a feed that has quietly gone stale.</p>
-
-    {% if telemetry.redundant_pairs %}
-    <div class="callout">
-        <b>Overlapping sources.</b> These feeds report nearly the same indicators, so agreement
-        between them is closer to one source voting twice than to independent corroboration:
-        {% for p in telemetry.redundant_pairs[:4] %}
-        <code>{{ p.a }}</code> ≈ <code>{{ p.b }}</code> ({{ p.pct }}%){% if not loop.last %}, {% endif %}
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    <div class="table-scroll">
-    <table class="telemetry">
-        <thead><tr>
-            <th>Feed</th>
-            <th title="Indicators this feed currently reports">Indicators</th>
-            <th title="Indicators no other feed reports — what you lose if you remove it">Exclusive</th>
-            <th title="Indicators this feed was first to report in the last {{ telemetry.first_report_window_days }} days">First to report ({{ telemetry.first_report_window_days }}d)</th>
-            <th title="Indicators first reported by this feed in the last {{ telemetry.new_window_hours }} hours">New ({{ telemetry.new_window_hours }}h)</th>
-            <th>Health</th>
-        </tr></thead>
-        <tbody>
-        {% for r in telemetry.rows %}
-            <tr{% if not r.enabled %} class="row-off"{% endif %}>
-                <td><b>{{ r.name }}</b>{% if not r.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
-                <td>{{ '{:,}'.format(r.indicators) }}</td>
-                <td>
-                    {{ '{:,}'.format(r.exclusive) }}
-                    <span class="muted">{{ r.exclusive_pct }}%</span>
-                    <span class="bar" title="{{ r.exclusive_pct }}% of this feed's indicators are unique to it"><i style="width:{{ r.exclusive_pct }}%"></i></span>
-                </td>
-                <td>{{ '{:,}'.format(r.first_reports) }}</td>
-                <td>{{ '{:,}'.format(r.new) }}</td>
-                <td><span class="badge health-{{ r.health.level }}" title="{{ r.health.detail }}">{{ r.health.state }}</span></td>
-            </tr>
-        {% else %}
-            <tr><td colspan="6" class="muted">No feeds configured.</td></tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    </div>
-
-    <details class="howto">
-        <summary><b>Overlap matrix</b> — how much each pair of feeds agrees</summary>
-        {% if telemetry.overlap %}
-        <div class="table-scroll">
-        <table class="overlap">
-            <thead><tr><th>Feed A</th><th>Feed B</th><th>Shared indicators</th></tr></thead>
-            <tbody>
-            {% for p in telemetry.overlap[:25] %}
-                <tr><td><code>{{ p.a }}</code></td><td><code>{{ p.b }}</code></td><td>{{ '{:,}'.format(p.n) }}</td></tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </div>
-        {% else %}
-        <p class="muted">No two feeds currently report the same indicator.</p>
-        {% endif %}
-    </details>
-
     <h2>Feeds</h2>
-    <p class="hint">Mix and match sources. Toggle a feed on/off, refresh on demand, or add your own
-       (an HTTP URL, or a local file path with "local file" checked).</p>
+    <p class="hint">Sorted by what each feed contributes that nothing else does — the ones you would
+       actually miss are at the top. <b>Unique</b> is the share of a feed's indicators no other feed
+       reports; <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and the
+       status badge catch a feed that has quietly gone stale.</p>
     <div class="toolbar">
         <button class="btn" id="refresh-all-btn" onclick="refreshAll()">↻ Refresh all now</button>
         <button class="mini-btn" onclick="restoreDefaults()">Restore default feeds</button>
@@ -141,17 +79,49 @@
         </span>
     </div>
     <div class="table-scroll">
-    <table>
-        <thead><tr><th>Feed</th><th>Type</th><th>Enabled</th><th>Indicators</th><th>Last run</th><th></th></tr></thead>
+    <table class="feeds">
+        <thead><tr>
+            <th>Feed</th>
+            <th>On</th>
+            <th>Indicators</th>
+            <th title="Share of this feed's indicators that no other feed reports">Unique</th>
+            <th title="Times this feed was first to report an indicator in the last {{ telemetry.first_report_window_days }} days">First ({{ telemetry.first_report_window_days }}d)</th>
+            <th title="Indicators first reported by this feed in the last {{ telemetry.new_window_hours }} hours">New ({{ telemetry.new_window_hours }}h)</th>
+            <th>Status</th>
+            <th></th>
+        </tr></thead>
         <tbody>
         {% for row in feed_rows %}
-            <tr>
-                <td><b>{{ row.name }}</b><div class="feed-url" title="{{ row.url }}">{{ row.url }}</div></td>
-                <td>{{ row.feed_type }}<div class="muted">{{ row.source_kind }} · w={{ row.weight }}</div></td>
+            <tr{% if not row.enabled %} class="row-off"{% endif %}>
+                <td>
+                    <b>{{ row.name }}</b>
+                    <div class="feed-url" title="{{ row.url }}">{{ row.url }}</div>
+                    <div class="muted">{{ row.feed_type }} · {{ row.source_kind }} · w={{ row.weight }}</div>
+                </td>
                 <td><label class="switch"><input type="checkbox" {% if row.enabled %}checked{% endif %}
                     onchange='toggleFeed({{ row.name|tojson }}, this.checked)'><span></span></label></td>
-                <td>{% if row.indicators is none %}—{% else %}{{ '{:,}'.format(row.indicators) }}{% endif %}</td>
-                <td>{% if row.status is none %}<span class="muted">never run</span>{% else %}<span class="badge {{ 'badge-success' if row.status == 'success' else 'badge-error' }}">{{ row.status }}</span>{% endif %}{% if row.fp_count %} <button class="badge badge-warn fp-badge" title="{{ row.fp_count }} IP(s) flagged as false positives — click to review or clear" onclick='openFpModal({{ row.name|tojson }})'>⚠ {{ row.fp_count }} FP</button>{% endif %}{% if row.degraded_pct is not none %} <span class="badge badge-error" title="reputation reduced ~{{ row.degraded_pct }}%">degraded</span>{% endif %}</td>
+                {# Currently-attributed count, not the last run's ingest count:
+                   Unique/First/New all derive from this, so mixing the two
+                   made a row contradict itself (first > indicators). #}
+                <td{% if row.indicators is not none and row.tele and row.indicators != row.tele.indicators %} title="last run ingested {{ '{:,}'.format(row.indicators) }}"{% endif %}>
+                    {% if row.tele %}{{ '{:,}'.format(row.tele.indicators) }}{% elif row.indicators is not none %}{{ '{:,}'.format(row.indicators) }}{% else %}—{% endif %}
+                </td>
+                <td>
+                    {% if row.tele and row.tele.indicators %}
+                        <span class="bar" title="{{ '{:,}'.format(row.tele.exclusive) }} of {{ '{:,}'.format(row.tele.indicators) }} indicators are unique to this feed"><i style="width:{{ row.tele.exclusive_pct }}%"></i></span>
+                        <span class="muted">{{ row.tele.exclusive_pct }}%</span>
+                        {% if row.tele.twin %}
+                        <div><span class="badge badge-warn" title="{{ row.tele.twin.pct }}% of this feed is already inside {{ row.tele.twin.name }} — agreement between them is not independent corroboration">≈ {{ row.tele.twin.name }}</span></div>
+                        {% endif %}
+                    {% else %}<span class="muted">—</span>{% endif %}
+                </td>
+                <td>{% if row.tele %}{{ '{:,}'.format(row.tele.first_reports) }}{% else %}—{% endif %}</td>
+                <td>{% if row.tele %}{{ '{:,}'.format(row.tele.new) }}{% else %}—{% endif %}</td>
+                <td>
+                    {% if row.tele %}<span class="badge health-{{ row.tele.health.level }}" title="{{ row.tele.health.detail }}">{{ row.tele.health.state }}</span>{% endif %}
+                    {% if row.fp_count %} <button class="badge badge-warn fp-badge" title="{{ row.fp_count }} IP(s) flagged as false positives — click to review or clear" onclick='openFpModal({{ row.name|tojson }})'>⚠ {{ row.fp_count }} FP</button>{% endif %}
+                    {% if row.degraded_pct is not none %} <span class="badge badge-error" title="reputation reduced ~{{ row.degraded_pct }}%">degraded</span>{% endif %}
+                </td>
                 <td>
                     {% if row.auth_env %}
                     <button class="mini-btn" title="API key is read from ${{ row.auth_env }}; saved keys go to the server's data-volume .env"
@@ -162,11 +132,37 @@
                 </td>
             </tr>
         {% else %}
-            <tr><td colspan="6" class="muted">No feeds configured. Add one below.</td></tr>
+            <tr><td colspan="8" class="muted">No feeds configured. Add one below.</td></tr>
         {% endfor %}
         </tbody>
     </table>
     </div>
+
+    <details class="howto">
+        <summary><b>Overlap map</b> — which feeds report the same indicators</summary>
+        {% if telemetry.names|length > 1 %}
+        <p class="hint" style="margin-top:8px">Each cell is the share of the <i>smaller</i> feed that
+           both report. Dark cells are pairs that are effectively one list — their agreement inflates
+           confidence tiers without adding evidence.</p>
+        <div class="table-scroll">
+        <div class="heat" style="grid-template-columns: 132px repeat({{ telemetry.names|length }}, 18px)">
+            <div></div>
+            {% for n in telemetry.names %}<div class="hl-col" title="{{ n }}">{{ n }}</div>{% endfor %}
+            {% for r in telemetry.matrix %}
+                <div class="hl-row" title="{{ r.name }}">{{ r.name }}</div>
+                {% for c in r.cells %}
+                    {% if c.pct is none %}<div class="hc diag"></div>
+                    {% else %}<div class="hc ov-{{ (c.pct // 20) if c.pct < 100 else 5 }}"
+                          title="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"></div>{% endif %}
+                {% endfor %}
+            {% endfor %}
+        </div>
+        </div>
+        <div class="heat-legend"><span>0%</span><i class="ov-0"></i><i class="ov-1"></i><i class="ov-2"></i><i class="ov-3"></i><i class="ov-4"></i><i class="ov-5"></i><span>100% — same list</span></div>
+        {% else %}
+        <p class="muted">Not enough feeds to compare yet.</p>
+        {% endif %}
+    </details>
 
     <form class="wl-form" onsubmit="return addFeed(event)" style="margin-top:12px">
         <input class="ip" id="f-name" type="text" placeholder="feed name" required>

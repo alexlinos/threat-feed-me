@@ -75,7 +75,12 @@ def dashboard(request: Request, _=Depends(require_auth)):
     fp_counts = core.db.get_feed_fp_counts()
     report_counts = core.db.get_feed_report_counts()
 
-    # ---- Feed management rows (config joined with last-run status) ----
+    # ---- Feed management rows ----
+    # Configuration, last-run status, and telemetry are one table: a feed's
+    # settings and its actual value are the same question, and splitting them
+    # into two sections pushed the management surface off the page.
+    telemetry = feed_telemetry(core.db)
+    tele_by_name = {r["name"]: r for r in telemetry["rows"]}
     feed_rows = []
     for fsrc in feed_sources:
         st = feed_stats.get(fsrc.name)
@@ -99,11 +104,20 @@ def dashboard(request: Request, _=Depends(require_auth)):
             # API-key UI: only whether a key exists — never the value.
             "auth_env": fsrc.auth_env,
             "key_configured": bool(fsrc.auth_env and os.environ.get(fsrc.auth_env)),
+            # Telemetry, merged in so each row answers "is this feed worth it?"
+            "tele": tele_by_name.get(fsrc.name),
         })
+    # Feeds that contribute nothing unique sink to the bottom; the ones you
+    # would actually miss sort to the top.
+    feed_rows.sort(key=lambda r: (
+        -(r["tele"]["exclusive"] if r["tele"] else 0),
+        -(r["indicators"] or 0),
+        r["name"],
+    ))
 
     return core.templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
-        "telemetry": feed_telemetry(core.db),
+        "telemetry": telemetry,
         "feed_base": feed_base,
         "counts": counts,
         "whitelist_count": len(whitelist),

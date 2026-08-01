@@ -378,16 +378,20 @@ def test_sync_respects_deletion_tombstones(db):
 
 # ------------------------------------------------------- feed telemetry ----
 
+ECHO_SIZE = 30  # comfortably over telemetry.MIN_REDUNDANT_SIZE
+
+
 def _telemetry_db(db):
-    """Three feeds: 'solo' reports uniquely, 'echo_a'/'echo_b' report the same
-    two IPs as each other (the aggregator-of-aggregators case)."""
+    """Three feeds: 'solo' reports uniquely, 'echo_a'/'echo_b' report exactly
+    the same IPs as each other (the aggregator-of-aggregators case)."""
     for name in ("solo", "echo_a", "echo_b"):
         db.add_feed(FeedSource(name=name, url=f"http://{name}/x.txt",
                                feed_type=FeedType.THREAT_INTEL, weight=1.0))
     db.add_indicator("203.0.113.1", "solo", {})
     db.add_indicator("203.0.113.2", "solo", {})
     db.add_indicator("203.0.113.3", "solo", {})
-    for ip in ("198.51.100.1", "198.51.100.2"):
+    for i in range(ECHO_SIZE):
+        ip = f"198.51.100.{i}"
         db.add_indicator(ip, "echo_a", {})
         db.add_indicator(ip, "echo_b", {})
     return db
@@ -406,12 +410,51 @@ def test_overlap_detects_redundant_feed_pairs(db):
     _telemetry_db(db)
     t = feed_telemetry(db)
     pairs = {(p["a"], p["b"]): p["n"] for p in t["overlap"]}
-    assert pairs.get(("echo_a", "echo_b")) == 2
+    assert pairs.get(("echo_a", "echo_b")) == ECHO_SIZE
     # solo shares nothing, so it must not appear in any pair.
     assert not any("solo" in (p["a"], p["b"]) for p in t["overlap"])
     # ...and the redundancy callout flags the echo pair at 100%.
     assert [(p["a"], p["b"], p["pct"]) for p in t["redundant_pairs"]] == \
         [("echo_a", "echo_b", 100)]
+
+
+def test_twin_is_recorded_on_the_smaller_feed(db):
+    """Containment is directional: if a small feed sits inside a big one, the
+    small feed is the redundant one — the chip belongs on it, not on the big
+    feed that still carries plenty of its own."""
+    from threatfeedme.telemetry import feed_telemetry, MIN_REDUNDANT_SIZE
+    for name in ("big", "small"):
+        db.add_feed(FeedSource(name=name, url=f"http://{name}/x.txt",
+                               feed_type=FeedType.THREAT_INTEL, weight=1.0))
+    shared = [f"203.0.113.{i}" for i in range(MIN_REDUNDANT_SIZE + 5)]
+    for ip in shared:
+        db.add_indicator(ip, "big", {})
+        db.add_indicator(ip, "small", {})
+    for i in range(200):  # 'big' has plenty the small feed lacks
+        db.add_indicator(f"198.51.{i // 256}.{i % 256}", "big", {})
+
+    rows = {r["name"]: r for r in feed_telemetry(db)["rows"]}
+    assert rows["small"]["twin"]["name"] == "big"
+    assert rows["small"]["twin"]["pct"] == 100
+    assert rows["big"]["twin"] is None
+
+
+def test_tiny_feeds_are_not_flagged_redundant(db):
+    """A feed with a handful of indicators is trivially 'contained' in a big
+    one; flagging it would bury the real redundancies (abuse.ch Feodo's
+    recommended list is routinely a single IP)."""
+    from threatfeedme.telemetry import feed_telemetry
+    for name in ("big", "tiny"):
+        db.add_feed(FeedSource(name=name, url=f"http://{name}/x.txt",
+                               feed_type=FeedType.THREAT_INTEL, weight=1.0))
+    db.add_indicator("203.0.113.9", "big", {})
+    db.add_indicator("203.0.113.9", "tiny", {})   # 100% of tiny, but tiny is 1
+    for i in range(100):
+        db.add_indicator(f"198.51.{i // 256}.{i % 256}", "big", {})
+
+    t = feed_telemetry(db)
+    assert t["redundant_pairs"] == []
+    assert {r["name"]: r["twin"] for r in t["rows"]}["tiny"] is None
 
 
 def test_first_report_window_excludes_older_indicators(db):
