@@ -384,6 +384,22 @@ class Database:
                 })
             return {"total": total, "rows": rows}
 
+
+    def country_counts(self) -> list:
+        """Bucket all stored indicator IPs by country using the compact
+        geo table. Returns [(iso2, count), ...] sorted by count desc.
+
+        Read-only aggregation — never hits a network and stores nothing.
+        """
+        try:
+            buckets = CountryBuckets.load()
+        except Exception:
+            return []
+        with self._cursor() as cur:
+            cur.execute("SELECT ip FROM indicators")
+            rows = cur.fetchall()
+        from .geo.buckets import bucket_ip_strings
+        return bucket_ip_strings((r["ip"] for r in rows), buckets)
     def set_indicator_score(self, ip: str, score: float, tier: str) -> None:
         """Persist a single indicator's recalculated score/tier."""
         with self._cursor() as cur:

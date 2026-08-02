@@ -31,7 +31,21 @@ _REASON_BADGES = {
 }
 
 
+def _geo_counts(db):
+    """Compute country buckets for the dashboard geo heatmap. Returns
+    [(iso2, count), ...] or [] if the compact geo table is not built yet.
+    """
+    try:
+        raw = db.country_counts()
+    except Exception:
+        return []
+    # Precompute country names so the template needs no geo_name helper.
+    from threatfeedme.geo.countries import code_name
+    return [(code_name(iso), n) for iso, n in raw]
+
 @router.get("/", response_class=HTMLResponse)
+
+
 def dashboard(request: Request, _=Depends(require_auth)):
     """Main dashboard page.
 
@@ -135,6 +149,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "retention_days": retention_max_age_days(core.db, core.config),
         "feed_names": [fsrc.name for fsrc in feed_sources],
         "all_feeds": ALL_FEEDS,
+        "geo_counts": _geo_counts(core.db),
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
     })
 
