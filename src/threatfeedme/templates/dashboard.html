@@ -140,6 +140,24 @@
     </table>
     </div>
 
+    <form class="wl-form" onsubmit="return addFeed(event)" style="margin-top:12px">
+        <input class="ip" id="f-name" type="text" placeholder="feed name" required>
+        <input class="reason" id="f-url" type="url" placeholder="https://example.com/blocklist.txt" required>
+        <select id="f-type" title="Type">
+            {% for t in feed_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+        </select>
+        <input id="f-weight" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px" title="Reputation weight 0-1 (1.0 = default; false-positive flags lower it automatically)">
+        <button type="submit">Add URL feed</button>
+    </form>
+    <form class="wl-form" onsubmit="return uploadFeed(event)" style="margin-top:8px">
+        <input class="ip" id="u-name" type="text" placeholder="custom list name" required>
+        <input id="u-file" type="file" accept=".txt,.csv,text/plain" required
+               class="reason" style="padding:6px">
+        <input id="u-weight" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px" title="Reputation weight 0-1 (1.0 = default; false-positive flags lower it automatically)">
+        <button type="submit">⬆ Upload list</button>
+    </form>
+    <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one IP or CIDR.</p>
+
     <details class="howto">
         <summary><b>Overlap map</b> — which feeds report the same indicators</summary>
         {% if telemetry.has_overlap %}
@@ -165,24 +183,6 @@
         <p class="muted">No feeds report overlapping indicators yet, so there is nothing to compare.</p>
         {% endif %}
     </details>
-
-    <form class="wl-form" onsubmit="return addFeed(event)" style="margin-top:12px">
-        <input class="ip" id="f-name" type="text" placeholder="feed name" required>
-        <input class="reason" id="f-url" type="url" placeholder="https://example.com/blocklist.txt" required>
-        <select id="f-type" title="Type">
-            {% for t in feed_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
-        </select>
-        <input id="f-weight" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px" title="Reputation weight 0-1 (1.0 = default; false-positive flags lower it automatically)">
-        <button type="submit">Add URL feed</button>
-    </form>
-    <form class="wl-form" onsubmit="return uploadFeed(event)" style="margin-top:8px">
-        <input class="ip" id="u-name" type="text" placeholder="custom list name" required>
-        <input id="u-file" type="file" accept=".txt,.csv,text/plain" required
-               class="reason" style="padding:6px">
-        <input id="u-weight" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px" title="Reputation weight 0-1 (1.0 = default; false-positive flags lower it automatically)">
-        <button type="submit">⬆ Upload list</button>
-    </form>
-    <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one IP or CIDR.</p>
 {% endblock %}
 
 {% block modals %}
