@@ -10,6 +10,7 @@ import os
 from threatfeedme.models import (ThreatIndicator, WhitelistEntry, ConfidenceTier, FeedStats,
                     FeedSource, FeedType, ALL_FEEDS, REASON_FALSE_POSITIVE, REASON_OTHER,
                     WhitelistMatcher)
+from .geo.data import CountryBuckets
 
 
 def _utcnow_iso() -> str:
