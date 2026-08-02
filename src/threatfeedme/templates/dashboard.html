@@ -142,12 +142,12 @@
 
     <details class="howto">
         <summary><b>Overlap map</b> — which feeds report the same indicators</summary>
-        {% if telemetry.names|length > 1 %}
+        {% if telemetry.has_overlap %}
         <p class="hint" style="margin-top:8px">Each cell is the share of the <i>smaller</i> feed that
            both report. Dark cells are pairs that are effectively one list — their agreement inflates
-           confidence tiers without adding evidence.</p>
+           confidence tiers without adding evidence. Hover a cell to zoom it.</p>
         <div class="table-scroll">
-        <div class="heat" style="grid-template-columns: 132px repeat({{ telemetry.names|length }}, 18px)">
+        <div class="heat" style="grid-template-columns: 132px repeat({{ telemetry.names|length }}, 26px)">
             <div></div>
             {% for n in telemetry.names %}<div class="hl-col" title="{{ n }}">{{ n }}</div>{% endfor %}
             {% for r in telemetry.matrix %}
@@ -162,7 +162,7 @@
         </div>
         <div class="heat-legend"><span>0%</span><i class="ov-0"></i><i class="ov-1"></i><i class="ov-2"></i><i class="ov-3"></i><i class="ov-4"></i><i class="ov-5"></i><span>100% — same list</span></div>
         {% else %}
-        <p class="muted">Not enough feeds to compare yet.</p>
+        <p class="muted">No feeds report overlapping indicators yet, so there is nothing to compare.</p>
         {% endif %}
     </details>
 

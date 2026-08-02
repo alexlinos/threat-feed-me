@@ -418,6 +418,28 @@ def test_overlap_detects_redundant_feed_pairs(db):
         [("echo_a", "echo_b", 100)]
 
 
+def test_has_overlap_true_when_feeds_share_indicators(db):
+    """The overlap map should render only when some pair actually shares
+    indicators — a grid full of zeros is noise."""
+    from threatfeedme.telemetry import feed_telemetry
+    _telemetry_db(db)   # echo_a/echo_b share ECHO_SIZE IPs
+    assert feed_telemetry(db)["has_overlap"] is True
+
+
+def test_has_overlap_false_when_no_indicators_shared(db):
+    """Two feeds that report disjoint sets must not render the overlap map."""
+    from threatfeedme.telemetry import feed_telemetry
+    db.add_feed(FeedSource(name="a", url="http://a/x.txt",
+                           feed_type=FeedType.THREAT_INTEL, weight=1.0))
+    db.add_feed(FeedSource(name="b", url="http://b/x.txt",
+                           feed_type=FeedType.THREAT_INTEL, weight=1.0))
+    db.add_indicator("203.0.113.1", "a", {})
+    db.add_indicator("203.0.113.2", "a", {})
+    db.add_indicator("203.0.113.3", "b", {})
+    db.add_indicator("203.0.113.4", "b", {})
+    assert feed_telemetry(db)["has_overlap"] is False
+
+
 def test_twin_is_recorded_on_the_smaller_feed(db):
     """Containment is directional: if a small feed sits inside a big one, the
     small feed is the redundant one — the chip belongs on it, not on the big

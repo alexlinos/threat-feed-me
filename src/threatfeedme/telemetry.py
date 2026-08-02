@@ -163,6 +163,10 @@ def feed_telemetry(db: Database) -> Dict[str, Any]:
         "redundant_pairs": redundant,
         "matrix": matrix,
         "names": names,
+        # True only when at least one real pair reports any shared indicators.
+        # A grid full of zeros is noise — the overlap map earns its pixels only
+        # when some cells actually carry signal.
+        "has_overlap": any(c["pct"] for r in matrix for c in r["cells"] if c["pct"]),
         "first_report_window_days": FIRST_REPORT_WINDOW_DAYS,
         "new_window_hours": NEW_WINDOW_HOURS,
     }

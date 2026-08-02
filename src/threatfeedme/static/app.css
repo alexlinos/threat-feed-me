@@ -184,14 +184,18 @@ input::placeholder { color:var(--dim); }
 
 /* Overlap heatmap (collapsed by default) */
 .heat { display:grid; gap:2px; align-items:center; }
-.heat .hl-row { font-family:var(--mono); font-size:.72em; color:var(--muted);
+.heat .hl-row { font-family:var(--mono); font-size:.78em; color:var(--muted);
                 text-align:right; padding-right:6px; overflow:hidden;
                 text-overflow:ellipsis; white-space:nowrap; }
-.heat .hl-col { font-family:var(--mono); font-size:.68em; color:var(--muted);
+.heat .hl-col { font-family:var(--mono); font-size:.7em; color:var(--muted);
                 writing-mode:vertical-rl; transform:rotate(180deg);
                 height:86px; overflow:hidden; white-space:nowrap; }
-.heat .hc { width:18px; height:18px; border-radius:2px; background:rgba(255,255,255,.03);
+.heat .hc { width:26px; height:26px; border-radius:3px; background:rgba(255,255,255,.03);
             border:1px solid rgba(255,255,255,.04); }
+/* Hover zoom: magnify the cell under the cursor so small overlaps are readable.
+   The .table-scroll wrapper clips vertical overflow, so a scaled cell stays put. */
+.heat .hc:hover { transform:scale(1.9); transform-origin:center;
+                  z-index:2; position:relative; }
 /* Diagonal is structure, not data — keep it dimmer than any real value. */
 .heat .hc.diag { background:rgba(255,255,255,.06); border-color:transparent; }
 /* Alphas start high enough that a 1% overlap is still visible against the
