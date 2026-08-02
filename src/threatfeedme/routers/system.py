@@ -45,20 +45,27 @@ def dashboard(request: Request, _=Depends(require_auth)):
 
     # Per-feed counts, whitelist-scoped (including tier-scoped entries) so
     # each card's number matches what its URL actually serves.
+    #
+    # Load the indicator list ONCE and derive every tier count + the total
+    # from that single pass. The old code re-fetched the full table per tier
+    # (get_all_indicators_by_tier) and again for total_inds — each fetch runs
+    # a correlated GROUP_CONCAT subquery per row, so with tens of thousands
+    # of indicators the dashboard was spending seconds just to count.
     wl_map = core.db.get_whitelist_map()
+    all_inds = core.db.get_all_indicators()
     counts = {}
     for f in TIER_FEEDS:
         tier_key = f["key"]
         if tier_key == "all":
-            inds = core.db.get_all_indicators()
-            counts[tier_key] = sum(1 for i in inds if is_included(i, wl_map))
+            counts[tier_key] = sum(1 for i in all_inds if is_included(i, wl_map))
         else:
             tier_enum = ConfidenceTier(tier_key)
-            inds = core.db.get_all_indicators_by_tier(tier_enum)
-            counts[tier_key] = sum(1 for i in inds if is_included(i, wl_map, tier=tier_enum))
+            counts[tier_key] = sum(1 for i in all_inds
+                                   if i.tier == tier_enum
+                                   and is_included(i, wl_map, tier=tier_enum))
 
     # ---- Feed URL cards (the hero of the page) ----
-    total_inds = len(core.db.get_all_indicators())
+    total_inds = len(all_inds)
     feed_cards = [
         {
             "name": f["key"],
