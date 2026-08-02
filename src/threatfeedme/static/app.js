@@ -291,3 +291,43 @@ async function confirmWlModal() {
     if (r.ok && j.success !== false) { closeWlModal(); reloadPage(); }
     else { alert('Could not whitelist: ' + (j.message || j.detail || r.status)); }
 }
+
+// Blocked-IP country heatmap: lazy, on-demand. The dashboard route never
+// computes geo data — this fetches /api/geo/countries only the first time
+// the user expands the collapsed <details id=geo-heatmap>, then caches.
+let geoLoaded = false;
+function renderGeo(data) {
+    const wrap = document.querySelector('#geo-heatmap .geo-wrap');
+    if (!wrap) return;
+    const total = data.total || 0;
+    let html = '';
+    if (data.data && data.data.length) {
+        const rows = data.data.slice(0, 10);
+        html = '<div class="geo-bars">';
+        for (const [name, n] of rows) {
+            const pct = total ? (100 * n / total).toFixed(1) : '0.0';
+            html += '<div class="geo-bar-row"><span class="geo-bar-name">' + esc(name) +
+                    '</span><span class="geo-bar-val">' + n + ' (' + pct + '%)</span></div>';
+        }
+        html += '</div>';
+    } else {
+        html = '<p class="muted">Geo data not built yet. Run the generator with a GeoLite2 source to populate the compact country table.</p>';
+    }
+    wrap.innerHTML = html;
+}
+function loadGeoOnce() {
+    if (geoLoaded) return;
+    geoLoaded = true;
+    const wrap = document.querySelector('#geo-heatmap .geo-wrap');
+    if (wrap) wrap.innerHTML = '<p class="muted">Loading geo data…</p>';
+    apiFetch('/api/geo/countries').then(r => r.json()).then(renderGeo)
+        .catch(() => {
+            const wrap = document.querySelector('#geo-heatmap .geo-wrap');
+            if (wrap) wrap.innerHTML = '<p class="muted">Geo data unavailable.</p>';
+        });
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const box = document.getElementById('geo-heatmap');
+    if (!box) return;
+    box.addEventListener('toggle', () => { if (box.open) loadGeoOnce(); });
+});

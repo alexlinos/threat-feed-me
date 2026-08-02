@@ -187,18 +187,7 @@
     <details class=howto id=geo-heatmap>
         <summary><b>Blocked IP country heatmap</b> — where blocked addresses live</summary>
         <div class=geo-wrap>
-            {% if geo_counts %}
-            <div class=geo-bars>
-                {% for name, n in geo_counts[:10] %}
-                <div class=geo-bar-row>
-                    <span class=geo-bar-name>{{ name }}</span>
-                    <span class=geo-bar-val>{{ n }}</span>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <p class=muted>Geo data not built yet. Run the generator with a GeoLite2 source to populate the compact country table.</p>
-            {% endif %}
+            <p class=muted>Geo data loads when you open this section.</p>
         </div>
     </details>
 {% endblock %}

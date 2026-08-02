@@ -31,17 +31,26 @@ _REASON_BADGES = {
 }
 
 
+_geo_cache = {"data": None, "total": None}
+
+
 def _geo_counts(db):
-    """Compute country buckets for the dashboard geo heatmap. Returns
-    [(iso2, count), ...] or [] if the compact geo table is not built yet.
-    """
+    """Country buckets for the dashboard geo heatmap, computed lazily and
+    cached. Returns [(name, count), ...] or [] if the compact geo table is
+    not built yet. Never runs on dashboard load — only on demand (see the
+    /api/geo/countries endpoint the heatmap <details> opens)."""
+    if _geo_cache["data"] is not None:
+        return _geo_cache["data"]
     try:
         raw = db.country_counts()
     except Exception:
         return []
     # Precompute country names so the template needs no geo_name helper.
     from threatfeedme.geo.countries import code_name
-    return [(code_name(iso), n) for iso, n in raw]
+    data = [(code_name(iso), n) for iso, n in raw]
+    _geo_cache["data"] = data
+    _geo_cache["total"] = sum(n for _, n in data)
+    return data
 
 @router.get("/", response_class=HTMLResponse)
 
@@ -149,7 +158,6 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "retention_days": retention_max_age_days(core.db, core.config),
         "feed_names": [fsrc.name for fsrc in feed_sources],
         "all_feeds": ALL_FEEDS,
-        "geo_counts": _geo_counts(core.db),
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
     })
 
@@ -196,6 +204,14 @@ def get_stats(_=Depends(require_auth)):
 def get_telemetry(_=Depends(require_auth)):
     """Per-feed contribution, freshness, health, and pairwise overlap."""
     return feed_telemetry(core.db)
+
+
+@router.get("/api/geo/countries")
+def geo_countries(_=Depends(require_auth)):
+    """Blocked-IP country breakdown. Computed lazily and cached — the
+    dashboard heatmap <details> fetches this only when a user opens it, so
+    normal dashboard loads never pay the geo cost."""
+    return {"data": _geo_counts(core.db), "total": _geo_cache["total"] or 0}
 
 
 # ---------------------- Settings ----------------------
