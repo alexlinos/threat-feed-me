@@ -269,3 +269,12 @@ precedence over the file, so it survives restarts without editing config.
 ## License
 
 MIT
+
+## Geo attribution
+
+The dashboard's blocked-IP country heatmap uses the free
+[DB-IP](https://db-ip.com) IP-to-Country Lite database, distributed under the
+Creative Commons Attribution license (CC-BY). Country lookups are bucketed to
+/16 granularity and shipped as a compact offline table
+(`src/threatfeedme/geo/country-buckets.geo1`); no external geo service is
+called at runtime. Attribution: **country data © DB-IP (db-ip.com), CC-BY.**
