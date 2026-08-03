@@ -338,10 +338,10 @@ function renderGeo(data, world) {
                   (total ? ' (' + (100 * n / total).toFixed(1) + '%)' : '')
                 : name + ' — none';
             shapes.push('<path d="' + world.paths[iso] + '" fill="' + fill +
-                '" stroke="rgba(255,255,255,.10)" stroke-width="0.4"><title>' +
+                '" fill-rule="evenodd" stroke="rgba(255,255,255,.10)" stroke-width="0.4"><title>' +
                 esc(label) + '</title></path>');
         }
-        svg = '<svg class="geo-map" viewBox="0 0 1000 500" role="img" ' +
+        svg = '<svg class="geo-map" viewBox="0 0 1000 500" width="100%" height="500" role="img" ' +
               'aria-label="Blocked indicators by country">' + shapes.join('') + '</svg>';
     }
 
