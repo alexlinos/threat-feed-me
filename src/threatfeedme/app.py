@@ -4,6 +4,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # Importing `core` triggers lazy init on first attribute access — no work is
@@ -27,6 +28,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Threat Feed Me! Dashboard", lifespan=lifespan)
+
+# Compress anything sizeable: the world-map paths, the dashboard HTML, and the
+# plain-text feeds a firewall polls (a 50k-line block list is mostly digits and
+# compresses ~4x). Below 1 KB the header overhead is not worth it.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Static assets (extracted dashboard CSS/JS). Anchored to this module's
 # directory so it works regardless of the process CWD (tests use a temp CWD).

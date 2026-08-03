@@ -31,7 +31,10 @@ _REASON_BADGES = {
 }
 
 
-_geo_cache = {"data": None, "total": None}
+# Keyed by indicator count so a refresh that changes the corpus invalidates
+# the cache; otherwise the map would show first-computed numbers until the
+# process restarted.
+_geo_cache = {"data": None, "total": None, "key": None}
 
 
 def _geo_counts(db):
@@ -39,17 +42,23 @@ def _geo_counts(db):
     cached. Returns [(name, count), ...] or [] if the compact geo table is
     not built yet. Never runs on dashboard load — only on demand (see the
     /api/geo/countries endpoint the heatmap <details> opens)."""
-    if _geo_cache["data"] is not None:
+    try:
+        key = db.get_stats_summary().get("total", 0)
+    except Exception:
+        key = None
+    if _geo_cache["data"] is not None and _geo_cache["key"] == key:
         return _geo_cache["data"]
     try:
         raw = db.country_counts()
     except Exception:
         return []
-    # Precompute country names so the template needs no geo_name helper.
+    _geo_cache["key"] = key
+    # ISO code alongside the name: the choropleth keys country shapes by code,
+    # the ranked list shows the name.
     from threatfeedme.geo.countries import code_name
-    data = [(code_name(iso), n) for iso, n in raw]
+    data = [(iso, code_name(iso), n) for iso, n in raw]
     _geo_cache["data"] = data
-    _geo_cache["total"] = sum(n for _, n in data)
+    _geo_cache["total"] = sum(row[2] for row in data)
     return data
 
 @router.get("/", response_class=HTMLResponse)

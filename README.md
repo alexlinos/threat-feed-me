@@ -278,3 +278,16 @@ Creative Commons Attribution license (CC-BY). Country lookups are bucketed to
 /16 granularity and shipped as a compact offline table
 (`src/threatfeedme/geo/country-buckets.geo1`); no external geo service is
 called at runtime. Attribution: **country data © DB-IP (db-ip.com), CC-BY.**
+
+Country borders for the choropleth come from
+[Natural Earth](https://www.naturalearthdata.com/) (1:110m Admin 0), which is
+in the **public domain**. They are simplified at build time into
+`src/threatfeedme/static/world-paths.json` (~65 KB, ~25 KB gzipped) and
+fetched by the browser only when the heatmap panel is expanded.
+
+Regenerate either artifact with:
+
+```bash
+python -m threatfeedme.geo.generate --dbip dbip-country-lite.csv
+python -m threatfeedme.geo.generate_map ne_110m_admin_0_countries.geojson
+```

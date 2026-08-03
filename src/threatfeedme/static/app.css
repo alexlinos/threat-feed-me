@@ -212,6 +212,20 @@ input::placeholder { color:var(--dim); }
 .heat-legend { display:flex; align-items:center; gap:4px; margin-top:10px;
                font-family:var(--mono); font-size:.72em; color:var(--muted); }
 .heat-legend i { width:16px; height:12px; border-radius:2px; display:inline-block; }
+
+/* --- Blocked-indicator world map (lazy-loaded on expand) --- */
+.geo-map { width:100%; height:auto; display:block; margin:10px 0 14px;
+           background:rgba(255,255,255,.015); border-radius:var(--radius); }
+.geo-map path { transition:fill .15s; }
+.geo-map path:hover { fill:var(--accent-hi) !important; }
+.geo-bars { display:flex; flex-direction:column; gap:5px; }
+.geo-bar-row { display:grid; grid-template-columns:132px 1fr 118px; gap:10px;
+               align-items:center; font-size:.86em; }
+.geo-bar-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.geo-bar-track { height:7px; border-radius:3px; background:rgba(255,255,255,.06); overflow:hidden; }
+.geo-bar-track i { display:block; height:100%; border-radius:3px; background:var(--amber); }
+.geo-bar-val { text-align:right; font-family:var(--mono); font-size:.9em; color:var(--muted); }
+.geo-credit { font-size:.75em; margin-top:8px; }
 .health-good { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
 .health-warn { background:rgba(251,191,36,.1); color:var(--amber); border-color:rgba(251,191,36,.3); }
 .health-bad  { background:rgba(248,113,113,.1); color:var(--red); border-color:rgba(248,113,113,.3); }

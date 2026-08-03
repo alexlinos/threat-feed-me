@@ -1,19 +1,15 @@
-"""Geo heatmap package: compact /16 -> country table + SVG choropleth.
+"""Geo package: offline /16 -> country lookup for the dashboard heatmap.
 
 Modules:
-  data.py     packed /16 -> country lookup (fully offline at runtime)
-  buckets.py  server-side country bucketing of indicator IPs
-  render.py   static SVG world choropleth
-  generate.py build-time generator (collapses GeoLite2 into the compact table)
+  data.py      packed /16 -> country table (fully offline at runtime)
+  buckets.py   country bucketing of indicator IPs
+  generate.py  build-time generator for the compact table
   countries.py ISO-3166 codes + names
+
+The heatmap is rendered client-side from /api/geo/countries; there is no
+server-side SVG rendering here.
 """
 from .data import CountryBuckets
 from .buckets import country_totals
-from .render import render_choropleth, render_country_bars
 
-__all__ = [
-    "CountryBuckets",
-    "country_totals",
-    "render_choropleth",
-    "render_country_bars",
-]
+__all__ = ["CountryBuckets", "country_totals"]

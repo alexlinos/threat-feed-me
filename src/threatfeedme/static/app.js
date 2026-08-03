@@ -2,7 +2,10 @@
 // X-Requested-With: XMLHttpRequest so the server can distinguish same-origin
 // dashboard JS from a cross-site form/script (browsers do not auto-set this
 // header cross-origin).
-function apiFetch(url, opts) {
+// opts defaults: a GET caller has no options to pass, and omitting the
+// argument used to throw synchronously here — before any promise existed, so
+// the caller's .catch() never ran and the UI hung on its loading state.
+function apiFetch(url, opts = {}) {
     const h = opts.headers || {};
     opts.headers = Object.assign(h, {'X-Requested-With': 'XMLHttpRequest'});
     return fetch(url, opts);
@@ -296,34 +299,84 @@ async function confirmWlModal() {
 // computes geo data — this fetches /api/geo/countries only the first time
 // the user expands the collapsed <details id=geo-heatmap>, then caches.
 let geoLoaded = false;
-function renderGeo(data) {
+
+// Counts are extremely skewed — the top country is routinely 25%+ of all
+// indicators while the tail is fractions of a percent. Linear hides the tail
+// entirely; log flattens so hard that a 1,000-IP country looks as hot as a
+// 20,000-IP one. Square root of the share keeps the leader clearly dominant
+// while the middle of the pack stays distinguishable.
+function geoShade(n, max) {
+    if (!n) return null;
+    const t = Math.sqrt(n / max);
+    const hue = 45 - 40 * t;            // amber -> red, matching the overlap map
+    return 'hsl(' + hue.toFixed(0) + ' 88% 55% / ' + (0.14 + 0.82 * t).toFixed(2) + ')';
+}
+
+function renderGeo(data, world) {
     const wrap = document.querySelector('#geo-heatmap .geo-wrap');
     if (!wrap) return;
-    const total = data.total || 0;
-    let html = '';
-    if (data.data && data.data.length) {
-        const rows = data.data.slice(0, 10);
-        html = '<div class="geo-bars">';
-        for (const [name, n] of rows) {
-            const pct = total ? (100 * n / total).toFixed(1) : '0.0';
-            html += '<div class="geo-bar-row"><span class="geo-bar-name">' + esc(name) +
-                    '</span><span class="geo-bar-val">' + n + ' (' + pct + '%)</span></div>';
-        }
-        html += '</div>';
-    } else {
-        html = '<p class="muted">Geo data not built yet. Run the generator with a GeoLite2 source to populate the compact country table.</p>';
+    const rows = data.data || [];
+    if (!rows.length) {
+        wrap.innerHTML = '<p class="muted">Geo data not built yet. Run the generator with a DB-IP country CSV to populate the offline table.</p>';
+        return;
     }
-    wrap.innerHTML = html;
+    const total = data.total || 0;
+    const byIso = {};
+    let max = 0;
+    for (const [iso, , n] of rows) { byIso[iso] = n; if (n > max) max = n; }
+
+    let svg = '';
+    if (world && world.paths) {
+        const names = world.names || {};
+        const shapes = [];
+        for (const iso in world.paths) {
+            const n = byIso[iso] || 0;
+            const fill = geoShade(n, max) || 'rgba(255,255,255,.05)';
+            const name = names[iso] || iso;
+            const label = n
+                ? name + ' — ' + n.toLocaleString() +
+                  (total ? ' (' + (100 * n / total).toFixed(1) + '%)' : '')
+                : name + ' — none';
+            shapes.push('<path d="' + world.paths[iso] + '" fill="' + fill +
+                '" stroke="rgba(255,255,255,.10)" stroke-width="0.4"><title>' +
+                esc(label) + '</title></path>');
+        }
+        svg = '<svg class="geo-map" viewBox="0 0 1000 500" role="img" ' +
+              'aria-label="Blocked indicators by country">' + shapes.join('') + '</svg>';
+    }
+
+    // Ranked list stays: the map shows spread, the list gives exact numbers
+    // (and covers countries too small to see, like Singapore or Hong Kong).
+    let bars = '<div class="geo-bars">';
+    for (const [, name, n] of rows.slice(0, 10)) {
+        const pct = total ? (100 * n / total).toFixed(1) : '0.0';
+        bars += '<div class="geo-bar-row"><span class="geo-bar-name">' + esc(name) +
+                '</span><span class="geo-bar-track"><i style="width:' +
+                (max ? (100 * n / max).toFixed(1) : 0) + '%"></i></span>' +
+                '<span class="geo-bar-val">' + n.toLocaleString() + ' (' + pct + '%)</span></div>';
+    }
+    bars += '</div>';
+    wrap.innerHTML = svg + bars;
 }
+
 function loadGeoOnce() {
     if (geoLoaded) return;
     geoLoaded = true;
     const wrap = document.querySelector('#geo-heatmap .geo-wrap');
     if (wrap) wrap.innerHTML = '<p class="muted">Loading geo data…</p>';
-    apiFetch('/api/geo/countries').then(r => r.json()).then(renderGeo)
+    // Country shapes are a static 64 KB file fetched only on first expand, so
+    // a dashboard load that never opens this panel pays nothing for the map.
+    // A failed map fetch still renders the ranked list.
+    Promise.all([
+        apiFetch('/api/geo/countries').then(r => r.json()),
+        fetch('/static/world-paths.json').then(r => r.json()).catch(() => null),
+    ]).then(([data, world]) => renderGeo(data, world))
         .catch(() => {
-            const wrap = document.querySelector('#geo-heatmap .geo-wrap');
-            if (wrap) wrap.innerHTML = '<p class="muted">Geo data unavailable.</p>';
+            // Allow a retry on the next expand rather than stranding the
+            // panel on a permanent error.
+            geoLoaded = false;
+            const w = document.querySelector('#geo-heatmap .geo-wrap');
+            if (w) w.innerHTML = '<p class="muted">Geo data unavailable — reopen to retry.</p>';
         });
 }
 document.addEventListener('DOMContentLoaded', () => {

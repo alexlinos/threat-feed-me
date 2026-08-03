@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "threat-feed-me"
-version = "1.4.4"
+version = "1.5.0"
 description = "Threat Feed Me! — a threat feed aggregator with a firewall-facing dashboard."
 readme = "README.md"
 license = { text = "MIT" }
@@ -29,4 +29,6 @@ dependencies = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-threatfeedme = ["templates/*", "static/*"]
+# geo/*.geo1 is the offline country table. Without it here a non-editable
+# install (pip install . / wheel) silently ships without geo data.
+threatfeedme = ["templates/*", "static/*", "geo/*.geo1"]

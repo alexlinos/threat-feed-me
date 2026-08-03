@@ -57,7 +57,7 @@ class CountryBuckets:
         if not path.exists():
             raise FileNotFoundError(
                 f"compact geo table missing: {path}. Run "
-                "`python -m threatfeedme.geo.generate` with a GeoLite2 source "
+                "`python -m threatfeedme.geo.generate --dbip <dbip-country-lite.csv>` "
                 "to build it."
             )
         return cls(path.read_bytes())

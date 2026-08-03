@@ -1763,3 +1763,135 @@ def test_talos_scrape_returns_raw_body(monkeypatch, db):
         scraper="talos_snort",
     )
     assert _scrape_talos(FeedIngestor(db), feed) == "1.2.3.4"
+
+
+# ------------------------------------------------------------------- geo ----
+# The packed /16 -> country table is the one place a silent wrong answer is
+# plausible: a bad offset mislabels countries with no error anywhere.
+
+def _build_geo_table(mapping, tmp_path):
+    """Write a real .geo1 file mapping {/16 index: iso} using the shipped
+    generator, so these tests exercise the actual format both ways."""
+    from threatfeedme.geo.generate import generate
+    from threatfeedme.geo.countries import known_codes
+    out = tmp_path / "t.geo1"
+    generate(mapping, set(known_codes()), out=out)
+    return out
+
+
+def test_geo_table_roundtrip_maps_ips_to_countries(tmp_path):
+    from threatfeedme.geo.data import CountryBuckets
+    # 8.8.0.0/16 -> US, 5.45.0.0/16 -> RU
+    path = _build_geo_table({(8 << 8) | 8: "US", (5 << 8) | 45: "RU"}, tmp_path)
+    b = CountryBuckets.load(path)
+    assert b.country_for_ip_str("8.8.8.8") == "US"
+    assert b.country_for_ip_str("8.8.255.254") == "US"   # same /16
+    assert b.country_for_ip_str("5.45.1.2") == "RU"
+    assert b.country_for_ip_str("9.9.9.9") == "ZZ"       # unmapped
+    assert b.country_for_ip_str("not-an-ip") == "ZZ"
+
+
+def test_geo_table_rejects_corrupt_files(tmp_path):
+    """A truncated or foreign file must raise, not silently serve garbage."""
+    from threatfeedme.geo.data import CountryBuckets
+    good = _build_geo_table({0: "US"}, tmp_path).read_bytes()
+
+    with pytest.raises(ValueError):
+        CountryBuckets(b"tiny")
+    with pytest.raises(ValueError):                       # bad magic
+        CountryBuckets(b"XXXX" + good[4:])
+    with pytest.raises(ValueError):                       # unsupported version
+        CountryBuckets(good[:4] + b"\x63\x00" + good[6:])
+    with pytest.raises(ValueError):                       # truncated buckets
+        CountryBuckets(good[:-64])
+    missing = tmp_path / "nope.geo1"
+    with pytest.raises(FileNotFoundError):
+        CountryBuckets.load(missing)
+
+
+def test_country_counts_buckets_indicators(db, tmp_path, monkeypatch):
+    """country_counts() groups stored indicators by country and is read-only."""
+    from threatfeedme.geo import data as geo_data
+    path = _build_geo_table({(8 << 8) | 8: "US", (5 << 8) | 45: "RU"}, tmp_path)
+    monkeypatch.setattr(geo_data, "_DEFAULT", path)
+
+    for ip in ("8.8.8.8", "8.8.4.4", "5.45.1.1"):
+        db.add_indicator(ip, "cins_army", {})
+    db.add_indicator("9.9.9.9", "cins_army", {})   # unmapped -> ZZ
+
+    counts = dict(db.country_counts())
+    assert counts["US"] == 2 and counts["RU"] == 1 and counts["ZZ"] == 1
+    assert len(db.get_all_indicators()) == 4       # aggregation stored nothing
+
+
+def test_country_counts_empty_when_table_missing(db, tmp_path, monkeypatch):
+    """No geo table is a degraded feature, not a 500 on the dashboard."""
+    from threatfeedme.geo import data as geo_data
+    monkeypatch.setattr(geo_data, "_DEFAULT", tmp_path / "absent.geo1")
+    db.add_indicator("8.8.8.8", "cins_army", {})
+    assert db.country_counts() == []
+
+
+def test_dbip_parser_awards_each_16_to_its_dominant_country(tmp_path):
+    """DB-IP ranges can straddle /16s; the /16 goes to whoever covers most of
+    it. This is the CC-BY source path the shipped table is built from."""
+    from threatfeedme.geo.generate import _parse_dbip
+    csv = tmp_path / "dbip.csv"
+    csv.write_text(
+        "1.1.0.0,1.1.0.99,GB\n"       # 100 addresses of 1.1.0.0/16
+        "1.1.0.100,1.1.255.255,TH\n"  # the rest of it -> TH should win
+        "2.2.0.0,2.2.255.255,DE\n"
+        "2001:db8::,2001:db8::ffff,FR\n",  # IPv6 row must be skipped
+        encoding="utf-8")
+    table = _parse_dbip(str(csv))
+    assert table[(1 << 8) | 1] == "TH"
+    assert table[(2 << 8) | 2] == "DE"
+
+
+def test_world_map_paths_ship_and_are_wellformed():
+    """The dashboard choropleth needs the generated path file; a missing or
+    malformed one silently degrades the map to a bar list."""
+    import json
+    from pathlib import Path
+    import threatfeedme
+    p = Path(threatfeedme.__file__).parent / "static" / "world-paths.json"
+    assert p.exists(), "world-paths.json not generated"
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    paths, names = doc["paths"], doc["names"]
+    assert len(paths) > 150                       # ~174 countries at 110m
+    for iso in ("US", "CN", "RU", "BR", "DE"):
+        assert iso in paths and paths[iso].startswith("M") and paths[iso].endswith("Z")
+        assert names[iso]
+    # Keep the payload small: it is fetched by the browser on panel expand.
+    assert p.stat().st_size < 150 * 1024, "map data has grown too heavy"
+
+
+def test_map_generator_projects_and_simplifies(tmp_path):
+    from threatfeedme.geo.generate_map import build, WIDTH, HEIGHT
+    import json
+    # A square around the prime meridian/equator plus a speck that must be
+    # dropped for being smaller than MIN_AREA.
+    geo = {"features": [
+        {"properties": {"ISO_A2": "AA", "NAME": "Alphaland"},
+         "geometry": {"type": "Polygon", "coordinates": [[
+             [-10, 10], [10, 10], [10, -10], [-10, -10], [-10, 10]]]}},
+        {"properties": {"ISO_A2": "-99", "NAME": "Disputed"},
+         "geometry": {"type": "Polygon", "coordinates": [[
+             [0, 0], [1, 0], [1, 1], [0, 0]]]}},
+        {"properties": {"ISO_A2": "BB", "NAME": "Speck"},
+         "geometry": {"type": "Polygon", "coordinates": [[
+             [0, 0], [0.01, 0], [0.01, 0.01], [0, 0]]]}},
+    ]}
+    src = tmp_path / "w.geojson"
+    src.write_text(json.dumps(geo), encoding="utf-8")
+    out = tmp_path / "w.json"
+    build(str(src), out=out)
+    doc = json.loads(out.read_text(encoding="utf-8"))
+
+    assert "AA" in doc["paths"] and doc["names"]["AA"] == "Alphaland"
+    assert "BB" not in doc["paths"]        # speck dropped
+    assert not any(k.startswith("-") for k in doc["paths"])  # no ISO -99 entity
+    # Longitude 0 must land at the horizontal centre of the viewBox.
+    xs = [float(t.split()[0]) for t in doc["paths"]["AA"].lstrip("M").rstrip("Z").split("L")]
+    assert min(xs) < WIDTH / 2 < max(xs)
+    assert all(0 <= x <= WIDTH for x in xs)
