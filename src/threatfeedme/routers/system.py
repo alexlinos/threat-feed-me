@@ -43,7 +43,7 @@ def _geo_counts(db):
     not built yet. Never runs on dashboard load — only on demand (see the
     /api/geo/countries endpoint the heatmap <details> opens)."""
     try:
-        key = db.get_stats_summary().get("total", 0)
+        key = db.geo_cache_key()
     except Exception:
         key = None
     if _geo_cache["data"] is not None and _geo_cache["key"] == key:

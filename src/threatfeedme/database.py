@@ -401,6 +401,19 @@ class Database:
             rows = cur.fetchall()
         from .geo.buckets import bucket_ip_strings
         return bucket_ip_strings((r["ip"] for r in rows), buckets)
+
+    def geo_cache_key(self) -> tuple:
+        """O(1) fingerprint of the indicator corpus for the geo cache.
+
+        Returns (total, max_last_seen). Every auto-refresh touches indicators
+        via refresh_last_seen(), so max_last_seen changes whenever the corpus
+        is rewritten — including a rotation that keeps the total the same,
+        which a bare count would miss. Both are single aggregate rows, cheap
+        enough to run on every geo request."""
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*), COALESCE(MAX(last_seen), 0) FROM indicators")
+            total, max_last = cur.fetchone()
+        return (total or 0, max_last or 0)
     def set_indicator_score(self, ip: str, score: float, tier: str) -> None:
         """Persist a single indicator's recalculated score/tier."""
         with self._cursor() as cur:

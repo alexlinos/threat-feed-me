@@ -115,6 +115,10 @@ def _ring_to_path(ring):
 
 
 def _feature_paths(geom):
+    """One path string per polygon, outer ring + holes concatenated under a
+    single `d`. With `fill-rule="evenodd"` on the rendered <path> (see app.js),
+    interior rings read as cutouts — e.g. South Africa's Lesotho enclave shows
+    as a hole, not a solid island. Tiny rings (below MIN_AREA) are dropped."""
     polys = []
     if geom["type"] == "Polygon":
         polys = [geom["coordinates"]]
@@ -122,10 +126,13 @@ def _feature_paths(geom):
         polys = geom["coordinates"]
     out = []
     for poly in polys:
+        rings = []
         for ring in poly:           # ring 0 is outer, rest are holes
             d, area = _ring_to_path(ring)
             if d and area >= MIN_AREA:
-                out.append(d)
+                rings.append(d)
+        if rings:
+            out.append("".join(rings))
     return out
 
 
