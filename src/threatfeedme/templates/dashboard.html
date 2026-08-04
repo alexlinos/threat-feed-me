@@ -63,7 +63,7 @@
        reports; <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and the
        status badge catch a feed that has quietly gone stale.</p>
     <div class="toolbar">
-        <button class="btn" id="refresh-all-btn" onclick="refreshAll()">↻ Refresh all now</button>
+        <button class="btn" id="refresh-all-btn" onclick="refreshAll(this)">↻ Refresh all now</button>
         <button class="mini-btn" onclick="restoreDefaults()">Restore default feeds</button>
         <span id="refresh-status"></span>
         <span class="grow"></span>
@@ -99,7 +99,7 @@
                     <div class="muted">{{ row.feed_type }} · {{ row.source_kind }} · w={{ row.weight }}</div>
                 </td>
                 <td><label class="switch"><input type="checkbox" {% if row.enabled %}checked{% endif %}
-                    onchange='toggleFeed({{ row.name|tojson }}, this.checked)'><span></span></label></td>
+                    onchange='toggleFeed(this, {{ row.name|tojson }})'><span></span></label></td>
                 {# Currently-attributed count, not the last run's ingest count:
                    Unique/First/New all derive from this, so mixing the two
                    made a row contradict itself (first > indicators). #}
@@ -129,7 +129,7 @@
                     <button class="mini-btn" title="API key is read from ${{ row.auth_env }}; saved keys go to the server's data-volume .env"
                         onclick='setApiKey({{ row.name|tojson }}, {{ row.auth_env|tojson }})'>{% if row.key_configured %}Key ✓{% else %}Set key{% endif %}</button>
                     {% endif %}
-                    <button class="mini-btn" onclick='refreshFeed({{ row.name|tojson }})'>Refresh</button>
+                    <button class="mini-btn" onclick='refreshFeed({{ row.name|tojson }}, this)'>Refresh</button>
                     <button class="rm-btn" onclick='removeFeed({{ row.name|tojson }})'>Remove</button>
                 </td>
             </tr>

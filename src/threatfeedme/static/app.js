@@ -91,8 +91,24 @@ async function removeFeed(name) {
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(name), {method:'DELETE'});
     if (r.ok) { reloadPage(); } else { alert('Could not remove feed'); }
 }
-async function toggleFeed(name, enabled) {
-    await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/enabled?enabled=' + enabled, {method:'POST'});
+// Flip a feed on/off. Update the row's dimmed styling immediately so the
+// change is visible without waiting for a full page reload (the row used to
+// stay greyed until refresh). Revert the toggle if the server rejects it.
+async function toggleFeed(el, name) {
+    const enabled = el.checked;
+    const row = el.closest('tr');
+    if (row) row.classList.toggle('row-off', !enabled);
+    el.disabled = true;
+    try {
+        const r = await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/enabled?enabled=' + enabled, {method:'POST'});
+        if (!r.ok) throw new Error(r.status);
+    } catch (e) {
+        el.checked = !enabled;
+        if (row) row.classList.toggle('row-off', enabled);
+        alert('Could not ' + (enabled ? 'enable' : 'disable') + ' "' + name + '"');
+    } finally {
+        el.disabled = false;
+    }
 }
 async function setApiKey(name, envVar) {
     const key = prompt('API key for "' + name + '"\n\nSaved server-side to the data volume\'s .env as ' + envVar +
@@ -120,29 +136,49 @@ async function saveRetention() {
         body: JSON.stringify({retention_max_age_days: v})});
     alert(r.ok ? (v === 0 ? 'Retention set to keep IPs forever' : 'Retention set to ' + v + ' days') : 'Could not save');
 }
-function refreshAll() { startRefresh(null); }
-function refreshFeed(name) { startRefresh(name); }
-async function startRefresh(name) {
-    const btn = document.getElementById('refresh-all-btn');
+function refreshAll(btn) { startRefresh(null, btn); }
+function refreshFeed(name, btn) { startRefresh(name, btn); }
+
+// The button that kicked off the running refresh, plus its original label, so
+// pollRefresh can restore it when the run finishes (it may not be the toolbar
+// button — a per-feed "Refresh" row button initiates too).
+let refreshBtn = null, refreshBtnHtml = '';
+async function startRefresh(name, initiator) {
+    const globalBtn = document.getElementById('refresh-all-btn');
+    const btn = initiator || globalBtn;
     const status = document.getElementById('refresh-status');
+    // Flip the clicked button into an obvious animated "Refreshing…" state so
+    // it's clear something is happening even when scrolled down the page.
+    refreshBtn = btn;
+    refreshBtnHtml = btn.innerHTML;
+    btn.innerHTML = 'Refreshing<span class="loading-dots"><i></i><i></i><i></i></span>';
+    btn.classList.add('refreshing');
     btn.disabled = true;
+    if (globalBtn !== btn) globalBtn.disabled = true;  // block the toolbar button too
     const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
     const r = await apiFetch(url, {method:'POST'});
     if (r.status === 409) { status.textContent = 'A refresh is already running…'; }
     else { status.textContent = 'Refreshing' + (name ? ' ' + name : ' all feeds') + '… this can take a minute.'; }
     pollRefresh();
 }
+function endRefreshUi() {
+    const globalBtn = document.getElementById('refresh-all-btn');
+    if (globalBtn) globalBtn.disabled = false;
+    if (refreshBtn) {
+        refreshBtn.classList.remove('refreshing');
+        refreshBtn.disabled = false;
+        refreshBtn.innerHTML = refreshBtnHtml;
+        refreshBtn = null;
+    }
+}
 async function pollRefresh() {
     const status = document.getElementById('refresh-status');
-    const btn = document.getElementById('refresh-all-btn');
     const r = await fetch('/api/refresh/status');
     const j = await r.json();
-    if (j.running) { setTimeout(pollRefresh, 2000); }
-    else {
-        btn.disabled = false;
-        status.textContent = j.last_error ? ('Last refresh error: ' + j.last_error) : 'Refresh complete.';
-        if (!j.last_error) setTimeout(() => reloadPage(), 800);
-    }
+    if (j.running) { setTimeout(pollRefresh, 2000); return; }
+    endRefreshUi();
+    status.textContent = j.last_error ? ('Last refresh error: ' + j.last_error) : 'Refresh complete.';
+    if (!j.last_error) setTimeout(() => reloadPage(), 800);
 }
 async function restoreDefaults() {
     if (!confirm('Re-add the curated default feeds that are currently missing?')) return;
