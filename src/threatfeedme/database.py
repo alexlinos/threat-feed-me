@@ -403,13 +403,14 @@ class Database:
         return bucket_ip_strings((r["ip"] for r in rows), buckets)
 
     def geo_cache_key(self) -> tuple:
-        """O(1) fingerprint of the indicator corpus for the geo cache.
+        """Fingerprint of the indicator corpus for the geo cache.
 
         Returns (total, max_last_seen). Every auto-refresh touches indicators
-        via refresh_last_seen(), so max_last_seen changes whenever the corpus
-        is rewritten — including a rotation that keeps the total the same,
-        which a bare count would miss. Both are single aggregate rows, cheap
-        enough to run on every geo request."""
+        via touch_feed_indicators(), so max_last_seen changes whenever the
+        corpus is rewritten — including a rotation that keeps the total the
+        same, which a bare count would miss. Two aggregate rows over the whole
+        table; no index on last_seen, so COUNT and MAX are full scans, but
+        cheap enough to run on every geo request."""
         with self._cursor() as cur:
             cur.execute("SELECT COUNT(*), COALESCE(MAX(last_seen), 0) FROM indicators")
             total, max_last = cur.fetchone()

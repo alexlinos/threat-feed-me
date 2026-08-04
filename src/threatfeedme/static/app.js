@@ -341,7 +341,7 @@ function renderGeo(data, world) {
                 '" fill-rule="evenodd" stroke="rgba(255,255,255,.10)" stroke-width="0.4"><title>' +
                 esc(label) + '</title></path>');
         }
-        svg = '<svg class="geo-map" viewBox="0 0 1000 500" width="100%" height="500" role="img" ' +
+        svg = '<svg class="geo-map" viewBox="0 0 1000 500" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img" ' +
               'aria-label="Blocked indicators by country">' + shapes.join('') + '</svg>';
     }
 

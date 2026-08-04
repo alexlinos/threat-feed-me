@@ -52,13 +52,17 @@ def _geo_counts(db):
         raw = db.country_counts()
     except Exception:
         return []
-    _geo_cache["key"] = key
     # ISO code alongside the name: the choropleth keys country shapes by code,
     # the ranked list shows the name.
     from threatfeedme.geo.countries import code_name
     data = [(iso, code_name(iso), n) for iso, n in raw]
+    total = sum(row[2] for row in data)
+    # Set the cache key only AFTER data/total are fully computed, so a failure
+    # mid-build never advances the key while leaving stale data behind (which
+    # would permanently serve the old map under a new fingerprint).
     _geo_cache["data"] = data
-    _geo_cache["total"] = sum(row[2] for row in data)
+    _geo_cache["total"] = total
+    _geo_cache["key"] = key
     return data
 
 @router.get("/", response_class=HTMLResponse)

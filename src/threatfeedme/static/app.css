@@ -214,7 +214,7 @@ input::placeholder { color:var(--dim); }
 .heat-legend i { width:16px; height:12px; border-radius:2px; display:inline-block; }
 
 /* --- Blocked-indicator world map (lazy-loaded on expand) --- */
-.geo-map { width:100%; height:500px; display:block; margin:10px 0 14px;
+.geo-map { width:100%; height:auto; aspect-ratio:2/1; display:block; margin:10px 0 14px;
            background:rgba(255,255,255,.015); border-radius:var(--radius); }
 .geo-map path { transition:fill .15s; }
 .geo-map path:hover { fill:var(--accent-hi) !important; }
