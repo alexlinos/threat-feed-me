@@ -116,6 +116,28 @@ feeds:
     feed_type: "threat_intel"
     update_interval: 86400
 
+  # --- fwfeed honeypot (sky-poppy — primary sensor, NZ vantage) ----------
+  # Original honeypot telemetry, not a re-aggregation, so it corroborates
+  # independently and surfaces attacker IPs the scanner feeds don't see (a
+  # different geographic vantage from the US/EU-heavy roster). Using the
+  # "aged < 90 days" subset — fresh, transient scanners age out — rather than
+  # the full all-time list (~220k). Upstream ships no explicit license.
+  - name: fwfeed_honeypot
+    url: https://raw.githubusercontent.com/sky-poppy/fwfeed/main/blocklist_honeypot_ip4_aged_less_than_90days.txt
+    feed_type: "threat_intel"
+    update_interval: 86400  # regenerated ~daily
+
+  # --- ThreatFox IPs (abuse.ch, via elliotwutingfeng keyless mirror) -----
+  # abuse.ch's own ThreatFox export now requires an Auth-Key; this GitHub
+  # mirror republishes the same IOC IPs keyless. Malware/botnet C2 — mainly
+  # egress value (catches an internal host beaconing out), distinct from the
+  # inbound scanner feeds and from Feodo. Supersedes the auth-walled
+  # abuse_ch_threatfox entry below, which stays disabled for reference.
+  - name: threatfox_mirror
+    url: https://raw.githubusercontent.com/elliotwutingfeng/ThreatFox-IOC-IPs/refs/heads/main/ips.txt
+    feed_type: "malware"
+    update_interval: 3600
+
   # --- Retired feeds kept for reference (disabled) -----------------------
   - name: abuse_ch_sslbl
     url: https://sslbl.abuse.ch/blacklist/sslipblacklist.txt

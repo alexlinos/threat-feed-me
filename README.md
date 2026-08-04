@@ -31,7 +31,7 @@ Then open the dashboard and copy the **"Medium confidence"** feed URL into your
 firewall's threat-feed setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco,
 pfSense, ...).
 
-That's it. On first start it fetches **14 free, keyless threat feeds**, dedupes
+That's it. On first start it fetches **16 free, keyless threat feeds**, dedupes
 and scores them, and begins serving block lists. It **auto-refreshes every 60
 minutes** — no cron, no maintenance. Everything stays on-prem; feeds are pulled
 inbound only.
