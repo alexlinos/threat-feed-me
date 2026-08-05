@@ -127,6 +127,18 @@ feeds:
     feed_type: "malware"
     update_interval: 3600
 
+  # --- AbuseIPDB 100%-confidence, 3-day window (borestad keyless mirror) --
+  # AbuseIPDB's own API is key-gated with small free quotas; this mirror
+  # republishes the top-reported IPs (README: "with permission", with
+  # attribution) hourly. Its reporting community is large and mostly disjoint
+  # from the sensor feeds above, so it corroborates independently. The mirror
+  # repo ships no license file — permission is documented in its README only;
+  # we consume (poll) the list, we don't redistribute the repo.
+  - name: abuseipdb_s100_3d
+    url: https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-3d.ipv4
+    feed_type: "threat_intel"
+    update_interval: 3600  # mirror refreshes ~hourly
+
   # --- Retired feeds kept for reference (disabled) -----------------------
   - name: abuse_ch_sslbl
     url: https://sslbl.abuse.ch/blacklist/sslipblacklist.txt
