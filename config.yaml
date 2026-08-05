@@ -116,20 +116,6 @@ feeds:
     feed_type: "threat_intel"
     update_interval: 86400
 
-  # --- fwfeed honeypot (sky-poppy — primary sensor, NZ vantage) ----------
-  # --- Retired pending license review (disabled) --------------------------
-  # NZ-vantage honeypot telemetry, not a re-aggregation, so it corroborates
-  # independently and surfaces attacker IPs the scanner feeds don't see.
-  # The 90k-row SQLite wedge that first disabled it is fixed (ingest now
-  # batch-writes via add_indicators_bulk), but upstream ships no explicit
-  # license, so it stays disabled until that's resolved. See the ThreatFox
-  # mirror below, which is the clean malware/C2 win.
-  - name: fwfeed_honeypot
-    url: https://raw.githubusercontent.com/sky-poppy/fwfeed/main/blocklist_honeypot_ip4_aged_less_than_90days.txt
-    feed_type: "threat_intel"
-    update_interval: 86400  # regenerated ~daily
-    enabled: false
-
   # --- ThreatFox IPs (abuse.ch, via elliotwutingfeng keyless mirror) -----
   # abuse.ch's own ThreatFox export now requires an Auth-Key; this GitHub
   # mirror republishes the same IOC IPs keyless. Malware/botnet C2 — mainly
