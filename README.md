@@ -63,14 +63,11 @@ firewalls can poll them.
   forever) — all from the dashboard toolbar, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
 - **Confidence Scoring**: High/Medium/Low tiers based on:
-  - **Effective independent votes** — each reporting source's vote is
-    discounted by its measured overlap with sources already counted (feeds
-    that aggregate each other are one witness, not several; netblock overlap
-    across feeds is included and discounted the same way). Tier boundaries
-    are found from the live vote distribution at every rescore (natural
-    breaks), never below the semantic floors: medium needs strictly more
-    than one independent witness, high strictly more than two. Set
-    `scoring.tiering.method: legacy` for the old fixed source-count gates.
+  - **Effective independent votes** — sources are discounted by their
+    measured overlap so echoing feeds count as one witness, and tier
+    boundaries are found from the live vote distribution rather than fixed
+    thresholds. Full algorithm:
+    [How confidence tiering works](#how-confidence-tiering-works).
   - Feed reputation — equal for every feed by default and *earned* from there:
     flagging false positives automatically lowers the offending feed's weight
   - Age decay
@@ -119,6 +116,71 @@ firewalls can poll them.
 │  └── SQLite (IPs, sources, scores, whitelist, metadata)    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## How confidence tiering works
+
+*(v1.8.0+ — the "effective votes" algorithm; set `scoring.tiering.method:
+legacy` in `config.yaml` for the old fixed thresholds.)*
+
+**The problem.** Counting sources treats every feed as an independent
+witness. Public feeds aren't independent: aggregators re-bundle each other
+(Emerging Threats includes Spamhaus DROP and DShield; BBcan177 aggregates
+other lists), and community feeds share reporters. Under a raw count, one
+dataset echoed by three feeds looks like three-way corroboration, and every
+feed you add inflates the counts further — until "High confidence" holds
+more IPs than Medium.
+
+**Step 1 — overlap-discounted votes.** At every rescore, pairwise feed
+overlap is measured from the live database (the same data behind the
+dashboard's overlap heatmap):
+
+```
+overlap(A, B) = |A ∩ B| / min(|A|, |B|)
+```
+
+An indicator's sources are then counted greedily, largest feed first, and
+each source's vote is discounted by its highest overlap with any source
+already counted:
+
+```
+vote(S) = 1 − max(overlap(S, already-counted))
+```
+
+Feeds reporting an IP because it sits inside a netblock they publish (e.g.
+a Spamhaus DROP /24) join the source list first and are discounted the same
+way — so `spamhaus_drop + emerging_threats_block + bbcan177` agreeing on a
+DROP range is worth ~1.1 votes, not 3.
+
+Worked example (real measured overlaps):
+
+| Sources reporting an IP | Raw count | Effective votes |
+|---|---|---|
+| `spamhaus_drop + et_block + bbcan177` (echoes) | 3 | ~1.1 |
+| `abuseipdb + turris + cins_army` (~55% pairwise) | 3 | ~2.1 |
+| `abuseipdb + threatfox + turris` (near-disjoint) | 3 | ~2.9 |
+
+Nothing here is hand-tuned: the discounts come from measured overlap and
+re-adjust automatically as feeds drift, are added, or removed.
+
+**Step 2 — data-driven tier boundaries.** The High/Medium cut lines are not
+fixed numbers either. Each full rescore runs a deterministic 1-D k-means
+(k = 3) over the whole population's vote distribution and places the
+boundaries at the midpoints between cluster centroids ("natural breaks"),
+then persists them so single-IP rescores use the same lines. Two semantic
+floors — the only constants in the system — bound them from below:
+
+- **Medium** requires strictly **more than 1** effective vote: corroborated
+  by at least something non-redundant.
+- **High** requires strictly **more than 2**: more than two independent
+  witnesses, plus at least one curated threat-intel feed
+  (`require_threat_intel`).
+
+A fresh or tiny database falls back to exactly these floors.
+
+**What you'll observe.** Twin feeds stop double-counting; adding a redundant
+feed changes almost nothing; adding a genuinely novel source moves tiers.
+Each indicator's vote count is stored in the `effective_votes` column, so
+you can inspect why an IP landed where it did.
 
 ## Run from source (without Docker)
 
