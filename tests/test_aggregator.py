@@ -30,6 +30,9 @@ CONFIG = {
         {"name": "abuse_ch_malware", "weight": 0.9},
     ],
     "scoring": {
+        # These tests exercise the fixed-threshold math; the effective-votes
+        # engine has its own section (see "effective-votes tiering" below).
+        "tiering": {"method": "legacy"},
         "source_weight": 0.45,
         "reputation_weight": 0.33,
         "recency_weight": 0.22,
@@ -1968,3 +1971,142 @@ def test_ingest_uses_bulk_path(db, tmp_path):
     assert count == 2
     assert db.get_indicator("45.13.2.9").sources == ["bulk_feed"]
     assert db.get_indicator("10.0.0.1") is None
+
+
+# ------------------------------------------------- effective-votes tiering ----
+
+EV_CONFIG = {
+    "feeds": [],
+    "scoring": {
+        "tiering": {"method": "effective_votes",
+                    "medium_floor": 1.1, "high_floor": 2.0},
+        "high_confidence": {"require_threat_intel": False},
+    },
+}
+
+
+def _seed_disjoint(db, feed, ips):
+    for ip in ips:
+        db.add_indicator(ip, feed, {"feed_type": "threat_intel"})
+
+
+def test_effective_votes_discounts_twin_feeds(db):
+    """Two feeds reporting identical populations are one witness, not two."""
+    for i in range(1, 11):
+        db.add_indicator(f"45.13.2.{i}", "echo_a", {})
+        db.add_indicator(f"45.13.2.{i}", "echo_b", {})
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    assert scorer._effective_votes(["echo_a", "echo_b"]) == pytest.approx(1.0)
+
+
+def test_effective_votes_full_credit_for_disjoint_feeds(db):
+    _seed_disjoint(db, "feed_a", [f"45.13.2.{i}" for i in range(1, 11)])
+    _seed_disjoint(db, "feed_b", [f"91.92.242.{i}" for i in range(1, 11)])
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    assert scorer._effective_votes(["feed_a", "feed_b"]) == pytest.approx(2.0)
+
+
+def test_effective_votes_partial_overlap(db):
+    """50% overlap with an already-counted feed = half a vote."""
+    _seed_disjoint(db, "big", [f"45.13.2.{i}" for i in range(1, 21)])       # 20 IPs
+    _seed_disjoint(db, "half", [f"45.13.2.{i}" for i in range(1, 6)]        # 5 shared
+                   + [f"91.92.242.{i}" for i in range(1, 6)])               # 5 unique
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    # overlap = 5 / min(20, 10) = 0.5; big counts first (larger)
+    assert scorer._effective_votes(["big", "half"]) == pytest.approx(1.5)
+
+
+def test_tier_from_votes_floors_are_strict(db):
+    """Exactly two independent witnesses is medium, not high — high needs
+    strictly more than the floor."""
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    t = scorer._tier_from_votes
+    assert t(1.0, ["a"], 1.1, 2.0) == ConfidenceTier.LOW
+    assert t(1.5, ["a", "b"], 1.1, 2.0) == ConfidenceTier.MEDIUM
+    assert t(2.0, ["a", "b"], 1.1, 2.0) == ConfidenceTier.MEDIUM
+    assert t(2.4, ["a", "b", "c"], 1.1, 2.0) == ConfidenceTier.HIGH
+    assert t(9.0, [], 1.1, 2.0) == ConfidenceTier.LOW  # no evidence
+
+
+def test_tier_from_votes_keeps_threat_intel_gate(db):
+    cfg = {"feeds": [{"name": "curated", "feed_type": "threat_intel"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {"require_threat_intel": True}}}
+    scorer = ConfidenceScorer(db, cfg)
+    # 3 independent votes but all custom/unknown -> capped at medium
+    assert scorer._tier_from_votes(3.0, ["up1", "up2", "up3"], 1.1, 2.0) \
+        == ConfidenceTier.MEDIUM
+    assert scorer._tier_from_votes(3.0, ["curated", "up2", "up3"], 1.1, 2.0) \
+        == ConfidenceTier.HIGH
+
+
+def test_natural_breaks_degenerate_population_uses_floors(db):
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    assert scorer._natural_breaks([]) == (1.1, 2.0)
+    assert scorer._natural_breaks([1.0] * 500) == (1.1, 2.0)   # uniform
+    assert scorer._natural_breaks([1.0, 2.0, 3.0]) == (1.1, 2.0)  # tiny
+
+
+def test_natural_breaks_finds_three_lumps(db):
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    votes = [1.0] * 300 + [2.0] * 100 + [3.5] * 30
+    med_b, high_b = scorer._natural_breaks(votes)
+    assert 1.1 <= med_b < 2.0 < high_b < 3.5
+    # boundaries actually separate the lumps
+    assert sum(1 for v in votes if v > high_b) == 30
+    assert sum(1 for v in votes if med_b < v <= high_b) == 100
+
+
+def test_natural_breaks_never_below_floors(db):
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    # all mass squeezed low -> k-means breaks would sit below the floors
+    votes = [0.2] * 100 + [0.4] * 100 + [0.9] * 100
+    med_b, high_b = scorer._natural_breaks(votes)
+    assert med_b >= 1.1 and high_b >= 2.0
+
+
+def test_recalculate_persists_votes_and_breaks(db):
+    """Full rescore stores effective_votes per indicator and the tier
+    boundaries in settings; correlated feeds don't reach high."""
+    # echo pair: same 60 IPs (100% overlap), third feed disjoint
+    for i in range(1, 61):
+        ip = f"45.13.{i // 250}.{i % 250 or 1}"
+        db.add_indicator(ip, "echo_a", {"feed_type": "threat_intel"})
+        db.add_indicator(ip, "echo_b", {"feed_type": "threat_intel"})
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    scorer.recalculate_all_scores()
+    with db._cursor() as cur:
+        cur.execute("SELECT effective_votes, tier FROM indicators LIMIT 1")
+        votes, tier = cur.fetchone()
+    assert votes == pytest.approx(1.0)   # echo pair = one witness
+    assert tier == "low"                 # 1.0 not > medium floor 1.1
+    assert db.get_setting(scorer.TIER_BREAKS_KEY) is not None
+
+
+def test_single_ip_score_uses_stored_breaks(db):
+    """calculate_score on one IP honors the boundaries the last full
+    rescore stored (population context a single IP can't compute)."""
+    import json as _json
+    _seed_disjoint(db, "feed_a", [f"45.13.2.{i}" for i in range(1, 11)])
+    _seed_disjoint(db, "feed_b", [f"91.92.242.{i}" for i in range(1, 11)])
+    db.add_indicator("203.0.113.9", "feed_a", {})
+    db.add_indicator("203.0.113.9", "feed_b", {})
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    # votes for the shared IP ~ 2.0 (feeds nearly disjoint); with a stored
+    # medium break above that, it must come back LOW, not medium
+    db.set_setting(scorer.TIER_BREAKS_KEY, _json.dumps({"medium": 2.5, "high": 4.0}))
+    _score, tier = scorer.calculate_score("203.0.113.9")
+    assert tier == ConfidenceTier.LOW
+    db.set_setting(scorer.TIER_BREAKS_KEY, _json.dumps({"medium": 1.1, "high": 4.0}))
+    _score, tier = scorer.calculate_score("203.0.113.9")
+    assert tier == ConfidenceTier.MEDIUM
+
+
+def test_legacy_method_preserves_fixed_gates(db):
+    """method: legacy keeps the old count/score thresholds byte-for-byte."""
+    db.add_indicator("203.0.113.9", "a", {})
+    db.add_indicator("203.0.113.9", "b", {})
+    db.add_indicator("203.0.113.9", "c", {})
+    scorer = ConfidenceScorer(db, CONFIG)   # CONFIG pins method: legacy
+    _score, tier = scorer.calculate_score("203.0.113.9")
+    assert tier == ConfidenceTier.HIGH      # 3 sources, fresh -> high

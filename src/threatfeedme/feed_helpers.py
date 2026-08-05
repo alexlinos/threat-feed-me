@@ -20,13 +20,13 @@ TIER_FEEDS = [
     {
         "key": "high",
         "label": "High Confidence",
-        "description": "IPs reported by 3+ sources with score >= 0.75",
+        "description": "More than two independent sources agree (overlap-discounted)",
         "recommended": True,
     },
     {
         "key": "medium",
         "label": "Medium Confidence",
-        "description": "IPs reported by 2+ sources with score >= 0.5",
+        "description": "Corroborated by more than one independent source",
         "recommended": False,
     },
     {

@@ -1,6 +1,7 @@
 """
 Confidence Scoring Engine - Calculate and assign confidence tiers
 """
+import bisect
 import math
 import ipaddress
 import json
@@ -53,6 +54,20 @@ class ConfidenceScorer:
         total = sum(raw_weights.values()) or 1.0
         self.weights = {k: v / total for k, v in raw_weights.items()}
 
+        # Tiering method. 'effective_votes' (default) discounts each source's
+        # vote by its measured overlap with sources already counted, then
+        # finds the tier boundaries from the vote distribution itself
+        # (natural breaks), never below the configured floors. 'legacy'
+        # restores the fixed source-count/score gates.
+        tiering = scoring.get('tiering') or {}
+        self.tier_method = str(tiering.get('method', 'effective_votes'))
+        self.medium_floor = float(tiering.get('medium_floor', 1.1))
+        self.high_floor = float(tiering.get('high_floor', 2.0))
+        # Overlap ratios and per-source sizes are loaded once per rescore
+        # (and lazily for single-IP scoring); (a, b) keys are stored both ways.
+        self._overlap = None
+        self._source_sizes = {}
+
         # Reputation weights are driven by config/DB (via pipeline.scorer_config)
         # so adding a feed never requires editing this module; sources without
         # an explicit weight get the uniform default.
@@ -102,34 +117,64 @@ class ConfidenceScorer:
     # ==================== PUBLIC API ====================
 
     def calculate_score(self, ip: str) -> tuple[float, ConfidenceTier]:
-        """Calculate confidence score and tier for a single IP."""
+        """Calculate confidence score and tier for a single IP.
+
+        Tier boundaries come from the last full rescore (persisted in
+        settings); before any rescore has run, the configured floors apply.
+        """
         indicator = self.db.get_indicator(ip)
         if not indicator:
             return 0.0, ConfidenceTier.LOW
 
         netblocks = self._load_netblock_sources()
-        return self._compute(indicator, netblocks, self.db.get_whitelist_map())
+        score, votes, sources = self._evidence(
+            indicator, netblocks, self.db.get_whitelist_map())
+        if self.tier_method == 'legacy':
+            tier = self._determine_tier(score, len(sources or []), sources)
+        else:
+            med_b, high_b = self._stored_breaks()
+            tier = self._tier_from_votes(votes, sources, med_b, high_b)
+        return score, tier
 
     def recalculate_all_scores(self) -> int:
         """Recalculate scores for all indicators.
 
-        Data is loaded once and written back in a single transaction, avoiding
-        the previous per-indicator reconnect and full netblock rescan.
+        Data is loaded once and written back in a single transaction. With
+        effective-votes tiering this is a two-pass computation: evidence for
+        every indicator first, then tier boundaries from the resulting vote
+        distribution (natural breaks over the floors), then tiers.
         """
         indicators = self.db.get_all_indicators()
         whitelist_map = self.db.get_whitelist_map()
         netblocks = self._load_netblock_sources()
 
-        updates = []
+        evidence = []
         for indicator in indicators:
-            score, tier = self._compute(indicator, netblocks, whitelist_map)
-            updates.append((score, tier.value, indicator.ip))
+            score, votes, sources = self._evidence(indicator, netblocks, whitelist_map)
+            evidence.append((indicator, score, votes, sources))
+
+        if self.tier_method == 'legacy':
+            updates = [
+                (score, self._determine_tier(score, len(sources or []), sources).value,
+                 votes, ind.ip)
+                for ind, score, votes, sources in evidence
+            ]
+        else:
+            med_b, high_b = self._natural_breaks(
+                [votes for _ind, _s, votes, sources in evidence if sources])
+            self._persist_breaks(med_b, high_b)
+            updates = [
+                (score, self._tier_from_votes(votes, sources, med_b, high_b).value,
+                 votes, ind.ip)
+                for ind, score, votes, sources in evidence
+            ]
 
         if updates:
             conn = self.db._get_connection()
             try:
                 conn.executemany(
-                    "UPDATE indicators SET confidence_score = ?, tier = ? WHERE ip = ?",
+                    "UPDATE indicators SET confidence_score = ?, tier = ?, "
+                    "effective_votes = ? WHERE ip = ?",
                     updates,
                 )
                 conn.commit()
@@ -140,16 +185,19 @@ class ConfidenceScorer:
 
     # ==================== SCORING INTERNALS ====================
 
-    def _compute(
+    def _evidence(
         self, indicator: ThreatIndicator, netblocks, whitelist_map: Dict
-    ) -> tuple[float, ConfidenceTier]:
-        """Compute (score, tier) for an indicator given precomputed netblocks
-        (from _load_netblock_sources) and the whitelist scoping map."""
+    ) -> tuple[float, float, Optional[List[str]]]:
+        """Compute (score, effective_votes, surviving_sources) for an
+        indicator given precomputed netblocks (from _load_netblock_sources)
+        and the whitelist scoping map. Tier is decided by the caller — with
+        effective-votes tiering it needs the whole population's vote
+        distribution, which no single indicator can know."""
         # Apply whitelist scoping: drop globally-whitelisted IPs entirely and
         # remove any per-feed-whitelisted sources.
         eff = effective_sources(indicator.ip, indicator.sources, whitelist_map)
         if eff is None:
-            return 0.0, ConfidenceTier.LOW
+            return 0.0, 0.0, None
         sources = eff
         # CIDR-aware when given a WhitelistMatcher; plain dict falls back to
         # exact match. Used below to skip re-adding a netblock source that has
@@ -170,11 +218,16 @@ class ConfidenceScorer:
 
         # No surviving sources means no evidence -> lowest confidence.
         if not sources:
-            return 0.0, ConfidenceTier.LOW
+            return 0.0, 0.0, []
 
-        source_count = len(sources)
+        votes = self._effective_votes(sources)
 
-        source_score = self._calculate_source_score(sources)
+        # The source component of the score follows the same de-correlated
+        # evidence measure the tiers use (legacy keeps the raw count).
+        if self.tier_method == 'legacy':
+            source_score = self._calculate_source_score(sources)
+        else:
+            source_score = min(votes * 0.25, 1.0)
         reputation_score = self._calculate_reputation_score(sources)
         recency_score = self._calculate_recency_score(indicator.last_seen)
 
@@ -184,8 +237,128 @@ class ConfidenceScorer:
             + recency_score * self.weights['recency']
         )
 
-        tier = self._determine_tier(total_score, source_count, sources)
-        return total_score, tier
+        return total_score, votes, sources
+
+    # ---- Effective-votes tiering ----
+    #
+    # A raw source count treats every feed as an independent witness, but
+    # public feeds aggregate each other and share reporter communities, so
+    # adding feeds inflates counts without adding evidence. Instead each
+    # source's vote is discounted by its measured overlap with sources
+    # already counted: the first (largest) source is a full vote, and a
+    # source that 100%-overlaps an already-counted one adds nothing. The
+    # overlap ratios come from the live database — the same data behind the
+    # dashboard's overlap heatmap — so the discount tracks reality as feeds
+    # drift, with no hand-tuned correlation constants.
+
+    TIER_BREAKS_KEY = 'tier_breaks'
+
+    def _load_overlap(self) -> Dict:
+        """Pairwise overlap ratios |A∩B|/min(|A|,|B|), cached per scorer
+        instance (one instance per rescore). Failure degrades to no
+        discounting, i.e. votes == raw source count."""
+        if self._overlap is not None:
+            return self._overlap
+        try:
+            sizes = self.db.get_source_counts()
+            pairs = self.db.get_feed_overlap()
+        except Exception:
+            self._overlap = {}
+            return self._overlap
+        self._source_sizes = sizes
+        ov = {}
+        for p in pairs:
+            smaller = min(sizes.get(p['a'], 0), sizes.get(p['b'], 0))
+            if smaller:
+                r = min(1.0, p['n'] / smaller)
+                ov[(p['a'], p['b'])] = ov[(p['b'], p['a'])] = r
+        self._overlap = ov
+        return ov
+
+    def _effective_votes(self, sources: List[str]) -> float:
+        """Overlap-discounted vote count. Greedy, largest source first (the
+        biggest feed anchors; each later source is discounted by its highest
+        overlap with anything already counted). Deterministic: ties broken
+        by name."""
+        overlap = self._load_overlap()
+        votes, counted = 0.0, []
+        for s in sorted(sources, key=lambda s: (-self._source_sizes.get(s, 0), s)):
+            discount = max((overlap.get((s, c), 0.0) for c in counted), default=0.0)
+            votes += max(0.0, 1.0 - discount)
+            counted.append(s)
+        return votes
+
+    def _natural_breaks(self, votes: List[float]) -> tuple[float, float]:
+        """Find the medium/high tier boundaries from the vote distribution:
+        1-D k-means (k=3, deterministic quantile init) over all indicators
+        with evidence; boundaries are the midpoints between adjacent cluster
+        centroids. The configured floors are hard minimums — a boundary is
+        never placed below them — and they alone apply when the population
+        is too small or too uniform to cluster."""
+        vals = sorted(v for v in votes if v > 0)
+        if len(vals) < 50 or len(set(vals)) < 3:
+            return self.medium_floor, self.high_floor
+
+        prefix = [0.0]
+        for v in vals:
+            prefix.append(prefix[-1] + v)
+
+        def seg_mean(i: int, j: int) -> float:
+            return (prefix[j] - prefix[i]) / (j - i)
+
+        c = [vals[len(vals) // 6], vals[len(vals) // 2], vals[(5 * len(vals)) // 6]]
+        if not (c[0] < c[1] < c[2]):
+            d = sorted(set(vals))
+            c = [d[0], d[len(d) // 2], d[-1]]
+        for _ in range(100):
+            i1 = bisect.bisect_right(vals, (c[0] + c[1]) / 2)
+            i2 = bisect.bisect_right(vals, (c[1] + c[2]) / 2)
+            i1 = max(1, min(i1, len(vals) - 2))
+            i2 = max(i1 + 1, min(i2, len(vals) - 1))
+            nc = [seg_mean(0, i1), seg_mean(i1, i2), seg_mean(i2, len(vals))]
+            if nc == c:
+                break
+            c = nc
+
+        c.sort()
+        med_b = max((c[0] + c[1]) / 2, self.medium_floor)
+        high_b = max((c[1] + c[2]) / 2, self.high_floor, med_b + 1e-9)
+        return med_b, high_b
+
+    def _tier_from_votes(self, votes: float, sources: Optional[List[str]],
+                         med_b: float, high_b: float) -> ConfidenceTier:
+        """Tier from effective votes: strictly above the boundary. The high
+        tier keeps the require_threat_intel gate — an IP known only from
+        custom/manual data tops out at medium no matter how many votes."""
+        if not sources:
+            return ConfidenceTier.LOW
+        high_require_intel = bool(self.config.get('scoring', {})
+                                  .get('high_confidence', {})
+                                  .get('require_threat_intel', False))
+        if votes > high_b and (not high_require_intel or self._has_intel_source(sources)):
+            return ConfidenceTier.HIGH
+        if votes > med_b:
+            return ConfidenceTier.MEDIUM
+        return ConfidenceTier.LOW
+
+    def _persist_breaks(self, med_b: float, high_b: float) -> None:
+        try:
+            self.db.set_setting(self.TIER_BREAKS_KEY,
+                                json.dumps({'medium': med_b, 'high': high_b}))
+        except Exception:
+            pass  # never let bookkeeping break a rescore
+
+    def _stored_breaks(self) -> tuple[float, float]:
+        """Boundaries persisted by the last full rescore; floors before any
+        rescore has run (fresh database)."""
+        try:
+            raw = self.db.get_setting(self.TIER_BREAKS_KEY)
+            if raw:
+                j = json.loads(raw)
+                return float(j['medium']), float(j['high'])
+        except Exception:
+            pass
+        return self.medium_floor, self.high_floor
 
     def _load_netblock_sources(self):
         """Map every stored netblock (any feed, real CIDR from indicator

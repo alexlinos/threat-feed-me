@@ -247,12 +247,12 @@
       <div class="tiers">
         <div class="tier high">
           <h3>High <span class="badge">strictest</span></h3>
-          <p>3+ sources agree, threat-intel validated. The cleanest list — near-zero false positives.</p>
+          <p>More than two independent sources agree (overlap-discounted), threat-intel validated. The cleanest list.</p>
           <div class="url">/feeds/high.txt</div>
         </div>
         <div class="tier med">
           <h3>Medium <span class="badge">recommended</span></h3>
-          <p>2+ reputable sources. The balanced default most firewalls should poll.</p>
+          <p>Corroborated by more than one independent source. The balanced default most firewalls should poll.</p>
           <div class="url">/feeds/medium.txt</div>
         </div>
         <div class="tier low">
@@ -263,7 +263,7 @@
       </div>
 
       <ul class="scoring">
-        <li>Scored on <b>number of sources</b> reporting the IP (including netblock overlap across feeds),</li>
+        <li>Scored on <b>independent votes</b> — each source discounted by its measured overlap with sources already counted (aggregators and netblock echoes are one witness, not several),</li>
         <li><b>feed reputation</b> — equal by default and <i>earned</i>: flagging a false positive lowers that feed's weight,</li>
         <li>and <b>age decay</b>. Whitelist false positives globally or per-feed; the list self-heals.</li>
       </ul>

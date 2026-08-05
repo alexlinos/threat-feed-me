@@ -105,7 +105,8 @@ class Database:
                     last_seen TEXT NOT NULL,
                     confidence_score REAL DEFAULT 0.0,
                     tier TEXT DEFAULT 'low',
-                    metadata TEXT DEFAULT '{}'
+                    metadata TEXT DEFAULT '{}',
+                    effective_votes REAL
                 )
             """)
 
@@ -257,6 +258,15 @@ class Database:
             if is_cols and 'reported_at' not in is_cols:
                 try:
                     cursor.execute("ALTER TABLE indicator_sources ADD COLUMN reported_at TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
+            # Upgrade migration: overlap-discounted vote count per indicator
+            # (v1.8 effective-votes tiering). NULL until the first rescore.
+            i_cols = [r[1] for r in cursor.execute("PRAGMA table_info(indicators)").fetchall()]
+            if i_cols and 'effective_votes' not in i_cols:
+                try:
+                    cursor.execute("ALTER TABLE indicators ADD COLUMN effective_votes REAL")
                 except sqlite3.OperationalError:
                     pass
 
@@ -453,13 +463,21 @@ class Database:
             cur.execute("SELECT COUNT(*), COALESCE(MAX(last_seen), 0) FROM indicators")
             total, max_last = cur.fetchone()
         return (total or 0, max_last or 0)
-    def set_indicator_score(self, ip: str, score: float, tier: str) -> None:
-        """Persist a single indicator's recalculated score/tier."""
+    def set_indicator_score(self, ip: str, score: float, tier: str,
+                            votes: float = None) -> None:
+        """Persist a single indicator's recalculated score/tier (and, when
+        provided, its overlap-discounted effective-vote count)."""
         with self._cursor() as cur:
-            cur.execute(
-                "UPDATE indicators SET confidence_score = ?, tier = ? WHERE ip = ?",
-                (score, tier, ip),
-            )
+            if votes is None:
+                cur.execute(
+                    "UPDATE indicators SET confidence_score = ?, tier = ? WHERE ip = ?",
+                    (score, tier, ip),
+                )
+            else:
+                cur.execute(
+                    "UPDATE indicators SET confidence_score = ?, tier = ?, effective_votes = ? WHERE ip = ?",
+                    (score, tier, votes, ip),
+                )
 
     def delete_indicator(self, ip: str) -> bool:
         """Delete an indicator (and, via cascade, its source rows)."""
@@ -756,6 +774,16 @@ class Database:
                 "GROUP BY a.source_name, b.source_name"
             )
             return [{"a": r['x'], "b": r['y'], "n": r['n']} for r in cur.fetchall()]
+
+    def get_source_counts(self) -> Dict[str, int]:
+        """How many indicators each source currently reports. Together with
+        get_feed_overlap this normalizes pair counts into overlap ratios
+        (|A∩B| / min(|A|,|B|)) for effective-vote scoring."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT source_name, COUNT(*) AS n FROM indicator_sources GROUP BY source_name"
+            )
+            return {r['source_name']: r['n'] for r in cur.fetchall()}
 
     # ==================== FEED STATS ====================
 

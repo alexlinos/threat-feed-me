@@ -186,7 +186,27 @@ safety:
   allow_private_feed_urls: false
 
 scoring:
-  # Confidence tier thresholds
+  # How indicators are bucketed into High/Medium/Low.
+  #
+  # effective_votes (default): a raw source count treats every feed as an
+  # independent witness, but public feeds aggregate each other and share
+  # reporter communities — adding feeds inflates counts without adding
+  # evidence. Instead, each reporting source's vote is discounted by its
+  # measured overlap with sources already counted (a feed that 100%-overlaps
+  # another adds ~0), and the tier boundaries are found from the resulting
+  # vote distribution itself (natural breaks / 1-D k-means at every rescore),
+  # never below the floors here. The floors are the only fixed constants and
+  # they are semantic, not tuned: medium requires strictly more than one
+  # independent witness, high strictly more than two.
+  #
+  # method: legacy restores the fixed min_sources/min_score gates below.
+  tiering:
+    method: effective_votes
+    medium_floor: 1.1
+    high_floor: 2.0
+
+  # Confidence tier thresholds (used when tiering.method: legacy; the
+  # require_threat_intel gate applies to BOTH methods)
   high_confidence:
     min_sources: 3
     min_score: 0.75

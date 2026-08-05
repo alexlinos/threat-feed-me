@@ -63,7 +63,14 @@ firewalls can poll them.
   forever) — all from the dashboard toolbar, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
 - **Confidence Scoring**: High/Medium/Low tiers based on:
-  - Number of sources reporting the IP (including netblock overlap across feeds)
+  - **Effective independent votes** — each reporting source's vote is
+    discounted by its measured overlap with sources already counted (feeds
+    that aggregate each other are one witness, not several; netblock overlap
+    across feeds is included and discounted the same way). Tier boundaries
+    are found from the live vote distribution at every rescore (natural
+    breaks), never below the semantic floors: medium needs strictly more
+    than one independent witness, high strictly more than two. Set
+    `scoring.tiering.method: legacy` for the old fixed source-count gates.
   - Feed reputation — equal for every feed by default and *earned* from there:
     flagging false positives automatically lowers the offending feed's weight
   - Age decay
@@ -104,9 +111,9 @@ firewalls can poll them.
 │  └── Whitelist Filtering                                    │
 ├─────────────────────────────────────────────────────────────┤
 │  Output Tiers                                               │
-│  ├── High Confidence: 3+ sources + threat intel validated  │
-│  ├── Medium Confidence: 2 reputable sources                │
-│  └── Low Confidence: All deduped IPs (including custom)    │
+│  ├── High: >2 independent votes + threat-intel validated   │
+│  ├── Medium: >1 independent vote (overlap-discounted)      │
+│  └── Low: all deduped IPs (including custom)               │
 ├─────────────────────────────────────────────────────────────┤
 │  Storage                                                    │
 │  └── SQLite (IPs, sources, scores, whitelist, metadata)    │
@@ -148,8 +155,8 @@ browser. Each confidence tier is published as a live URL you can paste directly
 into your firewall's external threat-feed / block-list setting:
 
 ```
-http://<server>:8080/feeds/high.txt      # 3+ sources agree (strictest)
-http://<server>:8080/feeds/medium.txt    # 2+ sources (recommended)
+http://<server>:8080/feeds/high.txt      # independent sources agree (strictest)
+http://<server>:8080/feeds/medium.txt    # corroborated (recommended)
 http://<server>:8080/feeds/low.txt       # seen once (high volume)
 http://<server>:8080/feeds/all.txt       # everything, deduplicated
 ```
