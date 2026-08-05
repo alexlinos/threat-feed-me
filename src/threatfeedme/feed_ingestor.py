@@ -348,8 +348,10 @@ class FeedIngestor:
             logger.info(f"Fetched {len(entries)} indicators from {feed.name}")
 
             now = datetime.now(timezone.utc).isoformat()
-            count = 0
             skipped = 0
+            # Filter in Python, write in one bulk call: per-row add_indicator()
+            # commits per IP, which wedged the refresh on 90k-row feeds.
+            rows = []
             for entry in entries:
                 value = entry.get('cidr') or entry['ip']
                 # Drop internal/reserved/known-good addresses before storing.
@@ -365,12 +367,9 @@ class FeedIngestor:
                 if entry.get('cidr'):
                     metadata['cidr'] = entry['cidr']
 
-                self.db.add_indicator(
-                    ip=entry['ip'],
-                    source=feed.name,
-                    metadata=metadata,
-                )
-                count += 1
+                rows.append((entry['ip'], metadata))
+
+            count = self.db.add_indicators_bulk(rows, source=feed.name)
 
             if skipped:
                 logger.info(f"{feed.name}: skipped {skipped} private/reserved/known-good entries")

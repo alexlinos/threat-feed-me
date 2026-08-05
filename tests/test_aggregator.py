@@ -1334,7 +1334,7 @@ def test_ingest_failure_after_200_does_not_cache_validators(db, monkeypatch):
     feed = _http_feed()
     ing = FeedIngestor(db)
 
-    real_add = db.add_indicator
+    real_add = db.add_indicators_bulk
     state = {"fail": True}
 
     def flaky_add(*args, **kwargs):
@@ -1342,7 +1342,7 @@ def test_ingest_failure_after_200_does_not_cache_validators(db, monkeypatch):
             raise sqlite3.OperationalError("database is locked")
         return real_add(*args, **kwargs)
 
-    monkeypatch.setattr(db, "add_indicator", flaky_add)
+    monkeypatch.setattr(db, "add_indicators_bulk", flaky_add)
     with pytest.raises(sqlite3.OperationalError):
         ing.ingest_feed(feed)
     assert db.get_feed_http_cache(feed.name) == (None, None)
@@ -1895,3 +1895,72 @@ def test_map_generator_projects_and_simplifies(tmp_path):
     xs = [float(t.split()[0]) for t in doc["paths"]["AA"].lstrip("M").rstrip("Z").split("L")]
     assert min(xs) < WIDTH / 2 < max(xs)
     assert all(0 <= x <= WIDTH for x in xs)
+
+
+# ------------------------------------------------------------ bulk ingest ----
+
+def test_bulk_insert_matches_add_indicator_semantics(db):
+    """Bulk path stores the same rows/sources a per-row loop would."""
+    n = db.add_indicators_bulk(
+        [("203.0.113.1", {"feed_type": "threat_intel"}),
+         ("203.0.113.2", {"cidr": "203.0.113.0/24"})],
+        source="feed_a",
+    )
+    assert n == 2
+    ind = db.get_indicator("203.0.113.2")
+    assert ind.sources == ["feed_a"]
+    assert ind.metadata["cidr"] == "203.0.113.0/24"
+    assert ind.first_seen == ind.last_seen
+
+
+def test_bulk_upsert_preserves_first_seen_and_merges_metadata(db):
+    db.add_indicator("203.0.113.9", "feed_a", {"old_key": "kept"})
+    first_seen = db.get_indicator("203.0.113.9").first_seen
+    db.add_indicators_bulk([("203.0.113.9", {"new_key": "added"})], source="feed_b")
+    ind = db.get_indicator("203.0.113.9")
+    assert ind.first_seen == first_seen
+    assert ind.metadata["old_key"] == "kept" and ind.metadata["new_key"] == "added"
+    assert sorted(ind.sources) == ["feed_a", "feed_b"]
+    # No duplicate indicator row was created by the upsert.
+    with db._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM indicators WHERE ip = ?", ("203.0.113.9",))
+        assert cur.fetchone()[0] == 1
+
+
+def test_bulk_duplicate_source_reports_ignored(db):
+    """Re-ingesting the same feed doesn't duplicate indicator_sources rows."""
+    db.add_indicators_bulk([("198.51.100.7", {})], source="feed_a")
+    db.add_indicators_bulk([("198.51.100.7", {})], source="feed_a")
+    assert db.get_indicator("198.51.100.7").sources == ["feed_a"]
+
+
+def test_bulk_chunking_crosses_commit_boundary(db, monkeypatch):
+    """Rows on both sides of a chunk commit all land."""
+    monkeypatch.setattr(Database, "BULK_CHUNK", 3)
+    rows = [(f"203.0.113.{i}", {}) for i in range(1, 9)]  # 8 rows, chunk=3
+    assert db.add_indicators_bulk(rows, source="feed_a") == 8
+    with db._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM indicators")
+        assert cur.fetchone()[0] == 8
+        cur.execute("SELECT COUNT(*) FROM indicator_sources WHERE source_name = 'feed_a'")
+        assert cur.fetchone()[0] == 8
+
+
+def test_bulk_empty_rows_no_op(db):
+    assert db.add_indicators_bulk([], source="feed_a") == 0
+
+
+def test_ingest_uses_bulk_path(db, tmp_path):
+    """End-to-end: a local-file feed lands via the bulk writer."""
+    feed_file = tmp_path / "list.txt"
+    # Real public addresses: the safety filter drops reserved ranges (which
+    # includes TEST-NET), so 10/8 is the only row that should be excluded.
+    feed_file.write_text("45.13.2.9\n91.92.242.236\n10.0.0.1\n")
+    feed = FeedSource(name="bulk_feed", url=str(feed_file), feed_type=FeedType.THREAT_INTEL,
+                      weight=1.0, update_interval=3600, local_file=True)
+    from threatfeedme.safety import SafetyFilter
+    ingestor = FeedIngestor(db, safety=SafetyFilter(drop_private_reserved=True))
+    count = ingestor.ingest_feed(feed)
+    assert count == 2
+    assert db.get_indicator("45.13.2.9").sources == ["bulk_feed"]
+    assert db.get_indicator("10.0.0.1") is None

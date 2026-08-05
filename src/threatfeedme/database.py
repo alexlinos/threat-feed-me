@@ -296,6 +296,44 @@ class Database:
             )
             return indicator_id
 
+    # Chunk size for bulk ingest commits: large enough that a 90k-row feed
+    # costs ~9 fsyncs instead of 90k, small enough to bound WAL growth and
+    # release the write lock periodically for other writers.
+    BULK_CHUNK = 10_000
+
+    def add_indicators_bulk(self, rows: List[tuple], source: str) -> int:
+        """Add or update many indicators from one feed source.
+
+        `rows` is a list of (ip, metadata) tuples. Semantically identical to
+        calling add_indicator() per row — first_seen preserved on update,
+        metadata json_patch-merged, earliest reported_at kept — but on a
+        single connection with chunked commits. add_indicator() commits
+        (fsyncs) per call, which wedged the refresh on large feeds.
+        """
+        if not rows:
+            return 0
+        now = _utcnow_iso()
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            for start in range(0, len(rows), self.BULK_CHUNK):
+                chunk = rows[start:start + self.BULK_CHUNK]
+                cur.executemany(
+                    "INSERT INTO indicators (ip, first_seen, last_seen, metadata) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(ip) DO UPDATE SET last_seen = excluded.last_seen, "
+                    "metadata = json_patch(COALESCE(metadata, '{}'), excluded.metadata)",
+                    [(ip, now, now, json.dumps(meta or {})) for ip, meta in chunk],
+                )
+                cur.executemany(
+                    "INSERT OR IGNORE INTO indicator_sources (indicator_id, source_name, reported_at) "
+                    "SELECT id, ?, ? FROM indicators WHERE ip = ?",
+                    [(source, now, ip) for ip, _meta in chunk],
+                )
+                conn.commit()
+            return len(rows)
+        finally:
+            conn.close()
+
     def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
         """Get a single indicator by IP"""
         with self._cursor() as cur:
