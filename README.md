@@ -31,7 +31,7 @@ Then open the dashboard and copy the **"Medium confidence"** feed URL into your
 firewall's threat-feed setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco,
 pfSense, ...).
 
-That's it. On first start it fetches **16 free, keyless threat feeds**, dedupes
+That's it. On first start it fetches **15 free, keyless threat feeds**, dedupes
 and scores them, and begins serving block lists. It **auto-refreshes every 60
 minutes** — no cron, no maintenance. Everything stays on-prem; feeds are pulled
 inbound only.
@@ -41,9 +41,9 @@ inbound only.
   Copy button and firewall-specific instructions.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
   a refresh — all from the dashboard, no config editing.
-- A few feeds ship **disabled** (abuse.ch SSLBL, the auth-walled ThreatFox
-  export — a keyless ThreatFox mirror is enabled by default — AlienVault OTX,
-  a sample custom list); enable them from the dashboard once configured. Feeds
+- A few feeds ship **disabled** (the auth-walled ThreatFox export — a keyless
+  ThreatFox mirror is enabled by default — AlienVault OTX, a sample custom
+  list); enable them from the dashboard once configured. Feeds
   that need an API key (like OTX) have a **Set key** button — the key is
   stored server-side in the data volume's `.env`, applied immediately, and
   never displayed back.
@@ -92,9 +92,9 @@ firewalls can poll them.
 │  ├── Emerging Threats (compromised + block IPs)            │
 │  ├── Blocklist.de, CINS Army, GreenSnow, BBcan177          │
 │  ├── DataPlane, BruteForceBlocker, Turris, BinaryDefense   │
-│  ├── abuse.ch Feodo + ThreatFox mirror (botnet C2)         │
+│  ├── abuse.ch ThreatFox mirror (botnet C2 IOCs)            │
 │  ├── AbuseIPDB top-reported (community abuse reports)      │
-│  ├── Optional: SSLBL, OTX (ship disabled)                  │
+│  ├── Optional: AlienVault OTX (ships disabled)             │
 │  └── Custom Feeds (user-defined, e.g. local honeypot)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Processing Engine                                          │

@@ -56,14 +56,6 @@ feeds:
     feed_type: "threat_intel"
     update_interval: 3600
 
-  # --- Feodo (abuse.ch — botnet C2 IPs, Emotet/Dridex/etc.) ------------
-  # The "recommended" list is deliberately conservative and can be very small
-  # (single digits) — that is upstream policy, not a fetch failure.
-  - name: abuse_ch_feodo
-    url: https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt
-    feed_type: "malware"
-    update_interval: 3600  # 1 hour
-
   # --- DShield / SANS ISC recommended block list (top attacking /24s) ----
   # Netblock-shaped: rows are start/end/mask, rewritten to CIDR by the
   # dshield_block scraper so the real /24 prefixes drive overlap scoring.
@@ -120,7 +112,7 @@ feeds:
   # abuse.ch's own ThreatFox export now requires an Auth-Key; this GitHub
   # mirror republishes the same IOC IPs keyless. Malware/botnet C2 — mainly
   # egress value (catches an internal host beaconing out), distinct from the
-  # inbound scanner feeds and from Feodo. Supersedes the auth-walled
+  # inbound scanner feeds. Supersedes the auth-walled
   # abuse_ch_threatfox entry below, which stays disabled for reference.
   - name: threatfox_mirror
     url: https://raw.githubusercontent.com/elliotwutingfeng/ThreatFox-IOC-IPs/refs/heads/main/ips.txt
@@ -140,12 +132,10 @@ feeds:
     update_interval: 3600  # mirror refreshes ~hourly
 
   # --- Retired feeds kept for reference (disabled) -----------------------
-  - name: abuse_ch_sslbl
-    url: https://sslbl.abuse.ch/blacklist/sslipblacklist.txt
-    feed_type: "malware"
-    update_interval: 3600
-    enabled: false
-
+  # Feodo and SSLBL were removed 2026-08: abuse.ch key-walled its platforms
+  # and the legacy text exports froze (SSLBL empty since 2025-01, Feodo one
+  # stale IP since 2026-03). The ThreatFox mirror above is the live
+  # replacement for abuse.ch botnet-C2 coverage.
   - name: abuse_ch_threatfox
     url: https://threatfox.abuse.ch/export/csv/ip-port/recent/
     feed_type: "malware"

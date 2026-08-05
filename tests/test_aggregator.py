@@ -280,10 +280,10 @@ def test_default_install_seeds_clean_feed_set(db):
 
     # These must be live and keyless on a fresh install.
     for name in ["emerging_threats_compromised", "emerging_threats_block",
-                 "cins_army", "blocklist_de", "bbcan177", "abuse_ch_feodo",
+                 "cins_army", "blocklist_de", "bbcan177",
                  "talos_snort", "dshield_block", "spamhaus_drop", "greensnow",
                  "dataplane_sshpwauth", "bruteforceblocker", "turris_greylist",
-                 "binarydefense"]:
+                 "binarydefense", "threatfox_mirror", "abuseipdb_s100_3d"]:
         assert name in enabled, f"{name} should be enabled out of the box"
 
     # These require setup and must ship disabled (no error rows out of box).
@@ -292,6 +292,10 @@ def test_default_install_seeds_clean_feed_set(db):
     # PhishTank was removed: it publishes phishing URLs, not attacker IPs, so
     # it must not reappear in the seed lineup.
     assert "phishTank" not in enabled | disabled
+    # Feodo and SSLBL were removed 2026-08 (abuse.ch key-walled the legacy
+    # text exports and they froze); they must not reappear either.
+    assert "abuse_ch_feodo" not in enabled | disabled
+    assert "abuse_ch_sslbl" not in enabled | disabled
 
 
 def test_restore_default_feeds_merges_without_clobber(db):
