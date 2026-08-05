@@ -41,7 +41,8 @@ inbound only.
   Copy button and firewall-specific instructions.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
   a refresh — all from the dashboard, no config editing.
-- A few feeds ship **disabled** (abuse.ch SSLBL and ThreatFox, AlienVault OTX,
+- A few feeds ship **disabled** (abuse.ch SSLBL, the auth-walled ThreatFox
+  export — a keyless ThreatFox mirror is enabled by default — AlienVault OTX,
   a sample custom list); enable them from the dashboard once configured. Feeds
   that need an API key (like OTX) have a **Set key** button — the key is
   stored server-side in the data volume's `.env`, applied immediately, and
@@ -91,8 +92,9 @@ firewalls can poll them.
 │  ├── Emerging Threats (compromised + block IPs)            │
 │  ├── Blocklist.de, CINS Army, GreenSnow, BBcan177          │
 │  ├── DataPlane, BruteForceBlocker, Turris, BinaryDefense   │
-│  ├── abuse.ch Feodo Tracker (botnet C2)                    │
-│  ├── Optional: SSLBL, ThreatFox, OTX (ship disabled)       │
+│  ├── abuse.ch Feodo + ThreatFox mirror (botnet C2)         │
+│  ├── AbuseIPDB top-reported (community abuse reports)      │
+│  ├── Optional: SSLBL, OTX (ship disabled)                  │
 │  └── Custom Feeds (user-defined, e.g. local honeypot)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Processing Engine                                          │
