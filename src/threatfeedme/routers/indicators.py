@@ -128,6 +128,11 @@ def get_indicator_detail(ip: str, _=Depends(require_auth)):
         "value": ind.metadata.get("cidr") or ind.ip,
         "tier": ind.tier.value,
         "confidence_score": round(ind.confidence_score, 3),
+        # Overlap-discounted independent-witness count from the last rescore.
+        # Includes netblock-derived votes, so it can exceed len(sources) —
+        # this is what explains the tier when the source list looks short.
+        "effective_votes": (round(ind.effective_votes, 2)
+                            if ind.effective_votes is not None else None),
         "sources": ind.sources,
     }
 

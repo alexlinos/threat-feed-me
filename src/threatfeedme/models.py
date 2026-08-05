@@ -158,6 +158,10 @@ class ThreatIndicator(BaseModel):
     confidence_score: float
     tier: ConfidenceTier
     metadata: Dict[str, Any] = {}
+    # Overlap-discounted independent-witness count from the last rescore
+    # (None until one has run). Includes netblock-derived votes, so it can
+    # exceed len(sources) — this is what explains an IP's tier.
+    effective_votes: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 

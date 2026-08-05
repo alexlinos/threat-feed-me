@@ -633,6 +633,35 @@ def test_delete_feed_purges_its_indicator_data(client):
     assert "purge_me" not in dashboard.db.get_feed_report_counts()
 
 
+# NOTE: keep this above the CSRF section — its fixture re-imports the
+# whole package against a different database, so a later
+# `from threatfeedme import dashboard` no longer matches `client`.
+def test_indicator_apis_expose_effective_votes(client):
+    # The module fixture is shared and earlier tests mutate it (whitelists,
+    # extra sources change the measured overlaps), so seed dedicated feeds
+    # this test alone uses: two mostly-disjoint sets sharing one IP, giving
+    # that IP a deterministic ~1.83 votes (1 + (1 - 1/6 overlap)).
+    from threatfeedme import dashboard
+    for i in range(1, 6):
+        dashboard.db.add_indicator(f"45.140.17.{i}", "ev_probe_a", {})
+        dashboard.db.add_indicator(f"45.140.18.{i}", "ev_probe_b", {})
+    dashboard.db.add_indicator("45.140.19.9", "ev_probe_a", {})
+    dashboard.db.add_indicator("45.140.19.9", "ev_probe_b", {})
+    assert client.post("/api/recalculate-scores").status_code == 200
+
+    # Paginated list: every row carries the field for the dashboard table.
+    rows = client.get("/api/indicators?limit=200").json()["indicators"]
+    assert rows and all("effective_votes" in r for r in rows)
+    assert all(r["effective_votes"] is not None for r in rows)
+
+    # Single-IP detail exposes the same number the list shows; the probe IP
+    # reported by both (mostly disjoint) feeds lands near two full votes.
+    j = client.get("/api/indicators/45.140.19.9").json()
+    assert j["effective_votes"] == pytest.approx(1.83, abs=0.01)
+    by_ip = {r["ip"]: r for r in rows}
+    assert by_ip["45.140.19.9"]["effective_votes"] == j["effective_votes"]
+
+
 # ==================== CSRF protection tests ====================
 
 

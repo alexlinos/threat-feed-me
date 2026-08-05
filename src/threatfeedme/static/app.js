@@ -199,13 +199,19 @@ async function loadIndicators() {
     indTotal = j.total;
     const body = document.getElementById('ind-body');
     if (!j.indicators.length) {
-        body.innerHTML = '<tr><td colspan="5" class="muted">No matching indicators.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" class="muted">No matching indicators.</td></tr>';
     } else {
         body.innerHTML = j.indicators.map(i => {
             const badge = 'tier-' + i.tier;
+            // Effective votes can exceed the source count (netblock votes are
+            // counted but not listed); flag that with a + so it reads as
+            // "more evidence than the sources shown".
+            const votes = i.effective_votes == null ? '—'
+                : i.effective_votes.toFixed(1) + (i.effective_votes > i.sources.length ? '+' : '');
             return '<tr><td><code>' + esc(i.value) + '</code></td>' +
                 '<td><span class="badge ' + badge + '">' + esc(i.tier) + '</span></td>' +
                 '<td>' + esc(i.confidence_score) + '</td>' +
+                '<td title="independent witnesses (overlap-discounted)">' + esc(votes) + '</td>' +
                 '<td class="muted" style="font-size:.82em">' + esc(i.sources.join(', ')) + '</td>' +
                 '<td><button class="mini-btn" data-ip="' + esc(i.ip) + '" onclick="openWhitelistModal(this.dataset.ip)">Whitelist…</button> <a class="vt-btn" href="https://www.virustotal.com/gui/search/' + encodeURIComponent(i.value) + '" target="_blank" title="Look up on VirusTotal">VT</a></td></tr>';
         }).join('');
@@ -312,6 +318,11 @@ async function openWhitelistModal(ip) {
         srcBox.innerHTML = sources.length
             ? sources.map(s => '<code>' + esc(s) + '</code>').join(' ')
             : '<span class="muted">no feed sources on record</span>';
+        if (j.effective_votes != null) {
+            srcBox.innerHTML += '<div class="muted" style="margin-top:6px" ' +
+                'title="Independent witnesses after overlap discounting; netblock votes are counted but not listed above.">' +
+                '≈ ' + esc(j.effective_votes.toFixed(1)) + ' independent votes</div>';
+        }
     } catch (e) { srcBox.textContent = 'Could not load sources'; }
     document.getElementById('wl-modal').classList.add('open');
 }

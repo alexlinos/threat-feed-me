@@ -86,6 +86,8 @@ class Database:
             confidence_score=row['confidence_score'],
             tier=tier,
             metadata=meta,
+            effective_votes=(row['effective_votes']
+                             if 'effective_votes' in row.keys() else None),
         )
 
     # ==================== SCHEMA ====================
@@ -398,7 +400,7 @@ class Database:
             ALL_FEEDS in feeds for _net, feeds in matcher.cidr_rules)
 
         select_sql = f"""
-            SELECT i.ip, i.confidence_score, i.tier, i.metadata,
+            SELECT i.ip, i.confidence_score, i.tier, i.metadata, i.effective_votes,
                    (SELECT GROUP_CONCAT(source_name) FROM indicator_sources
                     WHERE indicator_id = i.id) AS sources_str
             FROM indicators i{where_sql}
@@ -429,6 +431,8 @@ class Database:
                     "value": _meta_cidr(meta) or ip,
                     "tier": row['tier'],
                     "confidence_score": round(row['confidence_score'], 3),
+                    "effective_votes": (round(row['effective_votes'], 2)
+                                        if row['effective_votes'] is not None else None),
                     "sources": (row['sources_str'] or '').split(',') if row['sources_str'] else [],
                 })
             return {"total": total, "rows": rows}
