@@ -2110,3 +2110,14 @@ def test_legacy_method_preserves_fixed_gates(db):
     scorer = ConfidenceScorer(db, CONFIG)   # CONFIG pins method: legacy
     _score, tier = scorer.calculate_score("203.0.113.9")
     assert tier == ConfidenceTier.HIGH      # 3 sources, fresh -> high
+
+
+def test_package_version_matches_pyproject():
+    """__version__ sat at 1.1.0 for seven releases because nothing checked it;
+    the footer now displays it, so drift would mislead operators verifying an
+    upgrade. CI's tag gate compares pyproject; this ties __init__ to it."""
+    import tomllib
+    from threatfeedme import __version__
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    with open(os.path.join(root, "pyproject.toml"), "rb") as f:
+        assert tomllib.load(f)["project"]["version"] == __version__

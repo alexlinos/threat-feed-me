@@ -676,6 +676,12 @@ def test_feeds_are_cumulative_high_subset_of_medium(client):
     assert med  # non-empty
 
 
+def test_footer_shows_running_version(client):
+    from threatfeedme import __version__
+    body = client.get("/").text
+    assert f"v{__version__}" in body
+
+
 # ==================== CSRF protection tests ====================
 
 

@@ -79,6 +79,12 @@ jobs:
             echo "::error::tag ${{ steps.meta.outputs.version }} != pyproject.toml version $PYPROJECT_VERSION — bump pyproject.toml first"
             exit 1
           fi
+          # The dashboard footer displays __version__; keep it honest too.
+          INIT_VERSION=$(grep -m1 '^__version__' src/threatfeedme/__init__.py | cut -d'"' -f2)
+          if [ "$INIT_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::tag ${{ steps.meta.outputs.version }} != __init__.py __version__ $INIT_VERSION — bump both version fields"
+            exit 1
+          fi
 
       # Fail before publishing rather than shipping a broken image.
       - name: Run tests

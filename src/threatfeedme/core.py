@@ -127,6 +127,9 @@ def init(config_path: str = None):
     # Jinja2 templates (autoescaping on for .html — the structural XSS defence).
     # Anchored to this module's directory so it works regardless of CWD.
     _templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+    # Every page footer shows which version is running (upgrade sanity check).
+    from threatfeedme import __version__
+    _templates.env.globals["app_version"] = __version__
 
     _initialized = True
 
