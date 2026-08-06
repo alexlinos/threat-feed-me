@@ -14,7 +14,7 @@ from threatfeedme.feed_ingestor import FeedIngestor
 from threatfeedme.scorer import ConfidenceScorer
 from threatfeedme.safety import SafetyFilter
 from threatfeedme.exporter import _write_text, _write_csv, _write_json, is_included
-from threatfeedme.models import ConfidenceTier
+from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +90,9 @@ def recalculate(db: Database, config: Dict) -> int:
 # ---- Export (inlined from the Exporter class) ----
 
 def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str, format: str = "text") -> str:
-    """Export a single confidence tier to a file. Returns filepath."""
-    indicators = db.get_all_indicators_by_tier(tier)
+    """Export a single confidence-tier file (cumulative: the medium file
+    contains every high- or medium-tier indicator). Returns filepath."""
+    indicators = db.get_all_indicators_by_tiers(CUMULATIVE_TIERS[tier])
     wl_map = db.get_whitelist_map()
     indicators = [i for i in indicators if is_included(i, wl_map, tier=tier)]
 
@@ -128,10 +129,11 @@ def get_export_stats(db: Database) -> Dict:
     stats = {}
     wl_map = db.get_whitelist_map()
     for tier in ConfidenceTier:
-        indicators = db.get_all_indicators_by_tier(tier)
+        # Cumulative, matching the exported files (low_count == everything).
+        indicators = db.get_all_indicators_by_tiers(CUMULATIVE_TIERS[tier])
         indicators = [i for i in indicators if is_included(i, wl_map)]
         stats[f"{tier.value}_count"] = len(indicators)
-    stats["total_unique_ips"] = sum(stats.values())
+    stats["total_unique_ips"] = stats.get("low_count", 0)
     stats["whitelisted_count"] = len(db.get_whitelist())
     return stats
 

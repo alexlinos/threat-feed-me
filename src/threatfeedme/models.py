@@ -127,6 +127,18 @@ class ConfidenceTier(str, Enum):
     LOW = "low"
 
 
+# Served feeds are cumulative thresholds, not exclusive buckets: an operator
+# polling medium.txt must get every high-confidence IP too (the docs have
+# always promised "medium = corroborated OR BETTER"). Maps each output feed
+# to the indicator tiers it contains.
+CUMULATIVE_TIERS = {
+    ConfidenceTier.HIGH: (ConfidenceTier.HIGH,),
+    ConfidenceTier.MEDIUM: (ConfidenceTier.HIGH, ConfidenceTier.MEDIUM),
+    ConfidenceTier.LOW: (ConfidenceTier.HIGH, ConfidenceTier.MEDIUM,
+                         ConfidenceTier.LOW),
+}
+
+
 class FeedSource(BaseModel):
     name: str
     url: str

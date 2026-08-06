@@ -10,7 +10,8 @@ from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
 from threatfeedme.exporter import is_included
 from threatfeedme.feed_helpers import TIER_FEEDS, _feed_base
-from threatfeedme.models import ALL_FEEDS, ConfidenceTier, FeedType, WHITELIST_REASONS
+from threatfeedme.models import (ALL_FEEDS, ConfidenceTier, CUMULATIVE_TIERS,
+                                 FeedType, WHITELIST_REASONS)
 from threatfeedme.scheduler import REFRESH_INTERVAL_KEY, _refresh_interval_minutes, _run_backup
 from threatfeedme.pipeline import RETENTION_MAX_AGE_KEY, retention_max_age_days
 from threatfeedme.schemas import SettingsRequest
@@ -89,16 +90,27 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # of indicators the dashboard was spending seconds just to count.
     wl_map = core.db.get_whitelist_map()
     all_inds = core.db.get_all_indicators()
-    counts = {}
-    for f in TIER_FEEDS:
-        tier_key = f["key"]
-        if tier_key == "all":
-            counts[tier_key] = sum(1 for i in all_inds if is_included(i, wl_map))
-        else:
-            tier_enum = ConfidenceTier(tier_key)
-            counts[tier_key] = sum(1 for i in all_inds
-                                   if i.tier == tier_enum
-                                   and is_included(i, wl_map, tier=tier_enum))
+    # Two different numbers per tier, both needed: `counts` is the exclusive
+    # distribution (the stat tiles — where indicators sit), `served` is what
+    # each feed URL actually returns (cumulative: medium.txt contains high).
+    # Which output feeds contain an indicator is the inverse of
+    # CUMULATIVE_TIERS; tier-scoped whitelist exclusions apply per output.
+    outputs_containing = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
+                                   if t in members)
+                          for t in ConfidenceTier}
+    counts = {t.value: 0 for t in ConfidenceTier}
+    served = {t.value: 0 for t in ConfidenceTier}
+    counts["all"] = served["all"] = 0
+    for i in all_inds:
+        if not is_included(i, wl_map):
+            continue
+        counts["all"] += 1
+        served["all"] += 1
+        if is_included(i, wl_map, tier=i.tier):
+            counts[i.tier.value] += 1
+        for out in outputs_containing[i.tier]:
+            if is_included(i, wl_map, tier=out):
+                served[out.value] += 1
 
     # ---- Feed URL cards (the hero of the page) ----
     total_inds = len(all_inds)
@@ -108,8 +120,8 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "label": f["label"],
             "blurb": f["description"],
             "recommended": f["recommended"],
-            "count": counts[f["key"]],
-            "processing": f["key"] != "all" and counts[f["key"]] == 0 and total_inds > 0,
+            "count": served[f["key"]],
+            "processing": f["key"] != "all" and served[f["key"]] == 0 and total_inds > 0,
         }
         for f in TIER_FEEDS
     ]

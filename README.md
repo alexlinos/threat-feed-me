@@ -212,11 +212,13 @@ into your firewall's external threat-feed / block-list setting:
 
 ```
 http://<server>:8080/feeds/high.txt      # independent sources agree (strictest)
-http://<server>:8080/feeds/medium.txt    # corroborated (recommended)
-http://<server>:8080/feeds/low.txt       # seen once (high volume)
+http://<server>:8080/feeds/medium.txt    # corroborated — includes high (recommended)
+http://<server>:8080/feeds/low.txt       # everything with evidence — includes medium
 http://<server>:8080/feeds/all.txt       # everything, deduplicated
 ```
 
+Feeds are **cumulative**: each tier's URL includes every tier above it, so a
+firewall polling one URL gets all indicators at or above that confidence.
 Each URL returns plain text, one IP or CIDR per line, generated live with the
 whitelist applied. `.csv` and `.json` variants are also available for SIEM use.
 

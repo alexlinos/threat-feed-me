@@ -11,7 +11,7 @@ from fastapi import Request
 
 from threatfeedme import core
 from threatfeedme.exporter import is_included
-from threatfeedme.models import ConfidenceTier, ThreatIndicator
+from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS, ThreatIndicator
 
 # ==================== FEED HELPERS ====================
 # Ordered so the UI renders strongest-first; "recommended" flags the default
@@ -26,13 +26,13 @@ TIER_FEEDS = [
     {
         "key": "medium",
         "label": "Medium Confidence",
-        "description": "Corroborated by more than one independent source",
+        "description": "Corroborated by more than one independent source — includes high",
         "recommended": False,
     },
     {
         "key": "low",
         "label": "Low Confidence",
-        "description": "All deduped IPs below medium threshold",
+        "description": "Every indicator with any evidence — includes medium and high",
         "recommended": False,
     },
     {
@@ -86,7 +86,12 @@ def _indicators_for(tier=None):
         indicators = core.db.get_all_indicators()
         return [i for i in indicators if is_included(i, wl_map)]
     tier_enum = ConfidenceTier(tier) if isinstance(tier, str) else tier
-    indicators = core.db.get_all_indicators_by_tier(tier_enum)
+    # Cumulative: medium.txt serves high + medium, low.txt serves everything —
+    # a firewall polling one URL must get every indicator at or above that
+    # confidence. Tier-scoped whitelist exclusions still key off the OUTPUT
+    # feed (tier=tier_enum), so "exclude from medium" hides an IP from
+    # medium.txt regardless of which tier the indicator itself carries.
+    indicators = core.db.get_all_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum])
     return [i for i in indicators if is_included(i, wl_map, tier=tier_enum)]
 
 

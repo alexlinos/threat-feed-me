@@ -662,6 +662,20 @@ def test_indicator_apis_expose_effective_votes(client):
     assert by_ip["45.140.19.9"]["effective_votes"] == j["effective_votes"]
 
 
+def test_feeds_are_cumulative_high_subset_of_medium(client):
+    """A firewall polling one URL must get every indicator at or above that
+    confidence: high ⊆ medium ⊆ low. Regression test for the exclusive-bucket
+    serving that silently dropped the highest-confidence IPs from the
+    recommended medium feed."""
+    high = set(client.get("/feeds/high.txt").text.split())
+    med = set(client.get("/feeds/medium.txt").text.split())
+    low = set(client.get("/feeds/low.txt").text.split())
+    assert high <= med <= low
+    # The fixture guarantees a medium-tier indicator exists, so medium must
+    # be a strict superset of high somewhere in the lifecycle of this module.
+    assert med  # non-empty
+
+
 # ==================== CSRF protection tests ====================
 
 
