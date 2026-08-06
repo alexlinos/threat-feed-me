@@ -3,14 +3,13 @@
 
 {% block content %}
     {# Tiles show what each feed URL actually serves (feeds are cumulative:
-       medium contains high). The exclusive per-tier distribution lives in
-       the tooltip — it answers a different question ("where do indicators
-       sit"), and showing both as headline numbers proved confusing. #}
+       medium contains high). No separate "low" tile: the low/all feeds serve
+       everything blockable, so that number IS the total — repeating it read
+       as a bug. The exclusive per-tier distribution lives in the tooltips. #}
     <div class="stats">
-        <div class="stat"><div class="n">{{ '{:,}'.format(served['all']) }}</div><div class="l">Total blockable</div></div>
+        <div class="stat" title="Everything with any evidence — exactly what the low and all feeds serve"><div class="n">{{ '{:,}'.format(served['all']) }}</div><div class="l">Total blockable</div></div>
         <div class="stat" title="{{ '{:,}'.format(counts['high']) }} indicators sit at exactly this tier"><div class="n">{{ '{:,}'.format(served['high']) }}</div><div class="l">High feed serves</div></div>
         <div class="stat" title="{{ '{:,}'.format(counts['medium']) }} indicators sit at exactly this tier — the feed also includes high"><div class="n">{{ '{:,}'.format(served['medium']) }}</div><div class="l">Medium feed serves</div></div>
-        <div class="stat" title="{{ '{:,}'.format(counts['low']) }} indicators sit at exactly this tier — the feed also includes medium and high"><div class="n">{{ '{:,}'.format(served['low']) }}</div><div class="l">Low feed serves</div></div>
         <div class="stat"><div class="n">{{ '{:,}'.format(whitelist_count) }}</div><div class="l">Whitelisted</div></div>
     </div>
 
