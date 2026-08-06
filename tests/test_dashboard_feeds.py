@@ -691,6 +691,16 @@ def test_stat_tiles_show_served_counts(client):
     assert f'{med_served:,}' in body      # medium tile == medium.txt size
 
 
+def test_low_card_hidden_but_url_stays_live(client):
+    """low == all under cumulative serving: one "Everything" card on the
+    dashboard, but the low.txt URL keeps working for firewalls already
+    polling it."""
+    body = client.get("/").text
+    assert "Everything" in body
+    assert "/feeds/low.txt" not in body       # card gone
+    assert client.get("/feeds/low.txt").status_code == 200  # alias lives
+
+
 # ==================== CSRF protection tests ====================
 
 

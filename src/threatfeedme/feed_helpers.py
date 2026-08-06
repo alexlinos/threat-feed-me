@@ -30,15 +30,18 @@ TIER_FEEDS = [
         "recommended": False,
     },
     {
+        # With cumulative serving, low == all. The URL stays live (firewalls
+        # may poll it) but the dashboard shows a single "Everything" card.
         "key": "low",
         "label": "Low Confidence",
-        "description": "Every indicator with any evidence — includes medium and high",
+        "description": "Alias of the everything feed",
         "recommended": False,
+        "hidden": True,
     },
     {
         "key": "all",
-        "label": "All (merged)",
-        "description": "All indicators merged and deduped across tiers",
+        "label": "Everything",
+        "description": "Every indicator with any evidence — low.txt serves the same list",
         "recommended": False,
     },
 ]

@@ -213,8 +213,7 @@ into your firewall's external threat-feed / block-list setting:
 ```
 http://<server>:8080/feeds/high.txt      # independent sources agree (strictest)
 http://<server>:8080/feeds/medium.txt    # corroborated — includes high (recommended)
-http://<server>:8080/feeds/low.txt       # everything with evidence — includes medium
-http://<server>:8080/feeds/all.txt       # everything, deduplicated
+http://<server>:8080/feeds/all.txt       # everything with any evidence (low.txt is an alias)
 ```
 
 Feeds are **cumulative**: each tier's URL includes every tier above it, so a

@@ -125,7 +125,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "count": served[f["key"]],
             "processing": f["key"] != "all" and served[f["key"]] == 0 and total_inds > 0,
         }
-        for f in TIER_FEEDS
+        for f in TIER_FEEDS if not f.get("hidden")
     ]
 
     # ---- Feed false-positive health ----
