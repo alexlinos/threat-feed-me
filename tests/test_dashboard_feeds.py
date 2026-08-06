@@ -682,6 +682,15 @@ def test_footer_shows_running_version(client):
     assert f"v{__version__}" in body
 
 
+def test_stat_tiles_show_served_counts(client):
+    """The headline tiles answer "what does my firewall get" — they must
+    match the cumulative feed files, not the exclusive tier distribution."""
+    body = client.get("/").text
+    assert "feed serves" in body          # tiles renamed to served semantics
+    med_served = len([l for l in client.get("/feeds/medium.txt").text.splitlines() if l.strip()])
+    assert f'{med_served:,}' in body      # medium tile == medium.txt size
+
+
 # ==================== CSRF protection tests ====================
 
 

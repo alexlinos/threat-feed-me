@@ -2,11 +2,15 @@
 {% block subtitle %}Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.{% endblock %}
 
 {% block content %}
+    {# Tiles show what each feed URL actually serves (feeds are cumulative:
+       medium contains high). The exclusive per-tier distribution lives in
+       the tooltip — it answers a different question ("where do indicators
+       sit"), and showing both as headline numbers proved confusing. #}
     <div class="stats">
-        <div class="stat"><div class="n">{{ '{:,}'.format(counts['all']) }}</div><div class="l">Total blockable</div></div>
-        <div class="stat"><div class="n">{{ '{:,}'.format(counts['high']) }}</div><div class="l">High confidence</div></div>
-        <div class="stat"><div class="n">{{ '{:,}'.format(counts['medium']) }}</div><div class="l">Medium confidence</div></div>
-        <div class="stat"><div class="n">{{ '{:,}'.format(counts['low']) }}</div><div class="l">Low confidence</div></div>
+        <div class="stat"><div class="n">{{ '{:,}'.format(served['all']) }}</div><div class="l">Total blockable</div></div>
+        <div class="stat" title="{{ '{:,}'.format(counts['high']) }} indicators sit at exactly this tier"><div class="n">{{ '{:,}'.format(served['high']) }}</div><div class="l">High feed serves</div></div>
+        <div class="stat" title="{{ '{:,}'.format(counts['medium']) }} indicators sit at exactly this tier — the feed also includes high"><div class="n">{{ '{:,}'.format(served['medium']) }}</div><div class="l">Medium feed serves</div></div>
+        <div class="stat" title="{{ '{:,}'.format(counts['low']) }} indicators sit at exactly this tier — the feed also includes medium and high"><div class="n">{{ '{:,}'.format(served['low']) }}</div><div class="l">Low feed serves</div></div>
         <div class="stat"><div class="n">{{ '{:,}'.format(whitelist_count) }}</div><div class="l">Whitelisted</div></div>
     </div>
 

@@ -177,6 +177,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "telemetry": telemetry,
         "feed_base": feed_base,
         "counts": counts,
+        "served": served,
         "whitelist_count": len(whitelist),
         "feed_cards": feed_cards,
         "feed_rows": feed_rows,
