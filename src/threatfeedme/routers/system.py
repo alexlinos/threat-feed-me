@@ -89,19 +89,22 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # a correlated GROUP_CONCAT subquery per row, so with tens of thousands
     # of indicators the dashboard was spending seconds just to count.
     wl_map = core.db.get_whitelist_map()
-    all_inds = core.db.get_all_indicators()
     # Two different numbers per tier, both needed: `counts` is the exclusive
     # distribution (the stat tiles — where indicators sit), `served` is what
     # each feed URL actually returns (cumulative: medium.txt contains high).
     # Which output feeds contain an indicator is the inverse of
     # CUMULATIVE_TIERS; tier-scoped whitelist exclusions apply per output.
+    # Streamed, not materialized: a full-table model list on every dashboard
+    # view was one of the allocations that OOMed 2 GB deployments.
     outputs_containing = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
                                    if t in members)
                           for t in ConfidenceTier}
     counts = {t.value: 0 for t in ConfidenceTier}
     served = {t.value: 0 for t in ConfidenceTier}
     counts["all"] = served["all"] = 0
-    for i in all_inds:
+    total_inds = 0
+    for i in core.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
+        total_inds += 1
         if not is_included(i, wl_map):
             continue
         counts["all"] += 1
@@ -113,7 +116,6 @@ def dashboard(request: Request, _=Depends(require_auth)):
                 served[out.value] += 1
 
     # ---- Feed URL cards (the hero of the page) ----
-    total_inds = len(all_inds)
     feed_cards = [
         {
             "name": f["key"],

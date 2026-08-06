@@ -288,7 +288,7 @@ def clear_feed_false_positives(name: str, ip: Optional[str] = None,
         # Reputation changed for this feed, so every indicator it reported
         # can shift tier — full rescore, then re-export the tier files.
         pipeline.recalculate(core.db, core.config)
-        pipeline.export_tiers(core.db, core.config)
+        pipeline.export_tiers_async(core.db, core.config)
     return {"success": True, "cleared": cleared, "feed": name}
 
 

@@ -23,6 +23,11 @@ services:
       - DASHBOARD_USER=${DASHBOARD_USER:-}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
     restart: unless-stopped
+    # Small-box hosts (Synology/QNAP NAS, Raspberry Pi): cap the container so
+    # a rescore/export burst can never starve the rest of the box. v1.8.3+
+    # streams its heavy paths and runs comfortably inside this. See
+    # "Small-box deployments" in the README.
+    # mem_limit: 1g
     healthcheck:
       test: ["CMD", "python", "-c", "import requests,sys; sys.exit(0 if requests.get('http://127.0.0.1:8080/feeds/all.txt', timeout=5).ok else 1)"]
       interval: 30s

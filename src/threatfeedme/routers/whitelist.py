@@ -95,8 +95,10 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
             score, tier = scorer.calculate_score(stored_ip)
             core.db.set_indicator_score(stored_ip, score, tier.value)
 
-        # Re-export all tier feeds so whitelisted IPs disappear immediately.
-        pipeline.export_tiers(core.db, core.config)
+        # The live feed URLs exclude whitelisted IPs at serve time, so the
+        # change is already visible; the on-disk export files rebuild in the
+        # background instead of freezing this request for 12 full-table loads.
+        pipeline.export_tiers_async(core.db, core.config)
 
         if feed_name == ALL_FEEDS:
             scope = "all tiers"
@@ -134,7 +136,8 @@ def remove_from_whitelist(ip: str, feed: Optional[str] = None, _=Depends(require
             scorer = ConfidenceScorer(core.db, pipeline.scorer_config(core.db, core.config))
             score, tier = scorer.calculate_score(stored_ip)
             core.db.set_indicator_score(stored_ip, score, tier.value)
-        # Re-export all tier feeds so the change is reflected immediately.
-        pipeline.export_tiers(core.db, core.config)
-        return {"success": True, "message": f"Whitelist entry for {ip} removed — rescored and re-exported"}
+        # Live URLs reflect the removal immediately; the on-disk export
+        # files rebuild in the background (see export_tiers_async).
+        pipeline.export_tiers_async(core.db, core.config)
+        return {"success": True, "message": f"Whitelist entry for {ip} removed — rescored; exports rebuilding"}
     raise HTTPException(status_code=404, detail="IP not found in whitelist")

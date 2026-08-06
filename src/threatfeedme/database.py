@@ -364,14 +364,33 @@ class Database:
     def get_all_indicators_by_tiers(self, tiers) -> List[ThreatIndicator]:
         """Indicators whose tier is in `tiers` (for cumulative feed serving:
         medium.txt is every high- OR medium-tier indicator)."""
+        return list(self.iter_indicators_by_tiers(tiers))
+
+    def iter_indicators_by_tiers(self, tiers, batch: int = 5000):
+        """Stream indicators whose tier is in `tiers`, in score order.
+
+        Generator so the tier-file exports never hold the whole table as
+        model objects — a full materialized list is hundreds of MB at 100k+
+        indicators, which OOMed small (2 GB) container deployments when
+        exports overlapped with a dashboard load or rescore.
+        """
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
-        with self._cursor() as cur:
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
             cur.execute(
                 "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
                 f"FROM indicators i WHERE i.tier IN ({marks}) ORDER BY i.confidence_score DESC",
                 values)
-            return [self._row_to_indicator(r) for r in cur.fetchall()]
+            while True:
+                rows = cur.fetchmany(batch)
+                if not rows:
+                    return
+                for r in rows:
+                    yield self._row_to_indicator(r)
+        finally:
+            conn.close()
 
     def get_all_indicators(self) -> List[ThreatIndicator]:
         """Get all indicators regardless of tier"""

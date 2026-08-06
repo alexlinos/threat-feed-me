@@ -262,6 +262,25 @@ in `config.yaml` under `database.backup` (default: every 24h, keep 7, to
 `POST /api/backup` or `python -m threatfeedme.main --backup`. **Restore:** stop the app and
 copy a backup file over `data/threatfeedme.db`.
 
+## Small-box deployments (Synology, QNAP, Raspberry Pi)
+
+The container is built to fit NAS-class hosts with 1-2 GB of RAM:
+
+- The heavy paths — tier-file exports, the dashboard's counts, and the hourly
+  rescore — **stream rows instead of materializing the whole indicator table**,
+  so peak memory stays low even at 150k+ indicators (a tier export peaks at a
+  few MB instead of hundreds).
+- Whitelist changes rebuild the export files **in the background**; the
+  dashboard responds immediately and the live feed URLs reflect the change
+  instantly either way.
+- Cap the container so a burst can never starve the NAS — uncomment
+  `mem_limit: 1g` in `docker-compose.yml` (or set a memory limit in the
+  Synology Container Manager UI).
+- If you don't consume the CSV/JSON exports, set `output.formats: [text]` in
+  `config.yaml` — it cuts export work by two thirds.
+- The default 7-day retention keeps the database lean; lower
+  `retention.max_age_days` (dashboard toolbar) if disk or memory is tight.
+
 ## Upgrading
 
 Running the published image? Pull the new one:

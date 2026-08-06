@@ -41,13 +41,13 @@ def firewall_value(indicator: ThreatIndicator) -> str:
 
 # ---- Low-level format writers (no DB dependency) ----
 
-def _write_text(indicators: List[ThreatIndicator], filepath: str) -> None:
+def _write_text(indicators, filepath: str) -> None:
     with open(filepath, 'w') as f:
         for ind in indicators:
             f.write(f"{firewall_value(ind)}\n")
 
 
-def _write_csv(indicators: List[ThreatIndicator], filepath: str) -> None:
+def _write_csv(indicators, filepath: str) -> None:
     with open(filepath, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
@@ -58,13 +58,22 @@ def _write_csv(indicators: List[ThreatIndicator], filepath: str) -> None:
             ])
 
 
-def _write_json(indicators: List[ThreatIndicator], tier: ConfidenceTier, filepath: str) -> None:
-    data = {
-        "tier": tier.value,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "total_count": len(indicators),
-        "indicators": [
-            {
+def _write_json(indicators, tier: ConfidenceTier, filepath: str) -> None:
+    """Stream-write the JSON export one indicator at a time.
+
+    `indicators` may be any iterable (the export path passes a generator so
+    the whole tier never sits in memory). total_count is therefore written
+    AFTER the indicators array — key order carries no meaning in JSON, and
+    the count isn't known until the stream is exhausted.
+    """
+    with open(filepath, 'w') as f:
+        f.write('{\n')
+        f.write(f'  "tier": {json.dumps(tier.value)},\n')
+        f.write(f'  "generated_at": {json.dumps(datetime.now(timezone.utc).isoformat())},\n')
+        f.write('  "indicators": [')
+        count = 0
+        for i in indicators:
+            entry = {
                 "ip": i.ip,
                 "confidence_score": i.confidence_score,
                 "tier": i.tier.value,
@@ -73,8 +82,8 @@ def _write_json(indicators: List[ThreatIndicator], tier: ConfidenceTier, filepat
                 "sources": i.sources,
                 "metadata": i.metadata,
             }
-            for i in indicators
-        ],
-    }
-    with open(filepath, 'w') as f:
-        json.dump(data, f, indent=2)
+            f.write((',' if count else '') + '\n    ' + json.dumps(entry))
+            count += 1
+        f.write('\n  ],\n' if count else '],\n')
+        f.write(f'  "total_count": {count}\n')
+        f.write('}\n')

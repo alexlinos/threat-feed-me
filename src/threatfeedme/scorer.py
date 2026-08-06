@@ -144,29 +144,34 @@ class ConfidenceScorer:
         every indicator first, then tier boundaries from the resulting vote
         distribution (natural breaks over the floors), then tiers.
         """
-        indicators = self.db.get_all_indicators()
         whitelist_map = self.db.get_whitelist_map()
         netblocks = self._load_netblock_sources()
 
+        # Stream the table and keep only the per-indicator evidence tuple —
+        # holding the full model list AND an evidence list roughly doubled
+        # the largest allocation in the process, which starved 2 GB hosts
+        # (small Synology/NAS deployments) during the hourly rescore.
         evidence = []
-        for indicator in indicators:
+        count = 0
+        for indicator in self.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
+            count += 1
             score, votes, sources = self._evidence(indicator, netblocks, whitelist_map)
-            evidence.append((indicator, score, votes, sources))
+            evidence.append((indicator.ip, score, votes, sources))
 
         if self.tier_method == 'legacy':
             updates = [
                 (score, self._determine_tier(score, len(sources or []), sources).value,
-                 votes, ind.ip)
-                for ind, score, votes, sources in evidence
+                 votes, ip)
+                for ip, score, votes, sources in evidence
             ]
         else:
             med_b, high_b = self._breaks_for_votes(
-                [votes for _ind, _s, votes, sources in evidence if sources])
+                [votes for _ip, _s, votes, sources in evidence if sources])
             self._persist_breaks(med_b, high_b)
             updates = [
                 (score, self._tier_from_votes(votes, sources, med_b, high_b).value,
-                 votes, ind.ip)
-                for ind, score, votes, sources in evidence
+                 votes, ip)
+                for ip, score, votes, sources in evidence
             ]
 
         if updates:
@@ -181,7 +186,7 @@ class ConfidenceScorer:
             finally:
                 conn.close()
 
-        return len(indicators)
+        return count
 
     # ==================== SCORING INTERNALS ====================
 

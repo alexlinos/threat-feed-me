@@ -6,6 +6,7 @@ source of truth), not directly from config.
 """
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -92,9 +93,11 @@ def recalculate(db: Database, config: Dict) -> int:
 def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str, format: str = "text") -> str:
     """Export a single confidence-tier file (cumulative: the medium file
     contains every high- or medium-tier indicator). Returns filepath."""
-    indicators = db.get_all_indicators_by_tiers(CUMULATIVE_TIERS[tier])
+    # Generator end to end: rows stream from SQLite through the whitelist
+    # filter into the file writer without ever materializing the tier.
     wl_map = db.get_whitelist_map()
-    indicators = [i for i in indicators if is_included(i, wl_map, tier=tier)]
+    indicators = (i for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier])
+                  if is_included(i, wl_map, tier=tier))
 
     filename = f"{tier.value}_confidence_ips.{format}"
     filepath = os.path.join(output_dir, filename)
@@ -109,6 +112,48 @@ def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str, format: st
     else:
         raise ValueError(f"Unsupported format: {format}")
     return filepath
+
+
+# Background export machinery: whitelist/feedback endpoints must not pay for
+# a full tier-file rebuild inside the request (3 formats x 4 cumulative tiers
+# = 12 full-table loads — the UI froze for the duration). The LIVE feed URLs
+# don't need the files at all (the whitelist matcher applies at serve time);
+# only the on-disk exports do, and those can lag by a second.
+#
+# One worker at a time; a change landing mid-export sets the dirty flag so
+# the worker runs once more and the files always reflect the last change.
+_export_dirty = threading.Event()
+_export_state_lock = threading.Lock()
+_export_running = False
+
+
+def export_tiers_async(db: Database, config: Dict) -> None:
+    """Schedule export_tiers on a daemon thread, coalescing bursts."""
+    global _export_running
+    _export_dirty.set()
+    with _export_state_lock:
+        if _export_running:
+            return  # active worker will observe the dirty flag and rerun
+        _export_running = True
+
+    def _run():
+        global _export_running
+        try:
+            while _export_dirty.is_set():
+                _export_dirty.clear()
+                try:
+                    export_tiers(db, config)
+                except Exception:
+                    logger.exception("background tier export failed")
+        finally:
+            with _export_state_lock:
+                _export_running = False
+            # A change that landed exactly as the loop exited would be lost;
+            # re-schedule so its export still happens.
+            if _export_dirty.is_set():
+                export_tiers_async(db, config)
+
+    threading.Thread(target=_run, name="tier-export", daemon=True).start()
 
 
 def export_tiers(db: Database, config: Dict) -> Dict:
@@ -130,9 +175,9 @@ def get_export_stats(db: Database) -> Dict:
     wl_map = db.get_whitelist_map()
     for tier in ConfidenceTier:
         # Cumulative, matching the exported files (low_count == everything).
-        indicators = db.get_all_indicators_by_tiers(CUMULATIVE_TIERS[tier])
-        indicators = [i for i in indicators if is_included(i, wl_map)]
-        stats[f"{tier.value}_count"] = len(indicators)
+        stats[f"{tier.value}_count"] = sum(
+            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier])
+            if is_included(i, wl_map))
     stats["total_unique_ips"] = stats.get("low_count", 0)
     stats["whitelisted_count"] = len(db.get_whitelist())
     return stats
