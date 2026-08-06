@@ -122,65 +122,59 @@ firewalls can poll them.
 *(v1.8.0+ — the "effective votes" algorithm; set `scoring.tiering.method:
 legacy` in `config.yaml` for the old fixed thresholds.)*
 
-**The problem.** Counting sources treats every feed as an independent
-witness. Public feeds aren't independent: aggregators re-bundle each other
-(Emerging Threats includes Spamhaus DROP and DShield; BBcan177 aggregates
-other lists), and community feeds share reporters. Under a raw count, one
-dataset echoed by three feeds looks like three-way corroboration, and every
-feed you add inflates the counts further — until "High confidence" holds
-more IPs than Medium.
+**The one-sentence version.** An IP is dangerous only if *independent*
+sources agree on it — so we count **effective votes**, not raw sources, and
+draw the High/Medium/Low lines from the shape of the vote distribution so the
+tiers stay meaningful as the feed roster changes.
 
-**Step 1 — overlap-discounted votes.** At every rescore, pairwise feed
-overlap is measured from the live database (the same data behind the
-dashboard's overlap heatmap):
+**The problem, in plain terms.** Treat every feed as an independent witness
+and you get fooled. Public feeds aren't independent: Emerging Threats bundles
+Spamhaus DROP and DShield into its own list, BBcan177 re-publishes other
+lists, and community feeds share reporters. So the same dataset echoed by
+three feeds looks like three-way corroboration — and every redundant feed you
+add inflates the counts until "High confidence" holds more IPs than Medium.
+That's a lie in your blocklist.
 
-```
-overlap(A, B) = |A ∩ B| / min(|A|, |B|)
-```
+**The fix, as three questions.** Instead of trusting the raw count, each IP
+goes through three checks:
 
-An indicator's sources are then counted greedily, largest feed first, and
-each source's vote is discounted by its highest overlap with any source
-already counted:
+1. **Is this a real agreement?** *(overlap discount)* — We measure how much
+   each pair of feeds overlaps. Two feeds that are 90% the same list are one
+   witness, not two. Their votes get heavily discounted; near-disjoint feeds
+   keep full weight. So `spamhaus_drop + et_block + bbcan177` agreeing on a
+   DROP range is worth ~1.1 votes, not 3.
+2. **Is the witness reliable?** *(reputation weight)* — Every feed starts at
+   full weight (1.0). Flag a false positive from the dashboard and that feed's
+   weight drops automatically, so its IPs score lower until you stop seeing
+   mistakes from it.
+3. **Is the sighting fresh?** *(recency weight)* — A scan from three days ago
+   matters less than one from an hour ago. Age halves an indicator's score
+   every 72 hours.
 
-```
-vote(S) = 1 − max(overlap(S, already-counted))
-```
+**Where the tier lines come from.** After those weights, every IP has one
+number: its *effective votes* (how many genuinely independent, reputable,
+fresh witnesses it has). We then look at the shape of all those numbers —
+find the natural gaps in the crowd — and draw the cut lines there:
 
-Feeds reporting an IP because it sits inside a netblock they publish (e.g.
-a Spamhaus DROP /24) join the source list first and are discounted the same
-way — so `spamhaus_drop + emerging_threats_block + bbcan177` agreeing on a
-DROP range is worth ~1.1 votes, not 3.
-
-Worked example (real measured overlaps):
-
-| Sources reporting an IP | Raw count | Effective votes |
-|---|---|---|
-| `spamhaus_drop + et_block + bbcan177` (echoes) | 3 | ~1.1 |
-| `abuseipdb + turris + cins_army` (~55% pairwise) | 3 | ~2.1 |
-| `abuseipdb + threatfox + turris` (near-disjoint) | 3 | ~2.9 |
-
-Nothing here is hand-tuned: the discounts come from measured overlap and
-re-adjust automatically as feeds drift, are added, or removed.
-
-**Step 2 — data-driven tier boundaries.** The High/Medium cut lines are not
-fixed numbers either. Each full rescore runs a deterministic 1-D k-means
-(k = 3) over the whole population's vote distribution and places the
-boundaries at the midpoints between cluster centroids ("natural breaks"),
-then persists them so single-IP rescores use the same lines. Two semantic
-floors — the only constants in the system — bound them from below:
-
-- **Medium** requires strictly **more than 1** effective vote: corroborated
-  by at least something non-redundant.
-- **High** requires strictly **more than 2**: more than two independent
-  witnesses, plus at least one curated threat-intel feed
-  (`require_threat_intel`).
+- **Medium** — more than one real, independent vote: corroborated by
+  something non-redundant.
+- **High** — more than two independent votes, plus at least one curated
+  threat-intel feed (`require_threat_intel`). The cleanest list.
 
 A fresh or tiny database falls back to exactly these floors.
 
+**Why the lines stay put.** Recomputing tier boundaries every hour would
+silently re-bucket live firewall IPs as feeds age in and out (e.g. AbuseIPDB's
+3-day list cycling) — churn you'd see as noise in your blocklist. So the
+boundaries are held stable and only redrawn when the vote distribution
+*actually* moves: any decile drifts past a threshold, or a feed is added,
+removed, or resized. Stable week-to-week, responsive when the threat
+landscape genuinely changes.
+
 **What you'll observe.** Twin feeds stop double-counting; adding a redundant
 feed changes almost nothing; adding a genuinely novel source moves tiers.
-Each indicator's vote count is stored in the `effective_votes` column, so
-you can inspect why an IP landed where it did.
+Each indicator's vote count is stored in the `effective_votes` column, so you
+can inspect why an IP landed where it did.
 
 ## Run from source (without Docker)
 

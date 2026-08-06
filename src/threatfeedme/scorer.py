@@ -160,7 +160,7 @@ class ConfidenceScorer:
                 for ind, score, votes, sources in evidence
             ]
         else:
-            med_b, high_b = self._natural_breaks(
+            med_b, high_b = self._breaks_for_votes(
                 [votes for _ind, _s, votes, sources in evidence if sources])
             self._persist_breaks(med_b, high_b)
             updates = [
@@ -287,6 +287,91 @@ class ConfidenceScorer:
             votes += max(0.0, 1.0 - discount)
             counted.append(s)
         return votes
+
+    TIER_BREAKS_KEY = 'tier_breaks'
+    TIER_FINGERPRINT_KEY = 'tier_breaks_fingerprint'
+
+    def _breaks_for_votes(self, votes: List[float]) -> tuple[float, float]:
+        """Tier boundaries, held stable between rescores unless the vote
+        distribution actually moves.
+
+        Because tier is the firewall block gate, hourly k-means recomputation
+        would silently re-bucket live indicators as feeds age in/out. We reuse
+        the persisted breaks unless (a) the vote distribution has shifted past
+        a threshold (quantile fingerprint drift) or (b) the feed roster
+        changed (source-count fingerprint). Only then re-run k-means. The
+        configured floors remain hard minimums in all paths.
+        """
+        # First rescore (no stored fingerprint): compute and persist.
+        fingerprint = self._load_fingerprint()
+        if fingerprint is None:
+            med_b, high_b = self._natural_breaks(votes)
+            self._persist_fingerprint(votes)
+            return med_b, high_b
+
+        if self._fingerprint_moved(votes, fingerprint):
+            med_b, high_b = self._natural_breaks(votes)
+            self._persist_fingerprint(votes)
+            return med_b, high_b
+
+        # Distribution unchanged -> keep the stable boundaries.
+        return self._stored_breaks()
+
+    def _load_fingerprint(self) -> Optional[dict]:
+        try:
+            raw = self.db.get_setting(self.TIER_FINGERPRINT_KEY)
+            if raw:
+                j = json.loads(raw)
+                if 'votes' in j and 'sources' in j:
+                    return j
+        except Exception:
+            pass
+        return None
+
+    def _persist_fingerprint(self, votes: List[float]) -> None:
+        try:
+            self.db.set_setting(
+                self.TIER_FINGERPRINT_KEY,
+                json.dumps({'votes': self._fingerprint(votes),
+                            'sources': self._source_fingerprint()}),
+            )
+        except Exception:
+            pass  # never let bookkeeping break a rescore
+
+    def _fingerprint(self, votes: List[float]) -> List[float]:
+        """Quantile snapshot of the vote distribution (deciles). Stable,
+        order-independent, robust to outliers — a cheap summary of the whole
+        population."""
+        vals = sorted(v for v in votes if v > 0)
+        if not vals:
+            return []
+        qs = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0]
+        return [vals[min(len(vals) - 1, int(q * (len(vals) - 1)))] for q in qs]
+
+    def _source_fingerprint(self) -> List[str]:
+        """Roster fingerprint: feed names sorted by current source count, so a
+        feed added/removed or materially resized trips the shift check."""
+        sizes = dict(self._source_sizes or {})
+        return sorted((f"{n}={int(sizes.get(n, 0))}" for n in sizes),
+                      key=lambda s: (s.count('='), s))
+
+    def _fingerprint_moved(self, votes: List[float],
+                           fingerprint: dict) -> bool:
+        """True when the current vote distribution differs from the stored one
+        past a relative threshold, or the feed roster changed."""
+        new = self._fingerprint(votes)
+        old = fingerprint.get('votes') or []
+        if len(new) != len(old):
+            return True
+        for n, o in zip(new, old):
+            # Relative drift: any decile moving >25% (floor at 1.0) triggers
+            # a recompute. Absolute cap keeps tiny distributions from flapping.
+            denom = max(abs(o), 1.0)
+            if abs(n - o) / denom > 0.25:
+                return True
+        if fingerprint.get('sources') != self._source_fingerprint():
+            return True
+        return False
 
     def _natural_breaks(self, votes: List[float]) -> tuple[float, float]:
         """Find the medium/high tier boundaries from the vote distribution:

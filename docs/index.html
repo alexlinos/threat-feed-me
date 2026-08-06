@@ -263,10 +263,11 @@
       </div>
 
       <ul class="scoring">
-        <li>Scored on <b>independent votes</b> — each source discounted by its measured overlap with sources already counted (aggregators and netblock echoes are one witness, not several),</li>
-        <li><b>feed reputation</b> — equal by default and <i>earned</i>: flagging a false positive lowers that feed's weight,</li>
-        <li>and <b>age decay</b>. Whitelist false positives globally or per-feed; the list self-heals.</li>
+        <li><b>Is it a real agreement?</b> Two feeds that are mostly the same list are one witness, not two — so overlapping lists get discounted. <code>spamhaus + et + bbcan177</code> agreeing on a DROP range is worth ~1.1 votes, not 3.</li>
+        <li><b>Is the witness reliable?</b> Every feed starts at full weight. Flag a false positive and that feed's weight drops, so its IPs score lower until you stop seeing mistakes.</li>
+        <li><b>Is the sighting fresh?</b> A scan from three days ago matters less than one from an hour ago. Age halves an indicator's score every 72 hours.</li>
       </ul>
+      <p class="sub"><b>Tiers come from the shape of the crowd.</b> Every IP gets one number — how many genuinely independent, reputable, fresh witnesses it has. The tier lines are drawn at natural gaps in that distribution, and held stable so live firewall IPs don't reshuffle as feeds cycle in and out. They only move when the vote distribution actually shifts, or a feed is added, removed, or resized.</p>
       <p class="after-code" style="margin-top:18px">
         Each URL returns plain text, one IP or CIDR per line, generated live with the whitelist applied.
         <code>.csv</code> and <code>.json</code> variants are available for SIEM use.
