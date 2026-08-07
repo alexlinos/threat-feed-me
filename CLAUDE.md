@@ -53,62 +53,18 @@ releases already.
 - Comments carry design rationale, especially in `feed_ingestor.py`,
   `scorer.py`, and `telemetry.py`. Read before changing behaviour there.
 
-## Review findings — round 4 complete, fixes applied (uncommitted, branch `main`)
+## Open items (from the A2A serve review; fixes landed in 510d148)
 
-Working copy: `C:\Users\Beefcess\threat-feed-me` (the canonical clone). Changes are
-**NOT committed** — review against the working tree. Four A2A review passes done.
+Rounds 1-4 of the serve-immediately review were applied and committed in
+`510d148` — the log that used to live here described them as uncommitted,
+which stopped being true the moment they were committed. What remains open:
 
-### Round 1 fixes (Claude pass 1)
-- `main.py` `_serve(cfg)` — host/port resolve `$DASHBOARD_HOST`/`$DASHBOARD_PORT` env
-  override, then `dashboard.host`/`dashboard.port` from config.yaml, then safe
-  defaults `127.0.0.1`/`8080`; pins `CONFIG_PATH` + single `core.init()` before the
-  refresh thread; dead `db` param removed.
-- `core.py` `init()` — no-op guard on the SAME config (`if _initialized and
-  `_config_path == path: return`), closing the lifespan vs scheduler-thread
-  concurrent re-init race. `reset()` clears `_initialized`, so reset->init works.
-- `Dockerfile` `ENV DASHBOARD_HOST=0.0.0.0` before CMD (container binds externally).
-- `entrypoint.sh` `exec python -m threatfeedme.main --serve`.
-- `README.md` + `config.yaml` — stale binding text fixed.
-
-### Round 2 defect and fix (Claude pass 2)
-Claude found `_serve` resolved `cfg_path` from `CONFIG_PATH`/hardcoded `'config.yaml'`,
-discarding the CLI's `--config`. Fixed: `_serve(cfg, config_path=None)` accepts the
-caller's path; resolves `cfg_path = config_path or os.environ.get('CONFIG_PATH') or
-'config.yaml'`; call site passes `args.config`.
-
-### Round 3 fixes (Claude pass 3 recommendations)
-- `main.py`: host/port resolution extracted into module-level `_resolve_host_port(cfg)`
-  returning `(host, port)`; `_serve` delegates to it.
-- `tests/test_serve.py`: new host-resolution unit tests (env override > config >
-  default; env host alone keeps configured port).
-
-### Round 4 fixes (Claude pass 4 before-release)
-- Healthcheck blind-spot: both `Dockerfile` + `docker-compose.yml` probes changed from
-  `http://127.0.0.1:8080/...` to probe the container's own non-loopback address
-  (`socket.gethostbyname(socket.gethostname())`). `--start-period=10s` aligned with
-  compose's `start_period: 10s`. (Claude: 0.0.0.0 as destination is kernel-rewritten
-  to loopback, so the earlier 0.0.0.0 probe was exactly as blind as the loopback one.)
-- `main.py`: bare `python -m threatfeedme.main` now prints help and returns BEFORE
-  Database construction (old `if not any(vars(args).values())` check removed, which
-  could never fire because `args.config` always holds a truthy default).
-- `core.py` `reset()` now also clears `_config_path`.
-- Test env-leak fixed: `monkeypatch.setenv` instead of raw `os.environ[...]` writes,
-  and the two affected test functions now declare `monkeypatch` as a parameter.
-
-### Open items (Claude pass 4: can wait)
-- 3.1 `CONFIG_PATH` is inert as an operator knob on the CLI path — `args.config` always
-  has a default, so the env fallback is never consulted on the CLI. No deploy path sets
-  it. Low priority.
-- 3.4 Redundant second `Database` on `--serve`: `main()` builds one and runs seed+sync,
-  then `_serve` -> `core.init()` builds a second and runs seed+sync again. Idempotent
-  waste, not corruption. Cleanest fix is moving the `--serve` branch above Database
-  construction, but that is coupled with 3.1.
-- 3.5 Config-shape edge cases: `dashboard: {host: }` yields `host=None` passed to
-  uvicorn; `dashboard: {port: }` makes `int(None)` raise TypeError; `database:` null
-  breaks `cfg.get('database', {}).get('path', ...)`. Shipped `config.yaml` is well-formed.
-
-### What to verify before release
-- `python -m pytest tests -q` passes (202 passed locally).
-- Healthcheck probe actually fails on loopback-only bind / succeeds on wildcard bind
-  (new probe targets the container's non-loopback address).
-
+- `CONFIG_PATH` is inert as an operator knob on the CLI path — `args.config`
+  always holds a truthy default, so the env fallback is never consulted.
+  No deploy path sets it. Low priority.
+- Redundant second `Database` on `--serve`: `main()` builds one and runs
+  seed+sync, then `_serve` -> `core.init()` does it again. Idempotent waste,
+  not corruption; cleanest fix is coupled with the CONFIG_PATH item.
+- Config-shape edge cases: `dashboard: {host: }` yields `host=None` to
+  uvicorn; `dashboard: {port: }` makes `int(None)` raise; a null `database:`
+  key breaks path lookup. The shipped config.yaml is well-formed.

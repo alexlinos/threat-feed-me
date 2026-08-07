@@ -100,6 +100,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          # Supply-chain attestations: BuildKit SBOM + SLSA provenance ride
+          # along in the image manifest (see SECURITY.md for how to inspect).
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
