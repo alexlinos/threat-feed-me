@@ -25,7 +25,9 @@ CI publishes the Docker image on a `v*.*.*` tag and **refuses to publish if
 the tag and `pyproject.toml` disagree** — that guard has silently blocked two
 releases already.
 
-1. Bump `version` in `pyproject.toml`.
+1. Bump `version` in `pyproject.toml` **and** `__version__` in
+   `src/threatfeedme/__init__.py` — CI checks the tag against both (the
+   footer displays `__version__`), and a unit test keeps the pair in sync.
 2. Commit, push.
 3. `git tag vX.Y.Z && git push origin vX.Y.Z`
 4. Confirm the run at `gh run list --workflow "Publish Docker image"`. A tag
