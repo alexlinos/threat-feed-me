@@ -259,9 +259,9 @@ database:
     dir: ./data/backups
 
 dashboard:
-  # host/port apply when running `python -m threatfeedme.dashboard` directly.
-  # In Docker the entrypoint binds 0.0.0.0:8080 regardless (restrict exposure
-  # via the compose port mapping / firewall instead).
+# host/port apply when running `python -m threatfeedme.main --serve` directly.
+# The Docker entrypoint forces 0.0.0.0 via ENV DASHBOARD_HOST=0.0.0.0 (so
+# firewalls can poll the feed URLs); these values only affect source runs.
   host: 127.0.0.1
   port: 8080
   auth_required: false

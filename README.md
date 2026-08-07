@@ -189,24 +189,21 @@ cd threat-feed-me
 # Install the package (and its dependencies)
 pip install -e .
 
-# Run initial feed fetch
-python -m threatfeedme.main --fetch
-
-# Generate output feeds
-python -m threatfeedme.main --export
-
-# Start dashboard
-python -m threatfeedme.dashboard
+# Start the dashboard AND fetch feeds in the background (one command):
+# the Web UI comes up immediately, and feeds refresh behind it.
+python -m threatfeedme.main --serve
 ```
 
-> **Note:** run this way, the dashboard binds to `dashboard.host` / `dashboard.port`
-> from `config.yaml` — **`127.0.0.1:8080` by default**, i.e. localhost only. To
-> reach it from another machine, set `dashboard.host: 0.0.0.0` (the Docker
-> entrypoint already binds `0.0.0.0:8080`, so this note doesn't apply there).
+For remote access, the container binds 0.0.0.0 via `DASHBOARD_HOST`
+set in the Dockerfile (`ENV DASHBOARD_HOST=0.0.0.0`). Source runs stay
+localhost-only unless `dashboard.host` is set in config.yaml.
+
+> For one-shot pipeline runs (fetch, score, export, stats) use
+> `python -m threatfeedme.main --fetch|--export|--full` instead.
 
 ## Using the feeds in your firewall
 
-Start the dashboard (`python -m threatfeedme.dashboard` or via Docker) and open it in a
+Start the dashboard (`python -m threatfeedme.main --serve` or via Docker) and open it in a
 browser. Each confidence tier is published as a live URL you can paste directly
 into your firewall's external threat-feed / block-list setting:
 

@@ -13,9 +13,4 @@ python -c "from threatfeedme.core import load_config; from threatfeedme.database
 c = load_config(); Database(c.get('database', {}).get('path', './data/threatfeedme.db'))" \
     || echo "Schema init warning (continuing)" >&2
 
-(
-    python -m threatfeedme.main --full || \
-        echo "Initial pipeline run failed; dashboard will start with existing data" >&2
-) &
-
-exec uvicorn threatfeedme.app:app --host 0.0.0.0 --port 8080
+exec python -m threatfeedme.main --serve

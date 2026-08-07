@@ -34,6 +34,7 @@ _upload_dir = None
 _safety = None
 _templates = None
 _initialized = False
+_config_path = None
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -82,9 +83,15 @@ def init(config_path: str = None):
     state. When config_path is None, the CONFIG_PATH env var (or default
     'config.yaml') is used.
     """
-    global _config, _db, _db_path, _upload_dir, _safety, _templates, _initialized
+    global _config, _db, _db_path, _upload_dir, _safety, _templates, _initialized, _config_path
 
     path = config_path if config_path is not None else os.environ.get("CONFIG_PATH", "config.yaml")
+    # No-op if already initialized on the SAME config: the app lifespan and
+    # the background refresh both call init() — this closes the concurrent
+    # re-init race on the same SQLite file. reset() clears _initialized, so
+    # the reset() -> init() test path still re-initializes.
+    if _initialized and _config_path == path:
+        return
     _config = load_config(path)
     _db_path = _resolve_db_path(_config)
     _db = Database(_db_path)
@@ -131,6 +138,7 @@ def init(config_path: str = None):
     from threatfeedme import __version__
     _templates.env.globals["app_version"] = __version__
 
+    _config_path = path
     _initialized = True
 
 
@@ -175,7 +183,7 @@ def reset():
     After calling reset(), the next attribute access re-initialises from the
     environment — or call init(config_path) for a specific configuration.
     """
-    global _config, _db, _db_path, _upload_dir, _safety, _templates, _initialized
+    global _config, _db, _db_path, _upload_dir, _safety, _templates, _initialized, _config_path
     _config = None
     _db = None
     _db_path = None
@@ -183,3 +191,4 @@ def reset():
     _safety = None
     _templates = None
     _initialized = False
+    _config_path = None
