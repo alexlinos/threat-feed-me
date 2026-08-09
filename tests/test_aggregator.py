@@ -1317,6 +1317,129 @@ def test_dshield_scraper_rewrites_ranges_to_cidr(db, monkeypatch):
     assert "203.0.113.255" not in by_ip and len(by_ip) == 2
 
 
+# ------------------------------------------------------- OTX pulses scraper ----
+
+import ipaddress
+from threatfeedme.feed_ingestor import NOT_MODIFIED
+
+
+def _otx_feed():
+    return FeedSource(name="alienVault_otx",
+                      url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50",
+                      feed_type=FeedType.THREAT_INTEL, weight=1.0,
+                      update_interval=3600, requires_auth=True,
+                      auth_env="OTX_API_KEY", auth_header="X-OTX-API-KEY",
+                      scraper="otx_pulses")
+
+
+def _pulse_page(indicator_sets, next_url=None):
+    """Build one OTX pulses/subscribed JSON page from a list of indicator lists."""
+    pulses = [{"id": f"p{i}", "name": f"pulse{i}",
+               "indicators": [{"indicator": v, "type": t} for v, t in inds]}
+              for i, inds in enumerate(indicator_sets)]
+    page = {"results": pulses, "count": len(pulses)}
+    if next_url:
+        page["next"] = next_url
+    else:
+        page["next"] = None
+    return json.dumps(page)
+
+
+def test_otx_pulses_single_page_extracts_ipv4_only(db, monkeypatch):
+    """IPv4 indicator values are kept; IPv6/hostname/domain/URL/hash are dropped."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    body = _pulse_page([
+        [("1.1.1.1", "IPv4"), ("2.2.2.2", "IPv4"),
+         ("2001:db8::1", "IPv6"), ("evil.com", "hostname"),
+         ("https://x/y", "URL"), ("aa11bb", "FileHash-SHA1")],
+        [("1.1.1.1", "IPv4")],  # duplicate across pulses must collapse
+    ])
+    _stub_get(monkeypatch, [_FakeResponse(200, {}, body)])
+    feed = _otx_feed()
+    entries = FeedIngestor(db).fetch_feed(feed)
+    ips = sorted(e["ip"] for e in entries)
+    assert ips == ["1.1.1.1", "2.2.2.2"]
+    # no IPv6/hostname/URL/hash leaked in
+    assert all(ipaddress.ip_address(ip).version == 4 for ip in ips)
+
+
+def test_otx_pulses_paginates_via_next(db, monkeypatch):
+    """Page 2 is fetched from page 1's `next` URL; IPs from both pages ingested."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    page1 = _pulse_page([[("1.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    page2 = _pulse_page([[("2.2.2.2", "IPv4")]])
+    calls = _stub_get(monkeypatch, [
+        _FakeResponse(200, {}, page1),
+        _FakeResponse(200, {}, page2),
+    ])
+    feed = _otx_feed()
+    entries = FeedIngestor(db).fetch_feed(feed)
+    ips = sorted(e["ip"] for e in entries)
+    assert ips == ["1.1.1.1", "2.2.2.2"]
+    assert calls[1]["url"] == "https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2"
+
+
+def test_otx_pulses_pagination_cap_stops(db, monkeypatch):
+    """The page cap prevents following `next` beyond the bounded iterations."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    # Patch the module global by string path so the scraper's __globals__ sees it.
+    monkeypatch.setattr("threatfeedme.feed_ingestor._OTX_MAX_PAGES", 1)
+    # page1 -> next page2 -> next page3; with cap=1 only pages 1 and 2 are fetched.
+    page1 = _pulse_page([[("1.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    page2 = _pulse_page([[("2.2.2.2", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=3")
+    page3 = _pulse_page([[("3.3.3.3", "IPv4")]])
+    calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1), _FakeResponse(200, {}, page2), _FakeResponse(200, {}, page3)])
+    feed = _otx_feed()
+    entries = FeedIngestor(db).fetch_feed(feed)
+    # cap=1: the scraper ingests page 1 and stops before ever pulling page 2
+    # (it never fetches a page it wouldn't process on a later iteration).
+    assert sorted(e["ip"] for e in entries) == ["1.1.1.1"]
+    assert len(calls) == 1  # pages 2 and 3 never fetched
+
+
+def test_otx_pulses_empty_results_is_rejected(db, monkeypatch):
+    """An empty pulses response is a failed scrape, not a silent healthy 0."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    body = json.dumps({"results": [], "count": 0, "next": None})
+    _stub_get(monkeypatch, [_FakeResponse(200, {}, body)])
+    feed = _otx_feed()
+    with pytest.raises(RuntimeError, match="returned no indicators"):
+        FeedIngestor(db).fetch_feed(feed)
+
+
+def test_otx_pulses_malformed_json_raises(db, monkeypatch):
+    """A non-JSON 200 body fails immediately (no retry — a bad body won't fix itself)."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, "not json at all")])
+    delays = _stub_sleep(monkeypatch)
+    feed = _otx_feed()
+    with pytest.raises(RuntimeError, match="JSON parse failed"):
+        FeedIngestor(db).fetch_feed(feed)
+    assert len(calls) == 1
+    assert delays == []  # JSON error is not retried
+
+
+def test_otx_pulses_sends_auth_header_on_every_page(db, monkeypatch):
+    """X-OTX-API-KEY must be present on page 1 and every paginated page."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    page1 = _pulse_page([[("1.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    page2 = _pulse_page([[("2.2.2.2", "IPv4")]])
+    calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1), _FakeResponse(200, {}, page2)])
+    feed = _otx_feed()
+    FeedIngestor(db).fetch_feed(feed)
+    assert calls[0]["headers"]["X-OTX-API-KEY"] == "test-key-123"
+    assert calls[1]["headers"]["X-OTX-API-KEY"] == "test-key-123"
+
+
+def test_otx_pulses_304_short_circuits_before_pagination(db, monkeypatch):
+    """A 304 from the feed URL returns NOT_MODIFIED without fetching pages."""
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    calls = _stub_get(monkeypatch, [_FakeResponse(304)])
+    feed = _otx_feed()
+    assert FeedIngestor(db).fetch_feed(feed) is NOT_MODIFIED
+    assert len(calls) == 1
+
+
 def test_local_file_feed_bypasses_http_machinery(db, tmp_path, monkeypatch):
     def _never(*args, **kwargs):
         raise AssertionError("HTTP machinery must not run for local-file feeds")

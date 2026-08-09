@@ -147,12 +147,13 @@ feeds:
   # to. Requires a (free) OTX account: set OTX_API_KEY and enable from the
   # dashboard. Without subscribed pulses the export is empty.
   - name: alienVault_otx
-    url: https://otx.alienvault.com/api/v1/indicators/export?types=IPv4
+    url: https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50
     feed_type: "threat_intel"
     update_interval: 3600
     requires_auth: true
     auth_env: OTX_API_KEY
     auth_header: X-OTX-API-KEY
+    scraper: otx_pulses
     enabled: false
 
   - name: custom_honeypot

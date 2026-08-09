@@ -6,6 +6,7 @@ import re
 import socket
 import time
 import ipaddress
+import json
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple, Union
 from urllib.parse import urljoin, urlsplit
@@ -527,3 +528,66 @@ def _scrape_dshield_block(self: FeedIngestor, feed: FeedSource):
 
 
 FeedIngestor.register_scraper("dshield_block")(_scrape_dshield_block)
+
+
+# -----------------------------------------------------------------------------
+# AlienVault OTX subscribed-pulses scraper (JSON feed)
+#
+# The OTX /indicators/export endpoint is broken upstream (504/hangs), so this
+# feed pulls IPv4 indicators from the working /pulses/subscribed endpoint,
+# which returns JSON:
+#   {"results": [{..., "indicators": [{"indicator": "...", "type": "IPv4"}, ...]}],
+#    "count": N, "next": "<url or null>"}
+# Each pulse's `indicators` is an array of {indicator, type}; we keep only
+# type=="IPv4" and flatten them back into the same one-IP-per-line text the
+# generic parser expects, so the rest of the pipeline needs no changes.
+_OTX_MAX_PAGES = 20  # guard against a runaway `next` chain
+
+
+def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
+    content = self._fetch_url(feed)
+    if content is NOT_MODIFIED:
+        return NOT_MODIFIED
+    try:
+        page = json.loads(content)
+    except ValueError:
+        raise RuntimeError(f"{feed.name}: OTX pulses JSON parse failed")
+
+    lines = []
+    for _ in range(_OTX_MAX_PAGES):
+        for pulse in page.get('results') or []:
+            for indicator in pulse.get('indicators') or []:
+                if indicator.get('type') == 'IPv4':
+                    value = str(indicator.get('indicator') or '').strip()
+                    if value:
+                        lines.append(value)
+        next_url = page.get('next')
+        if not next_url:
+            break
+
+        # Cap the pages we ingest: never pull a page we won't process on a
+        # later iteration (avoids a wasted rate-limited call).
+        if _ == _OTX_MAX_PAGES - 1:
+            break
+
+        # Fetch the next page with the same auth the feed requires.
+        headers = {}
+        if feed.requires_auth:
+            api_key = os.environ.get(feed.auth_env) if feed.auth_env else None
+            if not api_key:
+                raise RuntimeError(
+                    f"{feed.name}: requires auth but env var "
+                    f"'{feed.auth_env}' is not set"
+                )
+            headers[feed.auth_header] = api_key
+        response = self._get_with_retries(next_url, headers)
+        response.raise_for_status()
+        try:
+            page = json.loads(response.text)
+        except ValueError:
+            raise RuntimeError(f"{feed.name}: OTX pulses JSON parse failed")
+
+    return "\n".join(lines)
+
+
+FeedIngestor.register_scraper("otx_pulses")(_scrape_otx_pulses)
