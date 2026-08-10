@@ -23,14 +23,26 @@ def _meta_cidr(meta: Dict) -> str:
     return meta.get('cidr') if meta else None
 
 
+# Feed fields that are mechanics (bug-fixable plumbing) rather than operator
+# preferences. sync_default_feeds applies shipped changes to these on any
+# seed-provenance row; enabled/weight/update_interval are never synced.
+_PLUMBING_FIELDS = ('url', 'feed_type', 'requires_auth', 'auth_env',
+                    'auth_header', 'local_file', 'scraper')
+
+
+def _plumbing_differs(a: FeedSource, b: FeedSource) -> bool:
+    return any(getattr(a, f) != getattr(b, f) for f in _PLUMBING_FIELDS)
+
+
 def _feed_fingerprint(feed: FeedSource) -> str:
     """Stable digest of a feed definition's seedable fields.
 
-    Stored on the feeds row when a default is seeded/synced. A row whose
-    CURRENT values still hash to its stored fingerprint is an untouched
-    default, which sync_default_feeds may safely update when the shipped
-    config changes; any user edit (URL, weight, enabled toggle, ...) makes
-    the values diverge from the fingerprint and the row is left alone."""
+    Its role since the plumbing/preference split: a NON-NULL value marks the
+    row as seed/sync/restore provenance, whose PLUMBING (url/scraper/auth/
+    type) follows shipped defaults on upgrade. A dashboard add/override
+    stores NULL (see add_feed), freezing the row — that is the operator's
+    way of owning a feed's plumbing. Preferences (enabled/weight/interval)
+    are never synced either way."""
     return json.dumps({
         'url': feed.url,
         'feed_type': feed.feed_type.value,
@@ -923,11 +935,14 @@ class Database:
         Runs on every startup. For each feed in config:
           - tombstoned (operator deleted it)     -> skipped, stays deleted
           - missing from the DB                  -> added (a new default)
-          - present and still an untouched
-            default (row matches its stored
-            fingerprint) but config changed      -> updated to the new default
-          - present but customized, or predating
-            fingerprints (NULL)                  -> left exactly as-is
+          - present with seed provenance and
+            shipped PLUMBING changed (url,
+            scraper, auth, type)                 -> plumbing updated in place;
+                                                    enabled/weight/interval
+                                                    (preferences) untouched
+          - operator-overridden row (dashboard
+            add nulls seed_fingerprint) or
+            predating fingerprints               -> left exactly as-is
 
         Indicators, whitelist entries, feedback, scores, and HTTP validators
         are never modified here — accumulated state (e.g. a multi-day rolling
@@ -955,13 +970,32 @@ class Database:
                 self.add_feed(feed, added_by='sync-defaults', seed_fingerprint=new_fp)
                 actions["added"].append(feed.name)
                 continue
-            stored_fp = fingerprints.get(feed.name)
-            current_fp = _feed_fingerprint(existing[feed.name])
-            # Update only untouched defaults: the row must still match the
-            # fingerprint it was seeded with (NULL = unknown provenance ->
-            # treat as customized), and the shipped default must have changed.
-            if stored_fp and stored_fp == current_fp and new_fp != stored_fp:
-                self.add_feed(feed, added_by='sync-defaults', seed_fingerprint=new_fp)
+            # Plumbing follows the ship; preferences belong to the operator.
+            #
+            # url/scraper/auth/type are MECHANICS — when a shipped default's
+            # mechanics change it is a bug fix (an upstream endpoint died),
+            # and it must reach every deployment using the feed. The old
+            # whole-row fingerprint gate froze a feed the moment the operator
+            # merely ENABLED it, which guaranteed opt-in feeds (OTX ships
+            # disabled) could never receive their own fixes.
+            #
+            # enabled/weight/update_interval are PREFERENCES — sync never
+            # touches them on an existing row.
+            #
+            # A non-NULL seed_fingerprint marks the row as seed/sync/restore
+            # provenance; a dashboard add/override nulls it (see add_feed),
+            # which is the one way an operator can change plumbing — those
+            # rows stay frozen, protecting deliberate URL overrides.
+            if fingerprints.get(feed.name) and _plumbing_differs(existing[feed.name], feed):
+                with self._cursor() as cur:
+                    cur.execute(
+                        "UPDATE feeds SET url = ?, feed_type = ?, requires_auth = ?, "
+                        "auth_env = ?, auth_header = ?, local_file = ?, scraper = ?, "
+                        "seed_fingerprint = ? WHERE name = ?",
+                        (feed.url, feed.feed_type.value, int(feed.requires_auth),
+                         feed.auth_env, feed.auth_header, int(feed.local_file),
+                         feed.scraper, new_fp, feed.name),
+                    )
                 actions["updated"].append(feed.name)
         return actions
 

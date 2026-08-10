@@ -72,7 +72,11 @@ def load_env_file(path: str) -> None:
             continue
         key, _, value = line.partition('=')
         key = key.strip()
-        if key and key not in os.environ:
+        # Present-but-EMPTY counts as unset: docker compose's
+        # `VAR=${VAR:-}` mappings inject empty strings for every variable
+        # the host doesn't define, and treating those as operator overrides
+        # silently discarded dashboard-saved API keys on every restart.
+        if key and not os.environ.get(key):
             os.environ[key] = value.strip()
 
 

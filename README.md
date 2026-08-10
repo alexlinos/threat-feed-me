@@ -302,9 +302,13 @@ Changes to the *shipped default feeds* are merged into your database
 automatically on startup:
 
 - **New default feeds** are added.
-- **Changed defaults** (e.g. an upstream URL moved) are updated — but only if
-  you never customized that feed. Any edit you made (URL, weight, interval,
-  enable/disable) exempts the feed from automatic updates permanently.
+- **Feed plumbing follows the ship; your preferences don't move.** When a
+  shipped default's mechanics change (upstream URL moved, a scraper was
+  added, auth changed), the fix is applied to your row — that's how feed
+  bug fixes reach you. Your *preferences* — enabled/disabled, weight,
+  refresh interval — are never touched by an update. The one exception: a
+  feed you re-added or overrode from the dashboard is yours entirely and is
+  never auto-updated.
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 

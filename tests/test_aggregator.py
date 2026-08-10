@@ -349,8 +349,9 @@ def test_sync_updates_untouched_default(db):
 
 
 def test_sync_never_clobbers_customized_feed(db):
-    """Any user edit (here: URL and weight via the dashboard add/update path)
-    exempts the feed from default-sync updates forever after."""
+    """A dashboard add/override (the only way an operator can change a feed's
+    URL) nulls seed_fingerprint and exempts the row from plumbing sync —
+    deliberate URL overrides are never clobbered."""
     db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
     db.add_feed(FeedSource(name="a", url="http://a/mine.txt", weight=0.4))
     actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/moved.txt"}]})
@@ -360,7 +361,8 @@ def test_sync_never_clobbers_customized_feed(db):
 
 
 def test_sync_enabled_toggle_counts_as_customization(db):
-    """Disabling a default from the dashboard must stick across app updates."""
+    """Preferences are never synced: a disabled toggle sticks across updates,
+    and a shipped update_interval change does not apply to existing rows."""
     db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
     db.set_feed_enabled("a", False)
     db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
@@ -2244,3 +2246,45 @@ def test_package_version_matches_pyproject():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     with open(os.path.join(root, "pyproject.toml"), "rb") as f:
         assert tomllib.load(f)["project"]["version"] == __version__
+
+
+# ------------------------------------------- plumbing sync + env loading ----
+
+def test_sync_fixes_plumbing_of_enabled_default(db):
+    """The OTX weekend bug: an opt-in feed must receive shipped plumbing
+    fixes (url/scraper) even after the operator enabled it and it ran —
+    enabling is a preference, not a plumbing edit. Preferences survive."""
+    db.seed_feeds_from_config({"feeds": [
+        {"name": "otx", "url": "http://otx/old-export", "requires_auth": True,
+         "auth_env": "OTX_API_KEY", "enabled": False},
+    ]})
+    db.set_feed_enabled("otx", True)   # operator opts in (old gate froze this)
+    actions = db.sync_default_feeds({"feeds": [
+        {"name": "otx", "url": "http://otx/new-pulses", "requires_auth": True,
+         "auth_env": "OTX_API_KEY", "scraper": "otx_pulses", "enabled": False},
+    ]})
+    assert actions["updated"] == ["otx"]
+    feed = db.get_feed_source("otx")
+    assert feed.url == "http://otx/new-pulses" and feed.scraper == "otx_pulses"
+    assert feed.enabled is True   # the operator's opt-in survives the fix
+
+
+def test_sync_plumbing_update_is_idempotent(db):
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/old"}]})
+    cfg = {"feeds": [{"name": "a", "url": "http://a/new"}]}
+    assert db.sync_default_feeds(cfg)["updated"] == ["a"]
+    assert db.sync_default_feeds(cfg)["updated"] == []
+
+
+def test_load_env_file_fills_empty_env_var(tmp_path, monkeypatch):
+    """compose's `VAR=${VAR:-}` mappings inject EMPTY env vars for anything
+    the host doesn't define; those must not shadow a dashboard-saved key on
+    the data volume (the key silently vanished on every restart)."""
+    from threatfeedme.core import load_env_file
+    envfile = tmp_path / ".env"
+    envfile.write_text("OTX_API_KEY=real-key-123\nOTHER=from-file\n")
+    monkeypatch.setenv("OTX_API_KEY", "")            # present but empty
+    monkeypatch.setenv("OTHER", "operator-wins")     # real operator value
+    load_env_file(str(envfile))
+    assert os.environ["OTX_API_KEY"] == "real-key-123"   # filled
+    assert os.environ["OTHER"] == "operator-wins"        # not overridden

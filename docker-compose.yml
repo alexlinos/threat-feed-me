@@ -17,11 +17,14 @@ services:
       # (e.g. AlienVault OTX) the easiest path is the dashboard's "Set key"
       # button, which stores the key in the data volume's .env. Setting the
       # variable here instead also works and takes precedence on restart.
-      - OTX_API_KEY=${OTX_API_KEY:-}
+      # Bare names pass the variable through ONLY when set on the host —
+      # the `${VAR:-}` form injected empty strings that masked dashboard-saved
+      # keys on the data volume (an empty env var shadowed the real key).
+      - OTX_API_KEY
       # Optional dashboard Basic auth (leave blank to keep the dashboard open on
       # a trusted LAN). If set, also set dashboard.auth_required: true.
-      - DASHBOARD_USER=${DASHBOARD_USER:-}
-      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - DASHBOARD_USER
+      - DASHBOARD_PASSWORD
     restart: unless-stopped
     # Small-box hosts (Synology/QNAP NAS, Raspberry Pi): cap the container so
     # a rescore/export burst can never starve the rest of the box. v1.8.3+
