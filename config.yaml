@@ -156,6 +156,36 @@ feeds:
     scraper: otx_pulses
     enabled: false
 
+  # --- HoneyDB (honeypot sensor network; requires free API credentials) --
+  # Community bad hosts seen in the LAST 24 HOURS — a rolling window, so
+  # retention accumulates the union across hourly fetches (dshield pattern).
+  # Auth is two headers (API id + key), which the generic single-var auth
+  # can't express — the honeydb scraper reads HONEYDB_API_ID and
+  # HONEYDB_API_KEY and builds both headers itself. The dashboard's Set key
+  # button prompts for each. Community quota: 1,000 requests/day; hourly
+  # refresh uses 24.
+  - name: honeydb_bad_hosts
+    url: https://honeydb.io/api/bad-hosts
+    feed_type: "threat_intel"
+    update_interval: 3600
+    requires_auth: true
+    auth_env: HONEYDB_API_ID,HONEYDB_API_KEY
+    scraper: honeydb
+    enabled: false
+
+  # Only hosts seen by sensors THIS account operates — your own honeypots
+  # voting as a source. Overlap discounting prices its correlation with the
+  # community feed honestly, so enabling both is safe. Often legitimately
+  # empty (treated as "no new data", never an error).
+  - name: honeydb_mydata
+    url: https://honeydb.io/api/bad-hosts/mydata
+    feed_type: "threat_intel"
+    update_interval: 3600
+    requires_auth: true
+    auth_env: HONEYDB_API_ID,HONEYDB_API_KEY
+    scraper: honeydb
+    enabled: false
+
   - name: custom_honeypot
     url: ./sample_honeypot_ips.txt
     feed_type: "custom"

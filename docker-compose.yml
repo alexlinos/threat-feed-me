@@ -21,6 +21,8 @@ services:
       # the `${VAR:-}` form injected empty strings that masked dashboard-saved
       # keys on the data volume (an empty env var shadowed the real key).
       - OTX_API_KEY
+      - HONEYDB_API_ID
+      - HONEYDB_API_KEY
       # Optional dashboard Basic auth (leave blank to keep the dashboard open on
       # a trusted LAN). If set, also set dashboard.auth_required: true.
       - DASHBOARD_USER

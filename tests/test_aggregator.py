@@ -290,7 +290,8 @@ def test_default_install_seeds_clean_feed_set(db):
         assert name in enabled, f"{name} should be enabled out of the box"
 
     # These require setup and must ship disabled (no error rows out of box).
-    for name in ["alienVault_otx", "custom_honeypot"]:
+    for name in ["alienVault_otx", "custom_honeypot",
+                 "honeydb_bad_hosts", "honeydb_mydata"]:
         assert name in disabled, f"{name} should be disabled by default"
     # PhishTank was removed: it publishes phishing URLs, not attacker IPs, so
     # it must not reappear in the seed lineup.
@@ -2288,3 +2289,70 @@ def test_load_env_file_fills_empty_env_var(tmp_path, monkeypatch):
     load_env_file(str(envfile))
     assert os.environ["OTX_API_KEY"] == "real-key-123"   # filled
     assert os.environ["OTHER"] == "operator-wins"        # not overridden
+
+
+# --------------------------------------------------- HoneyDB scraper ----
+
+class _FakeHoneyDBResponse:
+    def __init__(self, body):
+        self.text = body
+        self.status_code = 200
+    def raise_for_status(self):
+        pass
+
+
+def _honeydb_feed(name="honeydb_bad_hosts", url="https://honeydb.io/api/bad-hosts"):
+    return FeedSource(name=name, url=url, feed_type=FeedType.THREAT_INTEL,
+                      weight=1.0, update_interval=3600, requires_auth=True,
+                      auth_env="HONEYDB_API_ID,HONEYDB_API_KEY", scraper="honeydb")
+
+
+def test_honeydb_scraper_sends_both_headers_and_flattens(db, monkeypatch):
+    monkeypatch.setenv("HONEYDB_API_ID", "id-123")
+    monkeypatch.setenv("HONEYDB_API_KEY", "key-456")
+    seen = {}
+
+    def fake_get(url, headers):
+        seen["url"], seen["headers"] = url, headers
+        return _FakeHoneyDBResponse(
+            '[{"remote_host": "45.13.2.9", "count": "4"},'
+            ' {"remote_host": "91.92.242.236", "count": "1"}]')
+
+    ing = FeedIngestor(db)
+    monkeypatch.setattr(ing, "_get_with_retries", fake_get)
+    parsed = ing.fetch_feed(_honeydb_feed())
+    assert seen["headers"] == {"X-HoneyDb-ApiId": "id-123",
+                               "X-HoneyDb-ApiKey": "key-456"}
+    assert sorted(e["ip"] for e in parsed) == ["45.13.2.9", "91.92.242.236"]
+
+
+def test_honeydb_scraper_names_missing_credentials(db, monkeypatch):
+    monkeypatch.delenv("HONEYDB_API_ID", raising=False)
+    monkeypatch.setenv("HONEYDB_API_KEY", "key-456")
+    ing = FeedIngestor(db)
+    with pytest.raises(RuntimeError, match="HONEYDB_API_ID"):
+        ing.fetch_feed(_honeydb_feed())
+
+
+def test_honeydb_empty_window_is_not_an_error(db, monkeypatch):
+    """/mydata is legitimately empty when your sensors saw no attacks in the
+    last 24h — that must read as 'no new data', never as a failed scrape
+    (the zero-indicator guard would otherwise error and, over time, let
+    retention drain the feed's stored IPs)."""
+    from threatfeedme.feed_ingestor import NOT_MODIFIED
+    monkeypatch.setenv("HONEYDB_API_ID", "id-123")
+    monkeypatch.setenv("HONEYDB_API_KEY", "key-456")
+    ing = FeedIngestor(db)
+    monkeypatch.setattr(ing, "_get_with_retries",
+                        lambda url, headers: _FakeHoneyDBResponse("[]"))
+    assert ing.fetch_feed(_honeydb_feed("honeydb_mydata")) is NOT_MODIFIED
+
+
+def test_honeydb_rejects_non_list_response(db, monkeypatch):
+    monkeypatch.setenv("HONEYDB_API_ID", "id-123")
+    monkeypatch.setenv("HONEYDB_API_KEY", "key-456")
+    ing = FeedIngestor(db)
+    monkeypatch.setattr(ing, "_get_with_retries",
+                        lambda url, headers: _FakeHoneyDBResponse('{"status": "error"}'))
+    with pytest.raises(RuntimeError, match="response shape"):
+        ing.fetch_feed(_honeydb_feed())

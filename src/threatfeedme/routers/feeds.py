@@ -299,8 +299,13 @@ def api_key_status(name: str, _=Depends(require_auth)):
     if feed is None:
         raise HTTPException(status_code=404, detail="Feed not found")
     if not feed.auth_env:
-        return {"auth_env": None, "configured": False}
-    return {"auth_env": feed.auth_env, "configured": bool(os.environ.get(feed.auth_env))}
+        return {"auth_env": None, "configured": False, "vars": []}
+    env_vars = [v.strip() for v in feed.auth_env.split(',') if v.strip()]
+    return {
+        "auth_env": feed.auth_env,
+        "vars": [{"name": v, "configured": bool(os.environ.get(v))} for v in env_vars],
+        "configured": all(os.environ.get(v) for v in env_vars),
+    }
 
 
 @router.post("/api/feeds/{name}/api-key")
@@ -320,18 +325,42 @@ def set_api_key(name: str, request: ApiKeyRequest,
             status_code=400,
             detail="This feed has no auth_env configured; set one on the feed first",
         )
-    if not _ENV_VAR_RE.fullmatch(feed.auth_env):
+    declared = [v.strip() for v in feed.auth_env.split(',') if v.strip()]
+    if not all(_ENV_VAR_RE.fullmatch(v) for v in declared):
         raise HTTPException(status_code=400, detail="Feed auth_env is not a valid variable name")
-    key = request.api_key.strip()
-    if any(ord(c) < 32 or ord(c) == 127 for c in key):
-        raise HTTPException(status_code=400, detail="API key contains control characters")
 
-    _write_env_var(core.env_file(), feed.auth_env, key or None)
-    if key:
-        os.environ[feed.auth_env] = key
+    # Multi-credential feeds submit {ENV_VAR: value}; single-var feeds may
+    # keep using the plain api_key field. Only vars the feed declares in
+    # auth_env are writable — this endpoint must never become a generic
+    # environment editor.
+    if request.keys is not None:
+        submitted = request.keys
+        unknown = sorted(set(submitted) - set(declared))
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Variable(s) not declared by this feed: {', '.join(unknown)}",
+            )
+    elif len(declared) == 1:
+        submitted = {declared[0]: request.api_key}
     else:
-        os.environ.pop(feed.auth_env, None)
-    return {"success": True, "auth_env": feed.auth_env, "configured": bool(key)}
+        raise HTTPException(
+            status_code=400,
+            detail=f"This feed needs multiple credentials ({feed.auth_env}); "
+                   "submit them as {\"keys\": {VAR: value}}",
+        )
+
+    for var, raw in submitted.items():
+        value = raw.strip()
+        if any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise HTTPException(status_code=400, detail="API key contains control characters")
+        _write_env_var(core.env_file(), var, value or None)
+        if value:
+            os.environ[var] = value
+        else:
+            os.environ.pop(var, None)
+    return {"success": True, "auth_env": feed.auth_env,
+            "configured": all(os.environ.get(v) for v in declared)}
 
 
 # ---------------------- Refresh (manual) ----------------------

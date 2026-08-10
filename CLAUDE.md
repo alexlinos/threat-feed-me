@@ -69,45 +69,24 @@ which stopped being true the moment they were committed. What remains open:
   uvicorn; `dashboard: {port: }` makes `int(None)` raise; a null `database:`
   key breaks path lookup. The shipped config.yaml is well-formed.
 
-## Planned: HoneyDB feed (not started — pick up here)
+## HoneyDB feeds — implemented in v1.10.0, live testing pending
 
-Alex's honeypot now contributes to honeydb.io; wire HoneyDB in as an opt-in
-default feed. API facts verified 2026-08-10 against the official client
-(`github.com/honeydbio/honeydb-python`) and a live probe:
+Both feeds shipped, disabled by default: `honeydb_bad_hosts` (community,
+rolling 24h window) and `honeydb_mydata` (only Alex's own sensors — his
+honeypot contributes to honeydb.io). Implementation notes for whoever
+touches this next:
 
-- Base `https://honeydb.io/api`. `GET /bad-hosts` = community bad hosts from
-  the **last 24 hours** (rolling window — our retention accumulates the
-  union across fetches, same pattern as dshield). `GET /bad-hosts/mydata` =
-  only hosts seen by sensors the account operates.
-- Auth is **two headers**: `X-HoneyDb-ApiId` + `X-HoneyDb-ApiKey`
-  (unauthenticated → 401 JSON). This does NOT fit the single
-  `auth_env`/`auth_header` pair on FeedSource.
-- Quota: community accounts get 1,000 counted requests/day (midnight-UTC
-  reset); usage echoed in `honeydb-qpm-*` response headers. Hourly refresh
-  = 24/day, comfortable.
-
-Implementation plan:
-
-1. **`honeydb` scraper** (pattern: `otx_pulses` in feed_ingestor.py), not an
-   auth-header feed: reads `HONEYDB_API_ID` + `HONEYDB_API_KEY` from env,
-   sends both headers, flattens the JSON response to one-IP-per-line for the
-   generic parser. Fail with a clear error naming BOTH env vars if either is
-   missing.
-2. Config entry `honeydb_bad_hosts`: url `https://honeydb.io/api/bad-hosts`,
-   `feed_type: threat_intel`, `update_interval: 3600`, `requires_auth: true`,
-   `auth_env: HONEYDB_API_KEY` (so the dashboard Set-key button manages the
-   secret), `scraper: honeydb`, `enabled: false` (opt-in, like OTX). The
-   non-secret `HONEYDB_API_ID` is set once via compose env or the data
-   volume .env — document in the config comment. (Alternative if this UX
-   grates: extend the set-key endpoint to multiple env vars. Start simple.)
-3. docker-compose: add bare `- HONEYDB_API_ID` / `- HONEYDB_API_KEY`
-   pass-throughs (bare, NOT `${VAR:-}` — see the v1.9.3 empty-string bug).
-4. Optional follow-up: a second disabled feed for `/bad-hosts/mydata` so
-   Alex's own sensors vote as a source; overlap discounting will price its
-   correlation with the community feed honestly.
-5. Tests: scraper sends both headers, flattens JSON, errors clearly when a
-   var is missing; feed seeds disabled. Verify the JSON element shape at
-   implementation time (client returns parsed JSON; exact keys unconfirmed).
-
-Independence note: HoneyDB is a real honeypot sensor network — the novel
-population we wanted when fwfeed was dropped, with clean auth and terms.
+- `honeydb` scraper in feed_ingestor.py builds BOTH auth headers
+  (`X-HoneyDb-ApiId` + `X-HoneyDb-ApiKey`) from `HONEYDB_API_ID` +
+  `HONEYDB_API_KEY`; the generic single-var auth path can't express two
+  headers. A valid-but-EMPTY JSON window returns NOT_MODIFIED (normal for
+  /mydata — no attacks in 24h must not trip the zero-indicator guard).
+- Multi-credential Set key: `auth_env` may be a comma-separated list. The
+  dashboard button prompts per var; POST /api/feeds/{name}/api-key takes
+  `{"keys": {VAR: value}}` (single-var feeds keep the plain `api_key`
+  field). Only vars declared in auth_env are writable. Key ✓ badge requires
+  ALL vars present.
+- Remaining: Alex to enter real credentials (Set key button prompts for id
+  then key) and enable both feeds from the dashboard. Verify the JSON
+  element key on first live fetch — the scraper reads `remote_host` with
+  `ip`/`host` fallbacks, shape was unconfirmed at build time.

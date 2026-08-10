@@ -1,5 +1,5 @@
 """Pydantic request/response models shared by the API routers."""
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel
 
@@ -43,6 +43,10 @@ class SettingsRequest(BaseModel):
 class ApiKeyRequest(BaseModel):
     # Empty string clears the stored key.
     api_key: str = ""
+    # Multi-credential feeds (auth_env is a comma-separated list, e.g.
+    # HoneyDB's id+key pair): {ENV_VAR: value}. Empty value clears that var.
+    # When present, takes precedence over api_key.
+    keys: Optional[Dict[str, str]] = None
 
 
 class IndicatorRequest(BaseModel):

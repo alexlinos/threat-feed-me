@@ -41,12 +41,13 @@ inbound only.
   Copy button and firewall-specific instructions.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
   a refresh — all from the dashboard, no config editing.
-- A few feeds ship **disabled** (the auth-walled ThreatFox export — a keyless
-  ThreatFox mirror is enabled by default — AlienVault OTX, a sample custom
-  list); enable them from the dashboard once configured. Feeds
-  that need an API key (like OTX) have a **Set key** button — the key is
-  stored server-side in the data volume's `.env`, applied immediately, and
-  never displayed back.
+- A few feeds ship **disabled** (AlienVault OTX, HoneyDB community and
+  own-sensor feeds, the auth-walled ThreatFox export — a keyless ThreatFox
+  mirror is enabled by default — and a sample custom list); enable them from
+  the dashboard once configured. Feeds that need API credentials have a
+  **Set key** button — it prompts for each required credential (HoneyDB
+  takes an id + key pair), stores them server-side in the data volume's
+  `.env`, applies them immediately, and never displays them back.
 
 To protect the dashboard on an untrusted network, set `DASHBOARD_USER` /
 `DASHBOARD_PASSWORD` and `dashboard.auth_required: true`. Feed URLs stay open so
@@ -98,7 +99,7 @@ firewalls can poll them.
 │  ├── DataPlane, BruteForceBlocker, Turris, BinaryDefense   │
 │  ├── abuse.ch ThreatFox mirror (botnet C2 IOCs)            │
 │  ├── AbuseIPDB top-reported (community abuse reports)      │
-│  ├── Optional: AlienVault OTX (ships disabled)             │
+│  ├── Optional: AlienVault OTX, HoneyDB (ship disabled)     │
 │  └── Custom Feeds (user-defined, e.g. local honeypot)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Processing Engine                                          │

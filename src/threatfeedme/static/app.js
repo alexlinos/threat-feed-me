@@ -111,12 +111,22 @@ async function toggleFeed(el, name) {
     }
 }
 async function setApiKey(name, envVar) {
-    const key = prompt('API key for "' + name + '"\n\nSaved server-side to the data volume\'s .env as ' + envVar +
-        ' and applied immediately.\nLeave empty and press OK to clear the stored key.');
-    if (key === null) return; // cancelled
+    // auth_env may declare several credentials (comma-separated, e.g.
+    // HoneyDB's id+key pair) — prompt for each in turn. Cancel on any
+    // prompt aborts the whole operation; nothing is saved.
+    const vars = envVar.split(',').map(v => v.trim()).filter(Boolean);
+    const keys = {};
+    for (let i = 0; i < vars.length; i++) {
+        const step = vars.length > 1 ? ' (' + (i + 1) + ' of ' + vars.length + ')' : '';
+        const val = prompt(vars[i] + ' for "' + name + '"' + step +
+            '\n\nSaved server-side to the data volume\'s .env and applied immediately.' +
+            '\nLeave empty and press OK to clear this credential.');
+        if (val === null) return; // cancelled — abort without saving anything
+        keys[vars[i]] = val;
+    }
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/api-key', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({api_key: key}),
+        body: JSON.stringify({keys: keys}),
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) { reloadPage(); }

@@ -160,7 +160,11 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "degraded_pct": degraded_pct,
             # API-key UI: only whether a key exists — never the value.
             "auth_env": fsrc.auth_env,
-            "key_configured": bool(fsrc.auth_env and os.environ.get(fsrc.auth_env)),
+            # Multi-credential feeds (comma-separated auth_env): the badge
+            # shows Key ✓ only when every declared var is present.
+            "key_configured": bool(fsrc.auth_env) and all(
+                os.environ.get(v.strip())
+                for v in fsrc.auth_env.split(',') if v.strip()),
             # Telemetry, merged in so each row answers "is this feed worth it?"
             "tele": tele_by_name.get(fsrc.name),
         })

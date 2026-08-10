@@ -497,7 +497,8 @@ def test_api_key_set_status_clear_and_never_echoed(client):
     try:
         # Not configured yet.
         j = client.get("/api/feeds/keyed_feed/api-key").json()
-        assert j == {"auth_env": var, "configured": False}
+        assert j == {"auth_env": var, "configured": False,
+                     "vars": [{"name": var, "configured": False}]}
 
         # Set: persisted to .env AND applied to os.environ without restart.
         r = client.post("/api/feeds/keyed_feed/api-key", json={"api_key": "s3cret-token"})
@@ -699,6 +700,50 @@ def test_low_card_hidden_but_url_stays_live(client):
     assert "Everything" in body
     assert "/feeds/low.txt" not in body       # card gone
     assert client.get("/feeds/low.txt").status_code == 200  # alias lives
+
+
+def test_multivar_api_key_set_status_and_gate(client, monkeypatch):
+    """Multi-credential feeds (comma-separated auth_env, e.g. HoneyDB's
+    id+key pair): status reports each var, POST accepts a {VAR: value} map,
+    the plain api_key field is rejected (ambiguous), and undeclared vars
+    are refused so the endpoint can't become a generic env editor."""
+    from threatfeedme import dashboard
+    from threatfeedme.models import FeedSource, FeedType
+    monkeypatch.delenv("HD_TEST_ID", raising=False)
+    monkeypatch.delenv("HD_TEST_KEY", raising=False)
+    dashboard.db.add_feed(FeedSource(
+        name="multikey_feed", url="https://example.com/api", weight=1.0,
+        feed_type=FeedType.THREAT_INTEL, update_interval=3600,
+        requires_auth=True, auth_env="HD_TEST_ID,HD_TEST_KEY", enabled=False))
+    try:
+        j = client.get("/api/feeds/multikey_feed/api-key").json()
+        assert j["configured"] is False
+        assert [v["name"] for v in j["vars"]] == ["HD_TEST_ID", "HD_TEST_KEY"]
+
+        # plain api_key is ambiguous for a two-var feed
+        r = client.post("/api/feeds/multikey_feed/api-key", json={"api_key": "x"})
+        assert r.status_code == 400
+
+        # undeclared var names are refused
+        r = client.post("/api/feeds/multikey_feed/api-key",
+                        json={"keys": {"PATH": "evil"}})
+        assert r.status_code == 400
+
+        # setting both configures the feed; values are never echoed back
+        r = client.post("/api/feeds/multikey_feed/api-key",
+                        json={"keys": {"HD_TEST_ID": "id-1", "HD_TEST_KEY": "k-2"}})
+        assert r.status_code == 200 and r.json()["configured"] is True
+        assert "id-1" not in r.text and "k-2" not in r.text
+        assert os.environ["HD_TEST_ID"] == "id-1"
+
+        # partial credentials -> not configured (badge must not lie)
+        r = client.post("/api/feeds/multikey_feed/api-key",
+                        json={"keys": {"HD_TEST_KEY": ""}})
+        assert r.json()["configured"] is False
+    finally:
+        client.delete("/api/feeds/multikey_feed")
+        for v in ("HD_TEST_ID", "HD_TEST_KEY"):
+            os.environ.pop(v, None)
 
 
 # ==================== CSRF protection tests ====================

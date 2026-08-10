@@ -202,14 +202,20 @@ class FeedIngestor:
 
         # Inject an API key from the environment when the feed requires auth.
         # Keys are never hardcoded; the env var and header name come from config.
+        # auth_env may be a comma-separated list (multi-credential APIs like
+        # HoneyDB); those feeds must use a scraper that builds its own headers
+        # — the generic path can only map ONE var onto auth_header, so here it
+        # just verifies the credentials exist and names any that are missing.
         if feed.requires_auth:
-            api_key = os.environ.get(feed.auth_env) if feed.auth_env else None
-            if not api_key:
+            env_vars = [v.strip() for v in (feed.auth_env or '').split(',') if v.strip()]
+            missing = [v for v in env_vars if not os.environ.get(v)]
+            if not env_vars or missing:
                 raise RuntimeError(
-                    f"Feed '{feed.name}' requires auth but env var "
-                    f"'{feed.auth_env}' is not set"
+                    f"Feed '{feed.name}' requires auth but env var(s) "
+                    f"'{', '.join(missing) or feed.auth_env}' not set"
                 )
-            headers[feed.auth_header] = api_key
+            if len(env_vars) == 1:
+                headers[feed.auth_header] = os.environ[env_vars[0]]
 
         etag, last_modified = self.db.get_feed_http_cache(feed.name)
         if etag:
@@ -591,3 +597,58 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
 
 
 FeedIngestor.register_scraper("otx_pulses")(_scrape_otx_pulses)
+
+
+# HoneyDB bad-hosts scraper (JSON feed)
+#
+# HoneyDB authenticates with TWO headers (X-HoneyDb-ApiId + X-HoneyDb-ApiKey),
+# which the generic single-var auth path can't express, so this scraper builds
+# its own headers from two env vars. Serves both shipped feeds: /bad-hosts
+# (community, rolling 24h window — retention accumulates the union across
+# fetches) and /bad-hosts/mydata (only sensors this account operates).
+# Response: JSON array of {"remote_host": "<ip>", ...}; unknown shapes are
+# handled leniently so an upstream field rename degrades, not breaks.
+_HONEYDB_ENV_ID = "HONEYDB_API_ID"
+_HONEYDB_ENV_KEY = "HONEYDB_API_KEY"
+
+
+def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
+    api_id = os.environ.get(_HONEYDB_ENV_ID)
+    api_key = os.environ.get(_HONEYDB_ENV_KEY)
+    missing = [name for name, val in ((_HONEYDB_ENV_ID, api_id),
+                                      (_HONEYDB_ENV_KEY, api_key)) if not val]
+    if missing:
+        raise RuntimeError(
+            f"{feed.name}: requires HoneyDB credentials; missing env var(s): "
+            f"{', '.join(missing)} (set both via the dashboard's Set key button)"
+        )
+    headers = {"X-HoneyDb-ApiId": api_id, "X-HoneyDb-ApiKey": api_key}
+    response = self._get_with_retries(feed.url, headers)
+    response.raise_for_status()
+    try:
+        data = json.loads(response.text)
+    except ValueError:
+        raise RuntimeError(f"{feed.name}: HoneyDB JSON parse failed")
+    if not isinstance(data, list):
+        raise RuntimeError(f"{feed.name}: unexpected HoneyDB response shape")
+
+    # A valid-but-empty window is normal for /mydata (your sensors saw no
+    # attacks in the last 24h). NOT_MODIFIED keeps previously ingested
+    # indicators alive instead of tripping the zero-indicator scraper guard.
+    if not data:
+        logger.info(f"{feed.name}: HoneyDB window empty; keeping prior indicators")
+        return NOT_MODIFIED
+
+    lines = []
+    for entry in data:
+        if isinstance(entry, dict):
+            value = entry.get('remote_host') or entry.get('ip') or entry.get('host')
+        else:
+            value = entry
+        value = str(value or '').strip()
+        if value:
+            lines.append(value)
+    return "\n".join(lines)
+
+
+FeedIngestor.register_scraper("honeydb")(_scrape_honeydb)
