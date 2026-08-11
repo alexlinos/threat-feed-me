@@ -86,7 +86,8 @@ touches this next:
   `{"keys": {VAR: value}}` (single-var feeds keep the plain `api_key`
   field). Only vars declared in auth_env are writable. Key ✓ badge requires
   ALL vars present.
-- Remaining: Alex to enter real credentials (Set key button prompts for id
-  then key) and enable both feeds from the dashboard. Verify the JSON
-  element key on first live fetch — the scraper reads `remote_host` with
-  `ip`/`host` fallbacks, shape was unconfirmed at build time.
+- Live-verified 2026-08-11 on prod: bad_hosts pulls ~14.5k indicators at
+  54% unique (highest-novelty feed in the roster); mydata pulls Alex's own
+  sensor sightings (0% unique by design — his sensors feed the community
+  list, and overlap discounting prices that correlation). The `remote_host`
+  JSON key guess was correct.
