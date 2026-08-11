@@ -55,7 +55,9 @@ firewalls can poll them.
 
 ## Features
 
-- **Feed Aggregation**: Pull from multiple sources (OSINT, commercial, custom)
+- **Feed Aggregation**: Pull from multiple sources (OSINT, commercial, custom
+  — including [HoneyDB](https://honeydb.io) honeypot telemetry: the community
+  network and, if you run sensors, your own honeypots voting as a source)
 - **Runtime feed management**: Add, remove, enable/disable, and mix-and-match
   feeds from the dashboard — including your own custom URL or local-file feeds
 - **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
