@@ -26,7 +26,7 @@ TIER_FEEDS = [
     {
         "key": "medium",
         "label": "Medium Confidence",
-        "description": "Corroborated by more than one independent source — includes high",
+        "description": "Corroborated by more than one independent source; includes high",
         "recommended": False,
     },
     {
@@ -41,7 +41,7 @@ TIER_FEEDS = [
     {
         "key": "all",
         "label": "Everything",
-        "description": "Every indicator with any evidence — low.txt serves the same list",
+        "description": "Every indicator with any evidence: low.txt serves the same list",
         "recommended": False,
     },
 ]
