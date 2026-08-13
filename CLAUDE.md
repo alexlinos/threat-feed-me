@@ -91,3 +91,57 @@ touches this next:
   sensor sightings (0% unique by design, since his sensors feed the community
   list, and overlap discounting prices that correlation). The `remote_host`
   JSON key guess was correct.
+
+## Domain intel: v2.0 design (approved direction, build not started)
+
+Alex chose domains (not full URLs: path-level intel is email-proxy
+territory; DNS-layer blocking is what firewalls consume). The votes engine
+transfers unchanged; this is a data-model + serving expansion. Sources
+live-verified 2026-08-13.
+
+### Decisions (D1-D8)
+
+- **D1 data model**: additive `kind` column on indicators ('ip' default,
+  'domain'), value stays in the existing `ip` column (documented as "the
+  indicator value"; avoids a table rebuild and every UNIQUE/index keeps
+  working). Netblock-overlap votes and the geo heatmap gate on kind='ip'.
+- **D2 serving**: new URLs `/feeds/domains/{high,medium,low,all}.{txt,csv,json}`.
+  The existing IP URLs must NEVER emit a domain (regression test: a
+  FortiGate address feed fed a hostname errors the whole import). Tiers
+  cumulative, same as IPs.
+- **D3 scoring**: same effective-votes engine; overlap pairs already work
+  per indicator row so mixed feeds are fine; run natural breaks PER KIND
+  (domain vote distribution will differ wildly from IPs; shared breaks
+  would let one population set the other's tier lines). Two stored
+  break pairs (settings keys tier_breaks / tier_breaks_domains).
+- **D4 safety (the hard one)**: domain known-good floor. Shipped minimal
+  core allowlist (major OS/update/CDN/mail infra), config
+  `safety.known_good_domains` for operator additions (their own domains!),
+  reject invalid/reserved (.test .example .invalid .localhost, bare TLDs),
+  IDNA-normalize punycode before dedupe. Start small and curated, not a
+  Tranco top-N dependency.
+- **D5 sources at launch** (all probed live, keyless):
+  - `urlhaus_hostfile` https://urlhaus.abuse.ch/downloads/hostfile/
+    (malware distribution domains, hosts-file format, updated multiple
+    times daily; NOT key-walled unlike other abuse.ch exports)
+  - `openphish_community` https://openphish.com/feed.txt (phishing URLs;
+    extract registrable domain)
+  - `joewein_dom_bl` https://www.joewein.net/dl/bl/dom-bl.txt (spam/419)
+- **D6 whitelist**: exact-domain entries + wildcard (`*.example.com`);
+  matcher extension mirrors the CIDR pattern. Tier scopes work as-is.
+- **D7 release**: v2.0.0, single release after the whole path is tested;
+  build order: schema -> feed.indicator_kind plumbing -> parser (domain +
+  hosts-file formats) -> per-kind breaks -> serving/exports -> safety ->
+  whitelist -> dashboard -> feeds -> docs/site.
+- **D8 parsing**: feeds DECLARE their kind (new plumbing field
+  `indicator_kind` on FeedSource, default 'ip'); domain extraction only
+  runs for domain feeds. Never sniff domains out of IP feeds (comments and
+  URLs in feed headers would pollute the corpus).
+
+### Ratify before build (Alex)
+
+1. Which domain feeds enabled by default: recommend urlhaus_hostfile +
+   openphish enabled (keyless = the product promise), joewein disabled.
+2. Dashboard: separate "Domain feeds" card section under the IP cards
+   (recommended) vs a tab.
+3. Single v2.0.0 release (recommended) vs incremental feature-flagged 1.x.
