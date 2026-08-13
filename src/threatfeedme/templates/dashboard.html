@@ -4,12 +4,12 @@
 {% block content %}
     {# Tiles show what each feed URL actually serves (feeds are cumulative:
        medium contains high). No separate "low" tile: the low/all feeds serve
-       everything blockable, so that number IS the total — repeating it read
+       everything blockable, so that number IS the total: repeating it read
        as a bug. The exclusive per-tier distribution lives in the tooltips. #}
     <div class="stats">
-        <div class="stat" title="Everything with any evidence — exactly what the low and all feeds serve"><div class="n">{{ '{:,}'.format(served['all']) }}</div><div class="l">Total blockable</div></div>
+        <div class="stat" title="Everything with any evidence: exactly what the low and all feeds serve"><div class="n">{{ '{:,}'.format(served['all']) }}</div><div class="l">Total blockable</div></div>
         <div class="stat" title="{{ '{:,}'.format(counts['high']) }} indicators sit at exactly this tier"><div class="n">{{ '{:,}'.format(served['high']) }}</div><div class="l">High feed serves</div></div>
-        <div class="stat" title="{{ '{:,}'.format(counts['medium']) }} indicators sit at exactly this tier — the feed also includes high"><div class="n">{{ '{:,}'.format(served['medium']) }}</div><div class="l">Medium feed serves</div></div>
+        <div class="stat" title="{{ '{:,}'.format(counts['medium']) }} indicators sit at exactly this tier; the feed also includes high"><div class="n">{{ '{:,}'.format(served['medium']) }}</div><div class="l">Medium feed serves</div></div>
         <div class="stat"><div class="n">{{ '{:,}'.format(whitelist_count) }}</div><div class="l">Whitelisted</div></div>
     </div>
 
@@ -36,7 +36,7 @@
 
     <!-- Read once per deployment, then pure noise: collapsed by default. -->
     <details class="howto">
-        <summary><b>How to use these</b> — firewall-by-firewall instructions</summary>
+        <summary><b>How to use these</b>: per-firewall instructions</summary>
         <ul>
             <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i>, then paste the URL.</li>
             <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i>, action <i>Block</i>, paste the URL.</li>
@@ -61,7 +61,7 @@
     </form>
 
     <h2>Feeds</h2>
-    <p class="hint">Sorted by what each feed contributes that nothing else does — the ones you would
+    <p class="hint">Sorted by what each feed contributes that nothing else does: the ones you would
        actually miss are at the top. <b>Unique</b> is the share of a feed's indicators no other feed
        reports; <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and the
        status badge catch a feed that has quietly gone stale.</p>
@@ -116,7 +116,7 @@
                         {% if row.tele.twin %}
                         {# Compact on purpose: the partner's full name here made
                            this the widest column and forced the table to scroll. #}
-                        <span class="badge badge-warn twin" title="{{ row.tele.twin.pct }}% of this feed is already inside {{ row.tele.twin.name }} — agreement between them is not independent corroboration, so it inflates confidence tiers without adding evidence">≈ {{ row.tele.twin.name }}</span>
+                        <span class="badge badge-warn twin" title="{{ row.tele.twin.pct }}% of this feed is already inside {{ row.tele.twin.name }} : agreement between them is not independent corroboration, so it inflates confidence tiers without adding evidence">≈ {{ row.tele.twin.name }}</span>
                         {% endif %}
                     {% else %}<span class="muted">—</span>{% endif %}
                 </td>
@@ -124,7 +124,7 @@
                 <td>{% if row.tele %}{{ '{:,}'.format(row.tele.new) }}{% else %}—{% endif %}</td>
                 <td>
                     {% if row.tele %}<span class="badge health-{{ row.tele.health.level }}" title="{{ row.tele.health.detail }}">{{ row.tele.health.state }}</span>{% endif %}
-                    {% if row.fp_count %} <button class="badge badge-warn fp-badge" title="{{ row.fp_count }} IP(s) flagged as false positives — click to review or clear" onclick='openFpModal({{ row.name|tojson }})'>⚠ {{ row.fp_count }} FP</button>{% endif %}
+                    {% if row.fp_count %} <button class="badge badge-warn fp-badge" title="{{ row.fp_count }} IP(s) flagged as false positives: click to review or clear" onclick='openFpModal({{ row.name|tojson }})'>⚠ {{ row.fp_count }} FP</button>{% endif %}
                     {% if row.degraded_pct is not none %} <span class="badge badge-error" title="reputation reduced ~{{ row.degraded_pct }}%">degraded</span>{% endif %}
                 </td>
                 <td>
@@ -162,10 +162,10 @@
     <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one IP or CIDR.</p>
 
     <details class="howto">
-        <summary><b>Overlap map</b> — which feeds report the same indicators</summary>
+        <summary><b>Overlap map</b>: which feeds report the same indicators</summary>
         {% if telemetry.has_overlap %}
         <p class="hint" style="margin-top:8px">Each cell is the share of the <i>smaller</i> feed that
-           both report. Dark cells are pairs that are effectively one list — their agreement inflates
+           both report. Dark cells are pairs that are effectively one list: their agreement inflates
            confidence tiers without adding evidence. Hover a cell to zoom it.</p>
         <div class="table-scroll">
         <div class="heat" style="grid-template-columns: 132px repeat({{ telemetry.names|length }}, 26px)">
@@ -188,25 +188,25 @@
     </details>
 
     <details class=howto id=geo-heatmap>
-        <summary><b>Blocked IP country heatmap</b> — where blocked addresses live</summary>
+        <summary><b>Blocked IP country heatmap</b>: where blocked addresses live</summary>
         <div class=geo-wrap>
             <p class=muted>Geo data loads when you open this section.</p>
         </div>
-        <p class="muted geo-credit">Country data © DB-IP (db-ip.com), CC-BY · borders © Natural Earth (public domain) — both bucketed offline, no external geo call.</p>
+        <p class="muted geo-credit">Country data © DB-IP (db-ip.com), CC-BY · borders © Natural Earth (public domain): both bucketed offline, no external geo call.</p>
     </details>
 {% endblock %}
 
 {% block modals %}
 <div class="modal-overlay" id="fp-modal">
     <div class="modal">
-        <h3>False positives — <span id="fp-modal-feed"></span></h3>
+        <h3>False positives: <span id="fp-modal-feed"></span></h3>
         <p class="muted" id="fp-modal-summary">—</p>
         <div class="field">
             <label>Flagged IPs</label>
             <div id="fp-modal-list" class="sources">Loading…</div>
         </div>
         <p class="hint">Clearing forgives this feed's penalty and rescores immediately.
-           Whitelist entries are untouched — the IPs stay excluded from your feeds.</p>
+           Whitelist entries are untouched: the IPs stay excluded from your feeds.</p>
         <div class="actions">
             <button class="cancel" onclick="closeFpModal()">Close</button>
             <button class="btn" onclick="clearAllFp()">Clear all</button>

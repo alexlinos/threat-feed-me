@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Indicators — Threat Feed Me!{% endblock %}
+{% block title %}Indicators: Threat Feed Me!{% endblock %}
 {% block subtitle %}The deduplicated result across all feeds. Search for an IP, add one manually,
    or remove one (removing globally whitelists it so a refresh won't bring it back).{% endblock %}
 
@@ -27,7 +27,7 @@
 
     <h2>Whitelist</h2>
     <p class="hint">Whitelist an IP from <b>all tiers</b> (excluded everywhere) or from a
-       <b>single tier</b> (only that tier's feed drops it — the others still list it).</p>
+       <b>single tier</b> (only that tier's feed drops it; the others still list it).</p>
     <form class="wl-form" onsubmit="return addWl(event)">
         <input class="ip" id="wl-ip" type="text" placeholder="IP or CIDR" required>
         <select id="wl-feed" title="Scope">
@@ -73,7 +73,7 @@
             <div class="sources" id="wl-modal-sources">—</div>
         </div>
         <div class="field">
-            <label>Scope — whitelist from which tier?</label>
+            <label>Scope: whitelist from which tier?</label>
             <select id="wl-modal-scope"></select>
         </div>
         <div class="field">

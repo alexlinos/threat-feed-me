@@ -1,4 +1,4 @@
-# Threat Feed Me! — landing page
+# Threat Feed Me!
 
 Static marketing page served at https://threatfeedme.app via GitHub Pages
 (Settings → Pages → Source: `main` branch, `/docs` folder).

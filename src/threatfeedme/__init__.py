@@ -1,2 +1,2 @@
-"""Threat Feed Me! — threat feed aggregator package."""
-__version__ = "1.10.0"
+"""Threat Feed Me!: threat feed aggregator package."""
+__version__ = "1.11.0"
