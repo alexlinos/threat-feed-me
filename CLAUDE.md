@@ -2,31 +2,31 @@
 
 ## GitHub is the source of truth
 
-`https://github.com/alexlinos/threat-feed-me` — branch `main`.
+`https://github.com/alexlinos/threat-feed-me`: branch `main`.
 
 Local checkouts are disposable views of it. If a local copy and the remote
 disagree, the remote wins.
 
 - **`git pull` before you start.** Another agent or session may have pushed
   since this checkout was last touched.
-- **Push as soon as you commit.** Never leave a commit sitting locally — an
+- **Push as soon as you commit.** Never leave a commit sitting locally; an
   unpushed commit is invisible to everyone else and is how two agents end up
   building on different bases.
 - **One clone per machine.** Parallel folders (`...-2`, `-new`, `-copy`) have
-  caused real divergence here — two checkouts a day apart, different agents
+  caused real divergence here: two checkouts a day apart, different agents
   building on different bases. If a checkout is broken, fix it or re-clone it
   in place rather than working beside it.
-- Before a large change, re-check `git log origin/main -1` — cheap, and it
+- Before a large change, re-check `git log origin/main -1`, cheap, and it
   catches a stale base immediately.
 
 ## Releasing
 
 CI publishes the Docker image on a `v*.*.*` tag and **refuses to publish if
-the tag and `pyproject.toml` disagree** — that guard has silently blocked two
+the tag and `pyproject.toml` disagree**; that guard has silently blocked two
 releases already.
 
 1. Bump `version` in `pyproject.toml` **and** `__version__` in
-   `src/threatfeedme/__init__.py` — CI checks the tag against both (the
+   `src/threatfeedme/__init__.py`; CI checks the tag against both (the
    footer displays `__version__`), and a unit test keeps the pair in sync.
 2. Commit, push.
 3. `git tag vX.Y.Z && git push origin vX.Y.Z`
@@ -36,8 +36,8 @@ releases already.
 ## Verifying
 
 - `python -m pytest tests -q` must pass before pushing.
-- For UI or behavioural changes, actually run it and look —
-  `python -m uvicorn --app-dir src threatfeedme.app:app --port 8080`.
+- For UI or behavioural changes, actually run it and look:
+  actually run it and look: `python -m uvicorn --app-dir src threatfeedme.app:app --port 8080`.
   Several bugs here (a dead `esc()`, a hung geo panel, an unreadable heatmap)
   passed every test and were only visible in a browser.
 
@@ -46,7 +46,7 @@ releases already.
 - **No AI attribution in commits.** No `Co-Authored-By: Claude`, no naming
   models in commit messages or docs. Multiple models work on this repo; the
   history stays clean of all of them.
-- Commit messages explain *why*, not just what — the reasoning is the part
+- Commit messages explain *why*, not just what: the reasoning is the part
   that isn't recoverable from the diff.
 - `data/` is gitignored and disposable (fetched feed state, SQLite DB). Never
   commit it; never assume another checkout has the same contents.
@@ -56,10 +56,10 @@ releases already.
 ## Open items (from the A2A serve review; fixes landed in 510d148)
 
 Rounds 1-4 of the serve-immediately review were applied and committed in
-`510d148` — the log that used to live here described them as uncommitted,
+`510d148`, the log that used to live here described them as uncommitted,
 which stopped being true the moment they were committed. What remains open:
 
-- `CONFIG_PATH` is inert as an operator knob on the CLI path — `args.config`
+- `CONFIG_PATH` is inert as an operator knob on the CLI path: `args.config`
   always holds a truthy default, so the env fallback is never consulted.
   No deploy path sets it. Low priority.
 - Redundant second `Database` on `--serve`: `main()` builds one and runs
@@ -69,10 +69,10 @@ which stopped being true the moment they were committed. What remains open:
   uvicorn; `dashboard: {port: }` makes `int(None)` raise; a null `database:`
   key breaks path lookup. The shipped config.yaml is well-formed.
 
-## HoneyDB feeds — implemented in v1.10.0, live testing pending
+## HoneyDB feeds (v1.10.0, live-verified on prod)
 
 Both feeds shipped, disabled by default: `honeydb_bad_hosts` (community,
-rolling 24h window) and `honeydb_mydata` (only Alex's own sensors — his
+rolling 24h window) and `honeydb_mydata` (only Alex's own sensors, since his
 honeypot contributes to honeydb.io). Implementation notes for whoever
 touches this next:
 
@@ -80,7 +80,7 @@ touches this next:
   (`X-HoneyDb-ApiId` + `X-HoneyDb-ApiKey`) from `HONEYDB_API_ID` +
   `HONEYDB_API_KEY`; the generic single-var auth path can't express two
   headers. A valid-but-EMPTY JSON window returns NOT_MODIFIED (normal for
-  /mydata — no attacks in 24h must not trip the zero-indicator guard).
+  /mydata, no attacks in 24h must not trip the zero-indicator guard).
 - Multi-credential Set key: `auth_env` may be a comma-separated list. The
   dashboard button prompts per var; POST /api/feeds/{name}/api-key takes
   `{"keys": {VAR: value}}` (single-var feeds keep the plain `api_key`
@@ -88,6 +88,6 @@ touches this next:
   ALL vars present.
 - Live-verified 2026-08-11 on prod: bad_hosts pulls ~14.5k indicators at
   54% unique (highest-novelty feed in the roster); mydata pulls Alex's own
-  sensor sightings (0% unique by design — his sensors feed the community
+  sensor sightings (0% unique by design, since his sensors feed the community
   list, and overlap discounting prices that correlation). The `remote_host`
   JSON key guess was correct.

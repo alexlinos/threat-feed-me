@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threat Feed Me! — a carnivorous blocklist for your firewall</title>
-<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 15 free, keyless threat feeds into High/Medium/Low confidence tiers — served as one URL your firewall polls. Docker, single container, no API keys.">
+<title>Threat Feed Me! A carnivorous blocklist for your firewall</title>
+<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 15 free, keyless threat feeds into High/Medium/Low confidence tiers, served as one URL your firewall polls. Docker, single container, no API keys.">
 <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
 
 <!-- Open Graph / social -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="Threat Feed Me! — a carnivorous blocklist for your firewall">
-<meta property="og:description" content="On-prem threat-intel aggregator: normalize, dedupe, and score 15 free keyless threat feeds into confidence tiers, served as one URL your firewall polls. Docker, single container, no API keys.">
+<meta property="og:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
+<meta property="og:description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 15 free, keyless threat feeds into High/Medium/Low confidence tiers, served as one URL your firewall polls. Docker, single container, no API keys.">
 <meta property="og:url" content="https://threatfeedme.app/">
 <meta property="og:image" content="https://threatfeedme.app/assets/social-preview.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Threat Feed Me! — a carnivorous blocklist for your firewall">
-<meta name="twitter:description" content="On-prem threat-intel aggregator: 15 free keyless feeds, deduped and scored into confidence tiers, served as one URL your firewall polls.">
+<meta name="twitter:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
+<meta name="twitter:description" content="On-prem threat-intel aggregator: 15 free, keyless feeds deduped and scored into confidence tiers, served as one URL your firewall polls.">
 <meta name="twitter:image" content="https://threatfeedme.app/assets/social-preview.png">
 
 <style>
@@ -189,10 +189,10 @@
 
 <header>
   <div class="wrap">
-    <img class="banner" src="assets/banner.svg" alt="Threat Feed Me! — a carnivorous blocklist for your firewall">
+    <img class="banner" src="assets/banner.svg" alt="Threat Feed Me! A carnivorous blocklist for your firewall">
     <p class="pitch">
       An <b>on-prem threat-intelligence aggregator</b> that normalizes, dedupes, and scores
-      <b>15 free, keyless threat feeds</b> into High / Medium / Low confidence tiers —
+      <b>15 free, keyless threat feeds</b> into High/Medium/Low confidence tiers,
       then serves them as <b>one URL your firewall polls</b>.
     </p>
     <p class="tagline">// Feed it threats. It's always hungry.</p>
@@ -221,7 +221,7 @@
       <div class="code">
         <div class="code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="code-title">bash — run the published image</span>
+          <span class="code-title">bash: run the published image</span>
           <button class="copy-btn" data-copy="run">Copy</button>
         </div>
 <pre id="run"><span class="k">docker</span> run -d --name threat-feed-me -p <span class="s">8080:8080</span> \
@@ -231,10 +231,10 @@
 
       <p class="after-code">
         Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
-        On first start it fetches the 15 feeds, dedupes and scores them, and begins serving block lists —
+        On first start it fetches the 15 feeds, dedupes and scores them, and begins serving block lists,
         then auto-refreshes every 60 minutes. Opt-in integrations with free API keys:
         <a href="https://honeydb.io" target="_blank" rel="noopener">HoneyDB</a> (honeypot sensor
-        network — including sensors <i>you</i> operate voting as a source) and AlienVault OTX.
+        network, including sensors <i>you</i> operate voting as a source) and AlienVault OTX.
         Prefer compose? See the
         <a href="https://github.com/alexlinos/threat-feed-me#deploy" target="_blank" rel="noopener">README</a>.
       </p>
@@ -266,11 +266,11 @@
       </div>
 
       <ul class="scoring">
-        <li><b>Is it a real agreement?</b> Two feeds that are mostly the same list are one witness, not two — so overlapping lists get discounted. <code>spamhaus + et + bbcan177</code> agreeing on a DROP range is worth ~1.1 votes, not 3.</li>
+        <li><b>Is it a real agreement?</b> Two feeds that are mostly the same list are one witness, not two, so overlapping lists get discounted. <code>spamhaus + et + bbcan177</code> agreeing on a DROP range is worth ~1.1 votes, not 3.</li>
         <li><b>Is the witness reliable?</b> Every feed starts at full weight. Flag a false positive and that feed's weight drops, so its IPs score lower until you stop seeing mistakes.</li>
         <li><b>Is the sighting fresh?</b> A scan from three days ago matters less than one from an hour ago. Age halves an indicator's score every 72 hours.</li>
       </ul>
-      <p class="sub"><b>Tiers come from the shape of the crowd.</b> Every IP gets one number — how many genuinely independent, reputable, fresh witnesses it has. The tier lines are drawn at natural gaps in that distribution, and held stable so live firewall IPs don't reshuffle as feeds cycle in and out. They only move when the vote distribution actually shifts, or a feed is added, removed, or resized.</p>
+      <p class="sub"><b>Tiers come from the shape of the crowd.</b> Every IP gets one number: how many genuinely independent, reputable, fresh witnesses it has. The tier lines are drawn at natural gaps in that distribution, and held stable so live firewall IPs don't reshuffle as feeds cycle in and out. They only move when the vote distribution actually shifts, or a feed is added, removed, or resized.</p>
       <p class="after-code" style="margin-top:18px">
         Each URL returns plain text, one IP or CIDR per line, generated live with the whitelist applied.
         <code>.csv</code> and <code>.json</code> variants are available for SIEM use.

@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Threat Feed Me! — a carnivorous blocklist for your firewall" width="100%">
+  <img src="assets/banner.svg" alt="Threat Feed Me! A carnivorous blocklist for your firewall" width="100%">
 </p>
 
 # Threat Feed Me!
 
-On-prem threat intelligence aggregator that normalizes, dedupes, and scores threat feeds into confidence tiers — then serves them as one URL your firewall polls. Feed it threats. It's always hungry.
+On-prem threat intelligence aggregator that normalizes, dedupes, and scores threat feeds into confidence tiers, then serves them as one URL your firewall polls. Feed it threats. It's always hungry.
 
 ## Deploy
 
 Designed to run on a small on-prem box or VM with no tuning and no API keys.
 
-**Fastest — run the published image** (nothing to clone or build):
+**Fastest: run the published image** (nothing to clone or build):
 
 ```bash
 docker run -d --name threat-feed-me -p 8080:8080 \
@@ -18,7 +18,7 @@ docker run -d --name threat-feed-me -p 8080:8080 \
 # then open the dashboard at http://<this-server-ip>:8080
 ```
 
-**Or with docker compose** (clone first — gives you `config.yaml` to edit):
+**Or with docker compose** (clone first, giving you `config.yaml` to edit):
 
 ```bash
 git clone https://github.com/alexlinos/threat-feed-me.git
@@ -33,21 +33,22 @@ pfSense, ...).
 
 That's it. On first start it fetches **15 free, keyless threat feeds**, dedupes
 and scores them, and begins serving block lists. It **auto-refreshes every 60
-minutes** — no cron, no maintenance. Everything stays on-prem; feeds are pulled
+minutes**, no cron, no maintenance. Everything stays on-prem; feeds are pulled
 inbound only.
 
 - **No accounts or keys required** for the default feeds.
 - The dashboard shows the exact URLs to paste, per confidence tier, with a
   Copy button and firewall-specific instructions.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
-  a refresh — all from the dashboard, no config editing.
-- A few feeds ship **disabled** (AlienVault OTX, HoneyDB community and
-  own-sensor feeds, the auth-walled ThreatFox export — a keyless ThreatFox
-  mirror is enabled by default — and a sample custom list); enable them from
-  the dashboard once configured. Feeds that need API credentials have a
-  **Set key** button — it prompts for each required credential (HoneyDB
-  takes an id + key pair), stores them server-side in the data volume's
-  `.env`, applies them immediately, and never displays them back.
+  or force a refresh, all from the dashboard, no config editing.
+- A few feeds ship **disabled**: AlienVault OTX, HoneyDB community and
+  own-sensor feeds, a keyless ThreatFox mirror (the auth-walled ThreatFox
+  export is built in, so a keyless mirror is enabled by default), and a
+  sample custom list. Enable them from the dashboard once configured. Feeds
+  that need API credentials have a **Set key** button: it prompts for each
+  required credential (HoneyDB takes an id and key pair), stores them
+  server-side in the data volume's `.env`, applies them immediately, and
+  never displays them back.
 
 To protect the dashboard on an untrusted network, set `DASHBOARD_USER` /
 `DASHBOARD_PASSWORD` and `dashboard.auth_required: true`. Feed URLs stay open so
@@ -56,32 +57,32 @@ firewalls can poll them.
 ## Features
 
 - **Feed Aggregation**: Pull from multiple sources (OSINT, commercial, custom
-  — including [HoneyDB](https://honeydb.io) honeypot telemetry: the community
+  including [HoneyDB](https://honeydb.io) honeypot telemetry: the community
   network and, if you run sensors, your own honeypots voting as a source)
 - **Runtime feed management**: Add, remove, enable/disable, and mix-and-match
-  feeds from the dashboard — including your own custom URL or local-file feeds
+  feeds from the dashboard, including your own custom URL or local-file feeds
 - **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
   demand, set the auto-refresh interval (default 60 minutes), and set how long
   an IP is kept after it drops out of every feed (default 7 days; `0` = keep
-  forever) — all from the dashboard toolbar, no restart needed
+  forever), all from the dashboard toolbar, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
 - **Confidence Scoring**: High/Medium/Low tiers based on:
-  - **Effective independent votes** — sources are discounted by their
+  - **Effective independent votes**: sources are discounted by their
     measured overlap so echoing feeds count as one witness, and tier
     boundaries are found from the live vote distribution rather than fixed
     thresholds. Full algorithm:
     [How confidence tiering works](#how-confidence-tiering-works).
-  - Feed reputation — equal for every feed by default and *earned* from there:
+  - Feed reputation, equal for every feed by default and *earned* from there:
     flagging false positives automatically lowers the offending feed's weight
   - Age decay
-- **Whitelist Management**: Override false positives — globally (all feeds) or
+- **Whitelist Management**: Override false positives, globally (all feeds) or
   scoped to a single feed (ignore one noisy source while trusting the rest).
   The whitelist dialog shows which feed(s) reported the IP, and a reason
   (false positive / risk accepted / internal asset). Flagging a **false
   positive** lowers that feed's reputation, so a noisy feed's IPs score lower
   and drop out of the higher-confidence firewall feeds (self-heals when the
   whitelist entry is removed). Click a feed's **⚠ N FP** badge to review what
-  it was penalized for and forgive individual flags or all of them — the
+  it was penalized for and forgive individual flags or all of them; the
   whitelist entries stay in place, only the blame is withdrawn.
 - **Multi-format Export**: Text files, CSV, JSON for firewall/SIEM integration
 - **Basic Dashboard**: Web UI for viewing feeds, managing whitelists, seeing stats
@@ -122,53 +123,53 @@ firewalls can poll them.
 
 ## How confidence tiering works
 
-*(v1.8.0+ — the "effective votes" algorithm; set `scoring.tiering.method:
+*(v1.8.0+, the "effective votes" algorithm; set `scoring.tiering.method:
 legacy` in `config.yaml` for the old fixed thresholds.)*
 
 **The one-sentence version.** An IP is dangerous only if *independent*
-sources agree on it — so we count **effective votes**, not raw sources, and
+sources agree on it, so we count **effective votes**, not raw sources, and
 draw the High/Medium/Low lines from the shape of the vote distribution so the
 tiers stay meaningful as the feed roster changes.
 
 **The problem, in plain terms.** Treat every feed as an independent witness
 and you get fooled. Public feeds aren't independent: Emerging Threats bundles
 Spamhaus DROP and DShield into its own list, BBcan177 re-publishes other
-lists, and community feeds share reporters. So the same dataset echoed by
-three feeds looks like three-way corroboration — and every redundant feed you
+community feeds share reporters. So the same dataset echoed by
+three feeds looks like three-way corroboration, and every redundant feed you
 add inflates the counts until "High confidence" holds more IPs than Medium.
 That's a lie in your blocklist.
 
 **The fix, as three questions.** Instead of trusting the raw count, each IP
 goes through three checks:
 
-1. **Is this a real agreement?** *(overlap discount)* — We measure how much
+1. **Is this a real agreement?** *(overlap discount)*: We measure how much
    each pair of feeds overlaps. Two feeds that are 90% the same list are one
    witness, not two. Their votes get heavily discounted; near-disjoint feeds
    keep full weight. So `spamhaus_drop + et_block + bbcan177` agreeing on a
    DROP range is worth ~1.1 votes, not 3.
-2. **Is the witness reliable?** *(reputation weight)* — Every feed starts at
+2. **Is the witness reliable?** *(reputation weight)*: Every feed starts at
    full weight (1.0). Flag a false positive from the dashboard and that feed's
    weight drops automatically, so its IPs score lower until you stop seeing
    mistakes from it.
-3. **Is the sighting fresh?** *(recency weight)* — A scan from three days ago
+3. **Is the sighting fresh?** *(recency weight)*: A scan from three days ago
    matters less than one from an hour ago. Age halves an indicator's score
    every 72 hours.
 
 **Where the tier lines come from.** After those weights, every IP has one
 number: its *effective votes* (how many genuinely independent, reputable,
-fresh witnesses it has). We then look at the shape of all those numbers —
-find the natural gaps in the crowd — and draw the cut lines there:
+fresh witnesses it has). We then look at the shape of all those numbers,
+find the natural gaps in the crowd, and draw the cut lines there:
 
-- **Medium** — more than one real, independent vote: corroborated by
-  something non-redundant.
-- **High** — more than two independent votes, plus at least one curated
+- **Medium**: more than one real, independent vote (corroborated by
+  something non-redundant).
+- **High**: more than two independent votes, plus at least one curated
   threat-intel feed (`require_threat_intel`). The cleanest list.
 
 A fresh or tiny database falls back to exactly these floors.
 
 **Why the lines stay put.** Recomputing tier boundaries every hour would
 silently re-bucket live firewall IPs as feeds age in and out (e.g. AbuseIPDB's
-3-day list cycling) — churn you'd see as noise in your blocklist. So the
+3-day list cycling), churn you'd see as noise in your blocklist. So the
 boundaries are held stable and only redrawn when the vote distribution
 *actually* moves: any decile drifts past a threshold, or a feed is added,
 removed, or resized. Stable week-to-week, responsive when the threat
@@ -212,7 +213,7 @@ into your firewall's external threat-feed / block-list setting:
 
 ```
 http://<server>:8080/feeds/high.txt      # independent sources agree (strictest)
-http://<server>:8080/feeds/medium.txt    # corroborated — includes high (recommended)
+http://<server>:8080/feeds/medium.txt    # corroborated, includes high (recommended)
 http://<server>:8080/feeds/all.txt       # everything with any evidence (low.txt is an alias)
 ```
 
@@ -246,7 +247,7 @@ customized.
 The dashboard's *Merged indicators* section shows the deduplicated result across
 all feeds (searchable and paginated). You can:
 - **Add** an IP or CIDR manually (recorded under a `manual` source)
-- **Remove** an IP — this globally whitelists it so a feed refresh won't bring
+- **Remove** an IP, which globally whitelists it so a feed refresh won't bring
   it back, and drops it from the served feeds immediately
 
 Feed endpoints are unauthenticated by design (a firewall polling a block list
@@ -257,7 +258,7 @@ Basic auth (`auth_required: true` plus `DASHBOARD_USER`/`DASHBOARD_PASSWORD`).
 
 The database is backed up automatically (online, WAL-safe) on the schedule set
 in `config.yaml` under `database.backup` (default: every 24h, keep 7, to
-`data/backups/` — on the same persistent volume). Trigger one on demand with
+`data/backups/`, on the same persistent volume). Trigger one on demand with
 `POST /api/backup` or `python -m threatfeedme.main --backup`. **Restore:** stop the app and
 copy a backup file over `data/threatfeedme.db`.
 
@@ -265,18 +266,18 @@ copy a backup file over `data/threatfeedme.db`.
 
 The container is built to fit NAS-class hosts with 1-2 GB of RAM:
 
-- The heavy paths — tier-file exports, the dashboard's counts, and the hourly
-  rescore — **stream rows instead of materializing the whole indicator table**,
+- The heavy paths, tier-file exports, the dashboard's counts, and the hourly
+  rescore, **stream rows instead of materializing the whole indicator table**,
   so peak memory stays low even at 150k+ indicators (a tier export peaks at a
   few MB instead of hundreds).
 - Whitelist changes rebuild the export files **in the background**; the
   dashboard responds immediately and the live feed URLs reflect the change
   instantly either way.
-- Cap the container so a burst can never starve the NAS — uncomment
+- Cap the container so a burst can never starve the NAS; uncomment
   `mem_limit: 1g` in `docker-compose.yml` (or set a memory limit in the
   Synology Container Manager UI).
 - If you don't consume the CSV/JSON exports, set `output.formats: [text]` in
-  `config.yaml` — it cuts export work by two thirds.
+  `config.yaml`, which cuts export work by two thirds.
 - The default 7-day retention keeps the database lean; lower
   `retention.max_age_days` (dashboard toolbar) if disk or memory is tight.
 
@@ -295,7 +296,7 @@ git pull
 docker compose up -d --build
 ```
 
-That's the whole procedure — **your data survives updates**. The database
+That's the whole procedure: **your data survives updates**. The database
 lives on the `threatfeedme-data` volume, so whitelist entries, false-positive
 feedback, scores, feed history, and accumulated indicators (e.g. the rolling
 multi-day union of DShield netblocks) all carry over. Never delete the volume
@@ -307,9 +308,9 @@ automatically on startup:
 - **New default feeds** are added.
 - **Feed plumbing follows the ship; your preferences don't move.** When a
   shipped default's mechanics change (upstream URL moved, a scraper was
-  added, auth changed), the fix is applied to your row — that's how feed
-  bug fixes reach you. Your *preferences* — enabled/disabled, weight,
-  refresh interval — are never touched by an update. The one exception: a
+  added, auth changed), the fix is applied to your row; that's how feed
+  bug fixes reach you. Your *preferences* (enabled/disabled, weight,
+  refresh interval) are never touched by an update. The one exception: a
   feed you re-added or overrode from the dashboard is yours entirely and is
   never auto-updated.
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
@@ -324,13 +325,17 @@ directory.
 Publishing the Docker image is automated by
 [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml):
 
-1. Bump `version` in `pyproject.toml` (the workflow refuses to publish if the
-   tag and that version disagree).
+1. Bump `version` in `pyproject.toml` **and** `__version__` in
+   `src/threatfeedme/__init__.py` (the workflow refuses to publish if the tag
+   disagrees with either, and a unit test keeps the pair in sync).
 2. `git tag v1.2.0 && git push origin v1.2.0`
+
+Then confirm the build actually ran: `gh run list --workflow "Publish Docker
+image"`. A tag alone is not a release.
 
 The workflow runs the test suite, then builds and pushes `linux/amd64` +
 `linux/arm64` images tagged with the version and `:latest`. Pushes to `main`
-deliberately do *not* publish — `:latest` tracks releases, not every commit.
+deliberately do not publish: `:latest` tracks releases, not every commit.
 A manual run (Actions → Publish Docker image → Run workflow) can rebuild
 without cutting a tag, e.g. to pick up a base-image security update.
 
@@ -344,14 +349,14 @@ Edit `config.yaml` to customize:
 - Confidence scoring weights
 - Whitelist rules
 - Export formats and paths
-- **Retention** (`retention.max_age_days`, default **7**) — how long an IP is
+- **Retention** (`retention.max_age_days`, default **7**), how long an IP is
   kept after it was last seen in *any* feed. Because `last_seen` is refreshed
   whenever any feed re-reports an IP, this mostly evicts transient high-churn
   entries (scanners, brute-force) while continuously-listed feeds stay put. Set
   `0` to keep indefinitely.
 
-Values in `config.yaml` are the **seed defaults**. Runtime-adjustable settings —
-the auto-refresh interval and the retention window — can be changed live from
+Values in `config.yaml` are the **seed defaults**. Runtime-adjustable settings (
+the auto-refresh interval and the retention window) can be changed live from
 the dashboard toolbar (or `POST /api/settings`); the stored value then takes
 precedence over the file, so it survives restarts without editing config.
 
