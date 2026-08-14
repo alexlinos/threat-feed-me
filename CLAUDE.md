@@ -138,10 +138,37 @@ live-verified 2026-08-13.
   runs for domain feeds. Never sniff domains out of IP feeds (comments and
   URLs in feed headers would pollute the corpus).
 
-### Ratify before build (Alex)
+### UI decisions ratified 2026-08-14 (mockups reviewed by Alex)
+
+- **D2 revised, feed URLs**: the card section becomes a FEED MATRIX: rows =
+  tiers (High/Medium/Everything), columns = kind (IP feeds / Domain feeds),
+  each cell = URL + inline count + Copy. The stat-tile row is RETIRED
+  (counts moved inline; page gets shorter despite the second kind). Below
+  720px each matrix row collapses to a tier group with the two kinds
+  stacked as labeled lines; URLs ellipsize from the LEFT so the tail stays
+  readable; counts compact (42.4k).
+- **D9, feeds management**: ONE table, kind-grouped with slim group header
+  rows (green IP / purple domain, each with feed + indicator counts).
+  Telemetry (Entries/Unique/First/New/twin) computed WITHIN KIND — cross-
+  kind overlap is structurally zero, so mixed-roster uniqueness would be
+  meaningless flattery. Long scroll, NO collapse (monitoring surface: a
+  collapsed group is where a feed rots unseen); within each group,
+  error/stale/degraded rows float above healthy ones ("problems float").
+  Add-feed + upload forms gain an IP/Domain kind select. Overlap map
+  renders as two blocks (IP map + domain map) in the same disclosure.
+  "IPs" column header becomes "Entries". Lookup box accepts domains.
+- **D10, TLD panel**: new collapsed <details> at the bottom (geo-panel
+  pattern: lazy fetch on expand, cached): "problematic TLDs" for the
+  domain corpus. Form: RANKED HORIZONTAL BARS (top ~15 + honest "other"
+  row), NOT a pie — TLD abuse is heavily skewed and pies fail on long
+  tails; matches the geo panel's map+ranked-list precedent. v1 ranks by
+  raw blocked-domain count; tier-weighted ranking is a possible follow-up.
+  Optional small top-5 donut beside the bars only if visual variety is
+  wanted; bars carry the data. Endpoint: /api/domains/tlds.
+
+### Still to ratify (Alex)
 
 1. Which domain feeds enabled by default: recommend urlhaus_hostfile +
    openphish enabled (keyless = the product promise), joewein disabled.
-2. Dashboard: separate "Domain feeds" card section under the IP cards
-   (recommended) vs a tab.
-3. Single v2.0.0 release (recommended) vs incremental feature-flagged 1.x.
+2. Single v2.0.0 release (recommended) vs incremental feature-flagged 1.x.
+3. TLD panel: plain ranked bars (recommended) vs bars + small top-5 donut.
