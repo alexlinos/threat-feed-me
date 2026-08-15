@@ -126,7 +126,11 @@ live-verified 2026-08-13.
     times daily; NOT key-walled unlike other abuse.ch exports)
   - `openphish_community` https://openphish.com/feed.txt (phishing URLs;
     extract registrable domain)
-  - `joewein_dom_bl` https://www.joewein.net/dl/bl/dom-bl.txt (spam/419)
+  - `hagezi_threat_intel` https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domain/threat-intelligence.txt
+    (malware/cryptojacking/scam/spam/phishing/C2 domains, the community-
+    standard Threat Intelligence list; keyless, actively maintained)
+  - `joewein_dom_bl` https://www.joewein.net/dl/bl/dom-bl.txt (spam/419;
+    default OFF — spam-centric, low volume, no embedded freshness header)
 - **D6 whitelist**: exact-domain entries + wildcard (`*.example.com`);
   matcher extension mirrors the CIDR pattern. Tier scopes work as-is.
 - **D7 release**: v2.0.0, single release after the whole path is tested;
@@ -166,9 +170,14 @@ live-verified 2026-08-13.
   Optional small top-5 donut beside the bars only if visual variety is
   wanted; bars carry the data. Endpoint: /api/domains/tlds.
 
-### Still to ratify (Alex)
+### Ratified (Alex, 2026-08-15) ← replaces "Still to ratify"
 
-1. Which domain feeds enabled by default: recommend urlhaus_hostfile +
-   openphish enabled (keyless = the product promise), joewein disabled.
-2. Single v2.0.0 release (recommended) vs incremental feature-flagged 1.x.
-3. TLD panel: plain ranked bars (recommended) vs bars + small top-5 donut.
+1. Domain feeds default-enabled: urlhaus_hostfile + openphish_community +
+   hagezi_threat_intel ON (keyless = the product promise); joewein_dom_bl
+   OFF (spam-centric, low volume, no embedded freshness header).
+2. Single v2.0.0 release after the whole path is tested, per D7.
+3. TLD panel: plain ranked bars (recommended, no top-5 donut; bars carry the
+   data, matches geo-panel precedent).
+
+Roster stays open for curation: Alex ratifies new sources one at a time;
+keep blocklist-source research additive rather than fixing a walled list.
