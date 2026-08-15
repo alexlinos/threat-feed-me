@@ -90,6 +90,7 @@ class Database:
         sources_str = row['sources_str'] if 'sources_str' in row.keys() else ''
         sources = sources_str.split(',') if sources_str else []
         tier = tier_override if tier_override is not None else ConfidenceTier(row['tier'])
+        kind_val = row['kind'] if 'kind' in row.keys() else 'ip'
         return ThreatIndicator(
             ip=row['ip'],
             sources=sources,
@@ -99,7 +100,8 @@ class Database:
             tier=tier,
             metadata=meta,
             effective_votes=(row['effective_votes']
-                             if 'effective_votes' in row.keys() else None),
+                            if 'effective_votes' in row.keys() else None),
+            kind=kind_val,
         )
 
     # ==================== SCHEMA ====================
@@ -120,7 +122,8 @@ class Database:
                     confidence_score REAL DEFAULT 0.0,
                     tier TEXT DEFAULT 'low',
                     metadata TEXT DEFAULT '{}',
-                    effective_votes REAL
+                    effective_votes REAL,
+                    kind TEXT NOT NULL DEFAULT 'ip'
                 )
             """)
 
@@ -284,6 +287,28 @@ class Database:
                 except sqlite3.OperationalError:
                     pass
 
+            # Domain intel v2.0: additive `kind` column on indicators ('ip'
+            # default, 'domain'). The value stays in the existing `ip` column
+            # (documented as "the indicator value"), so every UNIQUE and index
+            # keeps working without a table rebuild. Existing rows default to
+            # 'ip' so IP-only databases upgrade untouched.
+            if i_cols and 'kind' not in i_cols:
+                try:
+                    cursor.execute("ALTER TABLE indicators ADD COLUMN kind TEXT NOT NULL DEFAULT 'ip'")
+                except sqlite3.OperationalError:
+                    pass
+
+            # Domain intel v2.0: feeds declare their indicator kind. Existing
+            # rows default to 'ip' (the historical behaviour; IP feeds are the
+            # vast majority, and a freshly-created table already carries the
+            # column via the CREATE TABLE above).
+            f_cols = [r[1] for r in cursor.execute("PRAGMA table_info(feeds)").fetchall()]
+            if f_cols and 'indicator_kind' not in f_cols:
+                try:
+                    cursor.execute("ALTER TABLE feeds ADD COLUMN indicator_kind TEXT NOT NULL DEFAULT 'ip'")
+                except sqlite3.OperationalError:
+                    pass
+
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_ip ON indicators(ip)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
@@ -295,23 +320,26 @@ class Database:
 
     # ==================== INDICATOR OPERATIONS ====================
 
-    def add_indicator(self, ip: str, source: str, metadata: Dict = None) -> int:
+    def add_indicator(self, ip: str, source: str, metadata: Dict = None, kind: str = "ip") -> int:
         """Add or update an indicator from a feed source"""
         now = _utcnow_iso()
         meta_json = json.dumps(metadata or {})
         with self._cursor() as cur:
-            cur.execute("SELECT id FROM indicators WHERE ip = ?", (ip,))
+            cur.execute("SELECT id, kind FROM indicators WHERE ip = ?", (ip,))
             row = cur.fetchone()
             if row:
                 indicator_id = row[0]
+                # Preserve the existing row's kind on update: an IP row stays
+                # an IP row, a domain row stays a domain row. The value in the
+                # `ip` column is the indicator value either way.
                 cur.execute(
-                    "UPDATE indicators SET last_seen = ?, metadata = json_patch(COALESCE(metadata, '{}'), ?) WHERE ip = ?",
-                    (now, meta_json, ip),
+                    "UPDATE indicators SET last_seen = ?, metadata = json_patch(COALESCE(metadata, '{}'), ?), kind = ? WHERE ip = ?",
+                    (now, meta_json, row[1], ip),
                 )
             else:
                 cur.execute(
-                    "INSERT INTO indicators (ip, first_seen, last_seen, metadata) VALUES (?, ?, ?, ?)",
-                    (ip, now, now, meta_json),
+                    "INSERT INTO indicators (ip, first_seen, last_seen, metadata, kind) VALUES (?, ?, ?, ?, ?)",
+                    (ip, now, now, meta_json, kind),
                 )
                 indicator_id = cur.lastrowid
             cur.execute(
@@ -325,7 +353,7 @@ class Database:
     # release the write lock periodically for other writers.
     BULK_CHUNK = 10_000
 
-    def add_indicators_bulk(self, rows: List[tuple], source: str) -> int:
+    def add_indicators_bulk(self, rows: List[tuple], source: str, kind: str = "ip") -> int:
         """Add or update many indicators from one feed source.
 
         `rows` is a list of (ip, metadata) tuples. Semantically identical to
@@ -343,10 +371,11 @@ class Database:
             for start in range(0, len(rows), self.BULK_CHUNK):
                 chunk = rows[start:start + self.BULK_CHUNK]
                 cur.executemany(
-                    "INSERT INTO indicators (ip, first_seen, last_seen, metadata) VALUES (?, ?, ?, ?) "
+                    "INSERT INTO indicators (ip, first_seen, last_seen, metadata, kind) VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(ip) DO UPDATE SET last_seen = excluded.last_seen, "
-                    "metadata = json_patch(COALESCE(metadata, '{}'), excluded.metadata)",
-                    [(ip, now, now, json.dumps(meta or {})) for ip, meta in chunk],
+                    "metadata = json_patch(COALESCE(metadata, '{}'), excluded.metadata), "
+                    "kind = excluded.kind",
+                    [(ip, now, now, json.dumps(meta or {}), kind) for ip, meta in chunk],
                 )
                 cur.executemany(
                     "INSERT OR IGNORE INTO indicator_sources (indicator_id, source_name, reported_at) "

@@ -157,6 +157,10 @@ class FeedSource(BaseModel):
     scraper: Optional[str] = None
     # Disabled feeds are kept but skipped during ingestion.
     enabled: bool = True
+    # Kind of indicator this feed produces: 'ip' (default, includes CIDRs) or
+    # 'domain'. Feeds DECLARE their kind; domain extraction only runs for
+    # domain feeds. Never sniff domains out of IP feeds.
+    indicator_kind: str = "ip"
 
     # Allow "type" in YAML to map to "feed_type"
     model_config = ConfigDict(populate_by_name=True)
@@ -174,6 +178,8 @@ class ThreatIndicator(BaseModel):
     # (None until one has run). Includes netblock-derived votes, so it can
     # exceed len(sources) — this is what explains an IP's tier.
     effective_votes: Optional[float] = None
+    # Kind of indicator: 'ip' (default, includes CIDRs) or 'domain'.
+    kind: str = "ip"
 
     model_config = ConfigDict(from_attributes=True)
 
