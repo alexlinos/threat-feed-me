@@ -132,7 +132,7 @@ class ConfidenceScorer:
         if self.tier_method == 'legacy':
             tier = self._determine_tier(score, len(sources or []), sources)
         else:
-            med_b, high_b = self._stored_breaks()
+            med_b, high_b = self._stored_breaks(kind=indicator.kind)
             tier = self._tier_from_votes(votes, sources, med_b, high_b)
         return score, tier
 
@@ -156,22 +156,36 @@ class ConfidenceScorer:
         for indicator in self.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
             count += 1
             score, votes, sources = self._evidence(indicator, netblocks, whitelist_map)
-            evidence.append((indicator.ip, score, votes, sources))
+            evidence.append((indicator.ip, score, votes, sources, indicator.kind))
 
         if self.tier_method == 'legacy':
             updates = [
                 (score, self._determine_tier(score, len(sources or []), sources).value,
                  votes, ip)
-                for ip, score, votes, sources in evidence
+                for ip, score, votes, sources, _kind in evidence
             ]
         else:
-            med_b, high_b = self._breaks_for_votes(
-                [votes for _ip, _s, votes, sources in evidence if sources])
-            self._persist_breaks(med_b, high_b)
+            # Tier boundaries are computed PER KIND. Domain vote distributions
+            # differ wildly from IP ones; shared breaks would let one
+            # population silently set the other's tier lines. Split the vote
+            # populations and persist two break pairs (tier_breaks /
+            # tier_breaks_domains) so each kind's tiers stay its own.
+            ip_votes = [votes for _ip, _s, votes, sources, kind in evidence
+                        if kind == 'ip' and sources]
+            dom_votes = [votes for _ip, _s, votes, sources, kind in evidence
+                        if kind == 'domain' and sources]
+            ip_med, ip_high = self._breaks_for_votes(ip_votes, kind='ip')
+            self._persist_breaks(ip_med, ip_high, kind='ip')
+            dom_med, dom_high = self._breaks_for_votes(dom_votes, kind='domain')
+            self._persist_breaks(dom_med, dom_high, kind='domain')
             updates = [
-                (score, self._tier_from_votes(votes, sources, med_b, high_b).value,
+                (score,
+                 self._tier_from_votes(
+                     votes, sources,
+                     ip_med if kind == 'ip' else dom_med,
+                     ip_high if kind == 'ip' else dom_high).value,
                  votes, ip)
-                for ip, score, votes, sources in evidence
+                for ip, score, votes, sources, kind in evidence
             ]
 
         if updates:
@@ -294,9 +308,11 @@ class ConfidenceScorer:
         return votes
 
     TIER_BREAKS_KEY = 'tier_breaks'
+    TIER_BREAKS_KEY_DOMAINS = 'tier_breaks_domains'
     TIER_FINGERPRINT_KEY = 'tier_breaks_fingerprint'
+    TIER_FINGERPRINT_KEY_DOMAINS = 'tier_breaks_fingerprint_domains'
 
-    def _breaks_for_votes(self, votes: List[float]) -> tuple[float, float]:
+    def _breaks_for_votes(self, votes: List[float], kind: str = 'ip') -> tuple[float, float]:
         """Tier boundaries, held stable between rescores unless the vote
         distribution actually moves.
 
@@ -306,25 +322,31 @@ class ConfidenceScorer:
         a threshold (quantile fingerprint drift) or (b) the feed roster
         changed (source-count fingerprint). Only then re-run k-means. The
         configured floors remain hard minimums in all paths.
+
+        `kind` selects which stored break/fingerprint pair is read and
+        written ('ip' -> tier_breaks, 'domain' -> tier_breaks_domains) so each
+        kind's boundaries stay its own.
         """
         # First rescore (no stored fingerprint): compute and persist.
-        fingerprint = self._load_fingerprint()
+        fingerprint = self._load_fingerprint(kind=kind)
         if fingerprint is None:
             med_b, high_b = self._natural_breaks(votes)
-            self._persist_fingerprint(votes)
+            self._persist_fingerprint(votes, kind=kind)
             return med_b, high_b
 
         if self._fingerprint_moved(votes, fingerprint):
             med_b, high_b = self._natural_breaks(votes)
-            self._persist_fingerprint(votes)
+            self._persist_fingerprint(votes, kind=kind)
             return med_b, high_b
 
         # Distribution unchanged -> keep the stable boundaries.
-        return self._stored_breaks()
+        return self._stored_breaks(kind=kind)
 
-    def _load_fingerprint(self) -> Optional[dict]:
+    def _load_fingerprint(self, kind: str = 'ip') -> Optional[dict]:
+        key = self.TIER_FINGERPRINT_KEY_DOMAINS if kind == 'domain' \
+            else self.TIER_FINGERPRINT_KEY
         try:
-            raw = self.db.get_setting(self.TIER_FINGERPRINT_KEY)
+            raw = self.db.get_setting(key)
             if raw:
                 j = json.loads(raw)
                 if 'votes' in j and 'sources' in j:
@@ -333,10 +355,12 @@ class ConfidenceScorer:
             pass
         return None
 
-    def _persist_fingerprint(self, votes: List[float]) -> None:
+    def _persist_fingerprint(self, votes: List[float], kind: str = 'ip') -> None:
+        key = self.TIER_FINGERPRINT_KEY_DOMAINS if kind == 'domain' \
+            else self.TIER_FINGERPRINT_KEY
         try:
             self.db.set_setting(
-                self.TIER_FINGERPRINT_KEY,
+                key,
                 json.dumps({'votes': self._fingerprint(votes),
                             'sources': self._source_fingerprint()}),
             )
@@ -431,18 +455,21 @@ class ConfidenceScorer:
             return ConfidenceTier.MEDIUM
         return ConfidenceTier.LOW
 
-    def _persist_breaks(self, med_b: float, high_b: float) -> None:
+    def _persist_breaks(self, med_b: float, high_b: float, kind: str = 'ip') -> None:
+        key = self.TIER_BREAKS_KEY_DOMAINS if kind == 'domain' \
+            else self.TIER_BREAKS_KEY
         try:
-            self.db.set_setting(self.TIER_BREAKS_KEY,
-                                json.dumps({'medium': med_b, 'high': high_b}))
+            self.db.set_setting(key, json.dumps({'medium': med_b, 'high': high_b}))
         except Exception:
             pass  # never let bookkeeping break a rescore
 
-    def _stored_breaks(self) -> tuple[float, float]:
+    def _stored_breaks(self, kind: str = 'ip') -> tuple[float, float]:
         """Boundaries persisted by the last full rescore; floors before any
         rescore has run (fresh database)."""
+        key = self.TIER_BREAKS_KEY_DOMAINS if kind == 'domain' \
+            else self.TIER_BREAKS_KEY
         try:
-            raw = self.db.get_setting(self.TIER_BREAKS_KEY)
+            raw = self.db.get_setting(key)
             if raw:
                 j = json.loads(raw)
                 return float(j['medium']), float(j['high'])
