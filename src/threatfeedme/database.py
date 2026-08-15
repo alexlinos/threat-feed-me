@@ -428,6 +428,9 @@ class Database:
                 "GROUP BY tld ORDER BY cnt DESC"
             )
             return [(r["tld"], r["cnt"]) for r in cur.fetchall()]
+
+    def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
+        """Get a single indicator by its value (IP address or domain)."""
         with self._cursor() as cur:
             cur.execute(
                 "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
