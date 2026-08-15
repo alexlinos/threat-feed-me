@@ -60,7 +60,10 @@
         IP URLs never contain a domain and domain URLs never contain an IP — an address-type
         feed import fed the wrong kind errors out on most firewalls.
         Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feeds.
-        If a URL shows a loopback address, replace the host with this server's LAN IP or hostname.
+        <b>FortiGate note:</b> external resources are capped per model (commonly ~131k entries / 10 MB);
+        the domain <i>Everything</i> feed can exceed that, so point FortiGate DNS filters at the
+        Medium or High domain feed. If a URL shows a loopback address, replace the host with this
+        server's LAN IP or hostname.
     </details>
 
     <!-- The common question ("is this IP/domain in my feeds?") without the 51k-row list. -->

@@ -88,6 +88,53 @@ feeds:
     indicator_kind: "domain"
     update_interval: 43200  # list header says "Expires: 12 hours"
 
+  # Phishing Army EXTENDED (ratified 2026-08-15). The community-consensus
+  # phishing list (Firebog ticked tier): aggregates PhishTank + urlscan.io +
+  # Phishunt + OpenPhish + CERT.PL — the first three otherwise key-walled —
+  # and scrubs false positives against curated whitelists upstream. Overlap
+  # with openphish_community is by design (openphish refreshes 15-min, this
+  # 6-hourly); the discounting prices their agreement. CC BY 4.0.
+  - name: phishing_army
+    url: https://phishing.army/download/phishing_army_blocklist_extended.txt
+    feed_type: "phishing"
+    indicator_kind: "domain"
+    update_interval: 21600  # regenerated every ~6 hours
+
+  # HaGeZi Fake list: fake shops / scam traps. Ratified ON 2026-08-15, then
+  # live-measured 100% CONTAINED in hagezi_threat_intel (TIF aggregates
+  # hagezi's own Fake list) — 16,626 entries, 0% unique, twin-flagged. Same
+  # publisher means the "agreement" isn't independent evidence either, so
+  # it ships OFF: only useful if you disable TIF but still want fake-shop
+  # coverage.
+  - name: hagezi_fake
+    url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    enabled: false
+    update_interval: 43200
+
+  # CERT Polska warning list: the highest-provenance source in this space
+  # (a national CERT, hourly updates), but it is an UPSTREAM of
+  # phishing_army — enabling both twin-flags it as ~100% contained. Ships
+  # OFF as the provenance-pure alternative for operators who prefer the
+  # primary source over the aggregate.
+  - name: cert_pl
+    url: https://hole.cert.pl/domains/v2/domains.txt
+    feed_type: "phishing"
+    indicator_kind: "domain"
+    enabled: false
+    update_interval: 3600
+
+  # ThreatView.io high-confidence domains: ~500k entries (would triple the
+  # domain corpus alone), aggregator-of-aggregators provenance, daily
+  # updates. OFF: opt-in for large deployments that want the widest net.
+  - name: threatview_domains
+    url: https://threatview.io/Downloads/DOMAIN-High-Confidence-Feed.txt
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    enabled: false
+    update_interval: 86400
+
   - name: joewein_dom_bl
     url: https://www.joewein.net/dl/bl/dom-bl.txt
     feed_type: "threat_intel"

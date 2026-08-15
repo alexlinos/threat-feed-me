@@ -31,11 +31,11 @@ Then open the dashboard and copy the **"Medium confidence"** feed URL into your
 firewall's threat-feed setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco,
 pfSense, ...).
 
-That's it. On first start it fetches **18 free, keyless threat feeds** (15 IP
-feeds and 3 domain feeds: URLhaus, OpenPhish, HaGeZi TIF), dedupes and scores
-them, and begins serving block lists. It **auto-refreshes every 60 minutes**,
-no cron, no maintenance. Everything stays on-prem; feeds are pulled inbound
-only.
+That's it. On first start it fetches **19 free, keyless threat feeds** (15 IP
+feeds and 4 domain feeds: URLhaus, OpenPhish, Phishing Army, HaGeZi TIF),
+dedupes and scores them, and begins serving block lists. It
+**auto-refreshes every 60 minutes**, no cron, no maintenance. Everything stays
+on-prem; feeds are pulled inbound only.
 
 - **No accounts or keys required** for the default feeds.
 - The dashboard shows the exact URLs to paste, per confidence tier, with a
@@ -114,8 +114,8 @@ firewalls can poll them.
 │  ├── DataPlane, BruteForceBlocker, Turris, BinaryDefense   │
 │  ├── abuse.ch ThreatFox mirror (botnet C2 IOCs)            │
 │  ├── AbuseIPDB top-reported (community abuse reports)      │
-│  ├── Domain feeds: URLhaus, OpenPhish, HaGeZi TIF          │
-│  ├── Optional: AlienVault OTX, HoneyDB, joewein (disabled) │
+│  ├── Domains: URLhaus, OpenPhish, PhishingArmy, HaGeZi x2  │
+│  ├── Optional: OTX, HoneyDB, CERT.PL, ThreatView, joewein  │
 │  └── Custom Feeds (user-defined, e.g. local honeypot)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Processing Engine                                          │

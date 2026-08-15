@@ -182,6 +182,29 @@ live-verified 2026-08-13.
 Roster stays open for curation: Alex ratifies new sources one at a time;
 keep blocklist-source research additive rather than fixing a walled list.
 
+### Ratified (Alex, 2026-08-15, "lets try it") — domain roster expansion
+
+Community-grounded (Firebog ticked tier, live-probed keyless):
+
+1. `phishing_army` ON — the extended blocklist (~156k, 6h updates, CC BY
+   4.0). Aggregates PhishTank + urlscan.io + Phishunt + OpenPhish +
+   CERT.PL, with upstream FP-scrubbing against curated whitelists.
+2. `hagezi_fake` OFF — ratified ON, then live-measured 100% contained in
+   TIF mini (0% unique, twin-flagged; TIF aggregates hagezi's own Fake
+   list). Same-publisher agreement isn't independent evidence, so it ships
+   disabled; kept as an opt-in for TIF-less setups.
+3. `cert_pl` OFF — highest provenance (national CERT, hourly) but an
+   UPSTREAM of phishing_army: enabling both twin-flags it as ~100%
+   contained. Opt-in for operators preferring the primary source.
+4. `threatview_domains` OFF — ~500k aggregator-of-aggregators; opt-in.
+
+Probed and rejected: red.flag.domains (French-only relevance), DigitalSide
+(host down), botvrij (dead file), urlhaus-filter (repackaged urlhaus),
+Spam404/quidsup/DandelionSprout/CyberHost (small hobbyist lists largely
+inside hagezi TIF + phishing_army). FortiGate operators: external-resource
+caps (~131k entries on mid-range) mean the DNS filter should point at
+domains/medium or high, not Everything — noted in the dashboard how-to.
+
 ### v2.0.0 build state (2026-08-15, shipped)
 
 The whole D1-D10 path is implemented, tested (269 green), live-verified
