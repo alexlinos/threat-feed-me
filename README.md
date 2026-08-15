@@ -4,7 +4,7 @@
 
 # Threat Feed Me!
 
-On-prem threat intelligence aggregator that normalizes, dedupes, and scores threat feeds into confidence tiers, then serves them as one URL your firewall polls. Feed it threats. It's always hungry.
+On-prem threat intelligence aggregator that normalizes, dedupes, and scores threat feeds into confidence tiers, then serves them as one URL your firewall polls — malicious **IPs** for the packet filter and malicious **domains** for the DNS filter, as separate feeds that never mix. Feed it threats. It's always hungry.
 
 ## Deploy
 
@@ -31,10 +31,11 @@ Then open the dashboard and copy the **"Medium confidence"** feed URL into your
 firewall's threat-feed setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco,
 pfSense, ...).
 
-That's it. On first start it fetches **15 free, keyless threat feeds**, dedupes
-and scores them, and begins serving block lists. It **auto-refreshes every 60
-minutes**, no cron, no maintenance. Everything stays on-prem; feeds are pulled
-inbound only.
+That's it. On first start it fetches **18 free, keyless threat feeds** (15 IP
+feeds and 3 domain feeds: URLhaus, OpenPhish, HaGeZi TIF), dedupes and scores
+them, and begins serving block lists. It **auto-refreshes every 60 minutes**,
+no cron, no maintenance. Everything stays on-prem; feeds are pulled inbound
+only.
 
 - **No accounts or keys required** for the default feeds.
 - The dashboard shows the exact URLs to paste, per confidence tier, with a
@@ -59,6 +60,15 @@ firewalls can poll them.
 - **Feed Aggregation**: Pull from multiple sources (OSINT, commercial, custom
   including [HoneyDB](https://honeydb.io) honeypot telemetry: the community
   network and, if you run sensors, your own honeypots voting as a source)
+- **Two indicator kinds, never mixed** *(v2.0)*: IP/CIDR feeds for the packet
+  filter and domain feeds for the DNS filter (FortiGate DNS filter, Pi-hole,
+  AdGuard Home, pfBlockerNG DNSBL, Unbound). Feeds *declare* their kind;
+  domains are never sniffed out of IP feeds, an IP URL never contains a
+  domain, and both kinds get their own tier boundaries (a domain vote
+  distribution would otherwise set the IP tier lines, or vice versa).
+  Domain safety floor: special-use TLDs (`.test`, `.local`, ...) are rejected
+  and a curated core of OS-update/CDN/mail infrastructure (plus your own
+  `safety.known_good_domains`) can never be blocked, subdomains included.
 - **Runtime feed management**: Add, remove, enable/disable, and mix-and-match
   feeds from the dashboard, including your own custom URL or local-file feeds
 - **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
@@ -77,6 +87,8 @@ firewalls can poll them.
   - Age decay
 - **Whitelist Management**: Override false positives, globally (all feeds) or
   scoped to a single feed (ignore one noisy source while trusting the rest).
+  Accepts IPs, CIDRs (suppress a whole network), exact domains, and wildcards
+  (`*.example.com` covers the domain and every subdomain).
   The whitelist dialog shows which feed(s) reported the IP, and a reason
   (false positive / risk accepted / internal asset). Flagging a **false
   positive** lowers that feed's reputation, so a noisy feed's IPs score lower
@@ -102,22 +114,23 @@ firewalls can poll them.
 │  ├── DataPlane, BruteForceBlocker, Turris, BinaryDefense   │
 │  ├── abuse.ch ThreatFox mirror (botnet C2 IOCs)            │
 │  ├── AbuseIPDB top-reported (community abuse reports)      │
-│  ├── Optional: AlienVault OTX, HoneyDB (ship disabled)     │
+│  ├── Domain feeds: URLhaus, OpenPhish, HaGeZi TIF          │
+│  ├── Optional: AlienVault OTX, HoneyDB, joewein (disabled) │
 │  └── Custom Feeds (user-defined, e.g. local honeypot)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Processing Engine                                          │
-│  ├── Normalization (common schema)                         │
-│  ├── Deduplication (IP-based with source tracking)         │
-│  ├── Confidence Scoring (multi-factor)                     │
-│  └── Whitelist Filtering                                    │
+│  ├── Normalization (common schema; domains IDNA-normalized)│
+│  ├── Deduplication (value-based with source tracking)      │
+│  ├── Confidence Scoring (multi-factor, per-kind tiers)     │
+│  └── Whitelist + Safety Filtering (per kind)               │
 ├─────────────────────────────────────────────────────────────┤
-│  Output Tiers                                               │
+│  Output Tiers (per kind: /feeds/* and /feeds/domains/*)    │
 │  ├── High: >2 independent votes + threat-intel validated   │
 │  ├── Medium: >1 independent vote (overlap-discounted)      │
-│  └── Low: all deduped IPs (including custom)               │
+│  └── Low: everything deduped (including custom)            │
 ├─────────────────────────────────────────────────────────────┤
 │  Storage                                                    │
-│  └── SQLite (IPs, sources, scores, whitelist, metadata)    │
+│  └── SQLite (indicators, sources, scores, whitelist, ...)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -215,12 +228,20 @@ into your firewall's external threat-feed / block-list setting:
 http://<server>:8080/feeds/high.txt      # independent sources agree (strictest)
 http://<server>:8080/feeds/medium.txt    # corroborated, includes high (recommended)
 http://<server>:8080/feeds/all.txt       # everything with any evidence (low.txt is an alias)
+
+http://<server>:8080/feeds/domains/high.txt    # same tiers, malicious DOMAINS
+http://<server>:8080/feeds/domains/medium.txt  # for your DNS filter
+http://<server>:8080/feeds/domains/all.txt
 ```
 
 Feeds are **cumulative**: each tier's URL includes every tier above it, so a
 firewall polling one URL gets all indicators at or above that confidence.
-Each URL returns plain text, one IP or CIDR per line, generated live with the
-whitelist applied. `.csv` and `.json` variants are also available for SIEM use.
+Each URL returns plain text, one entry per line, generated live with the
+whitelist applied. `.csv` and `.json` variants are also available for SIEM
+use. IP URLs never contain a domain and domain URLs never contain an IP — an
+address-type feed import fed the wrong kind errors out on most firewalls.
+The on-disk exports split the same way (`*_confidence_ips.*` /
+`*_confidence_domains.*`).
 
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
 - **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block)
@@ -234,9 +255,13 @@ whitelist applied. `.csv` and `.json` variants are also available for SIEM use.
 ### Custom lists
 
 Add your own feeds from the dashboard: a remote **URL feed**, or **upload a list**
-(one IP/CIDR per line). Uploads are stored server-side under `data/uploads/`,
-capped at 5 MB, text-only, validated to contain at least one IP/CIDR, and the
-storage path is boundary-checked so a filename can never escape that directory.
+(one IP/CIDR — or domain — per line; pick the kind in the form). Uploads are
+stored server-side under `data/uploads/`, capped at 5 MB, text-only, validated
+to contain at least one entry of the declared kind, and the storage path is
+boundary-checked so a filename can never escape that directory. Domain feeds
+accept plain domain-per-line lists, hosts-file format (`0.0.0.0 evil.example`),
+and URL lists (the host is kept); unicode domains are IDNA-normalized so both
+spellings dedupe to one indicator.
 
 **Restore defaults:** the dashboard's *Restore default feeds* button re-adds the
 curated feeds from `config.yaml` that are missing, without touching feeds you've

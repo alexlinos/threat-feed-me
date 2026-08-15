@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threat Feed Me! A carnivorous blocklist for your firewall</title>
-<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 15 free, keyless threat feeds into High/Medium/Low confidence tiers, served as one URL your firewall polls. Docker, single container, no API keys.">
+<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 18 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
 <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
 
 <!-- Open Graph / social -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
-<meta property="og:description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 15 free, keyless threat feeds into High/Medium/Low confidence tiers, served as one URL your firewall polls. Docker, single container, no API keys.">
+<meta property="og:description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 18 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
 <meta property="og:url" content="https://threatfeedme.app/">
 <meta property="og:image" content="https://threatfeedme.app/assets/social-preview.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
-<meta name="twitter:description" content="On-prem threat-intel aggregator: 15 free, keyless feeds deduped and scored into confidence tiers, served as one URL your firewall polls.">
+<meta name="twitter:description" content="On-prem threat-intel aggregator: 18 free, keyless feeds — malicious IPs and domains — deduped and scored into confidence tiers, served as URLs your firewall and DNS filter poll.">
 <meta name="twitter:image" content="https://threatfeedme.app/assets/social-preview.png">
 
 <style>
@@ -192,8 +192,9 @@
     <img class="banner" src="assets/banner.svg" alt="Threat Feed Me! A carnivorous blocklist for your firewall">
     <p class="pitch">
       An <b>on-prem threat-intelligence aggregator</b> that normalizes, dedupes, and scores
-      <b>15 free, keyless threat feeds</b> into High/Medium/Low confidence tiers,
-      then serves them as <b>one URL your firewall polls</b>.
+      <b>18 free, keyless threat feeds</b> — malicious <b>IPs</b> and <b>domains</b> —
+      into High/Medium/Low confidence tiers, then serves them as
+      <b>URLs your firewall and DNS filter poll</b>.
     </p>
     <p class="tagline">// Feed it threats. It's always hungry.</p>
     <div class="cta-row">
@@ -231,7 +232,8 @@
 
       <p class="after-code">
         Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
-        On first start it fetches the 15 feeds, dedupes and scores them, and begins serving block lists,
+        On first start it fetches the 18 feeds (15 IP feeds plus URLhaus, OpenPhish, and HaGeZi
+        domain feeds), dedupes and scores them, and begins serving block lists,
         then auto-refreshes every 60 minutes. Opt-in integrations with free API keys:
         <a href="https://honeydb.io" target="_blank" rel="noopener">HoneyDB</a> (honeypot sensor
         network, including sensors <i>you</i> operate voting as a source) and AlienVault OTX.
@@ -272,7 +274,10 @@
       </ul>
       <p class="sub"><b>Tiers come from the shape of the crowd.</b> Every IP gets one number: how many genuinely independent, reputable, fresh witnesses it has. The tier lines are drawn at natural gaps in that distribution, and held stable so live firewall IPs don't reshuffle as feeds cycle in and out. They only move when the vote distribution actually shifts, or a feed is added, removed, or resized.</p>
       <p class="after-code" style="margin-top:18px">
-        Each URL returns plain text, one IP or CIDR per line, generated live with the whitelist applied.
+        Each URL returns plain text, one entry per line, generated live with the whitelist applied.
+        The same tiers exist for <b>malicious domains</b> at <code>/feeds/domains/high.txt</code>,
+        <code>medium</code>, and <code>all</code> — for the DNS-filter side of the firewall (or
+        Pi-hole / AdGuard Home). IP URLs never contain a domain and vice versa.
         <code>.csv</code> and <code>.json</code> variants are available for SIEM use.
       </p>
     </div>
@@ -285,14 +290,15 @@
       <p class="sub">Paste a feed URL into your firewall's external threat-feed / block-list setting. The dashboard shows the exact URLs and per-vendor steps.</p>
 
       <div class="fw-grid">
-        <div class="fw"><span class="name">FortiGate</span><span class="path">Security Fabric → External Connectors → IP Address Threat Feed</span></div>
+        <div class="fw"><span class="name">FortiGate</span><span class="path">Security Fabric → External Connectors → IP Address / Domain Name Threat Feed</span></div>
         <div class="fw"><span class="name">Sophos Firewall (SFOS 21.0+)</span><span class="path">Active threat response → Third-party threat feeds → Add</span></div>
         <div class="fw"><span class="name">SonicWall (SonicOS 7)</span><span class="path">Object → Match Objects → Dynamic External Object</span></div>
         <div class="fw"><span class="name">Palo Alto</span><span class="path">Objects → External Dynamic Lists → IP List</span></div>
         <div class="fw"><span class="name">Cisco Secure Firewall (FMC)</span><span class="path">Objects → Security Intelligence → Network Lists and Feeds</span></div>
         <div class="fw"><span class="name">Check Point (R81+)</span><span class="path">Threat Prevention → Indicators → External IOC Feed</span></div>
-        <div class="fw"><span class="name">pfSense (pfBlockerNG)</span><span class="path">Firewall → pfBlockerNG → IPv4 → add the URL as a source</span></div>
+        <div class="fw"><span class="name">pfSense (pfBlockerNG)</span><span class="path">IPv4 sources · domain feeds → DNSBL Groups</span></div>
         <div class="fw"><span class="name">OPNsense</span><span class="path">Firewall → Aliases → URL Table (IPs)</span></div>
+        <div class="fw"><span class="name">Pi-hole / AdGuard Home</span><span class="path">Adlists / DNS blocklists → add a domain feed URL</span></div>
       </div>
     </div>
   </section>
