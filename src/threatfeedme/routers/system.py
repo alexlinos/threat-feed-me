@@ -246,6 +246,16 @@ def geo_countries(_=Depends(require_auth)):
     return {"data": _geo_counts(core.db), "total": _geo_cache["total"] or 0}
 
 
+@router.get("/api/domains/tlds")
+def domain_tlds(_=Depends(require_auth)):
+    """Blocked-domain TLD breakdown for the dashboard TLD panel (ranked
+    bars). Fetched lazily when the panel <details> is opened, same pattern
+    as the geo heatmap; cheap enough (single-column scan) to skip a server
+    cache."""
+    data = core.db.get_domain_tld_counts()
+    return {"data": data, "total": sum(n for _tld, n in data)}
+
+
 # ---------------------- Settings ----------------------
 
 @router.get("/api/settings")

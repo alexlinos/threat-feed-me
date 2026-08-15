@@ -90,16 +90,22 @@ def recalculate(db: Database, config: Dict) -> int:
 
 # ---- Export (inlined from the Exporter class) ----
 
-def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str, format: str = "text") -> str:
+def _export_tier(db: Database, tier: ConfidenceTier, output_dir: str,
+                 format: str = "text", kind: str = "ip") -> str:
     """Export a single confidence-tier file (cumulative: the medium file
-    contains every high- or medium-tier indicator). Returns filepath."""
+    contains every high- or medium-tier indicator). Returns filepath.
+
+    One file per kind: the historical *_confidence_ips files stay IP-only
+    (a FortiGate address import errors on a hostname), domains get their own
+    *_confidence_domains files."""
     # Generator end to end: rows stream from SQLite through the whitelist
     # filter into the file writer without ever materializing the tier.
     wl_map = db.get_whitelist_map()
-    indicators = (i for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier])
+    indicators = (i for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind=kind)
                   if is_included(i, wl_map, tier=tier))
 
-    filename = f"{tier.value}_confidence_ips.{format}"
+    suffix = "ips" if kind == "ip" else "domains"
+    filename = f"{tier.value}_confidence_{suffix}.{format}"
     filepath = os.path.join(output_dir, filename)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -157,28 +163,36 @@ def export_tiers_async(db: Database, config: Dict) -> None:
 
 
 def export_tiers(db: Database, config: Dict) -> Dict:
-    """Export all tiers to every configured format."""
+    """Export all tiers to every configured format, one file set per kind
+    (*_confidence_ips.* and *_confidence_domains.*)."""
     output_dir = config.get('output', {}).get('base_dir', './output')
     formats = config.get('output', {}).get('formats', ['text'])
     results = {}
     for fmt in formats:
         tier_results = {}
         for tier in ConfidenceTier:
-            tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt)
+            tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt, kind="ip")
+            tier_results[f"{tier.value}_domains"] = _export_tier(
+                db, tier, output_dir, format=fmt, kind="domain")
         results[fmt] = tier_results
     return results
 
 
 def get_export_stats(db: Database) -> Dict:
-    """Get statistics about exported data"""
+    """Get statistics about exported data, per kind. The historical unsuffixed
+    keys stay IP-only (they describe the *_confidence_ips files)."""
     stats = {}
     wl_map = db.get_whitelist_map()
     for tier in ConfidenceTier:
         # Cumulative, matching the exported files (low_count == everything).
         stats[f"{tier.value}_count"] = sum(
-            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier])
+            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind="ip")
+            if is_included(i, wl_map))
+        stats[f"{tier.value}_domain_count"] = sum(
+            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind="domain")
             if is_included(i, wl_map))
     stats["total_unique_ips"] = stats.get("low_count", 0)
+    stats["total_unique_domains"] = stats.get("low_domain_count", 0)
     stats["whitelisted_count"] = len(db.get_whitelist())
     return stats
 

@@ -19,25 +19,30 @@ router = APIRouter()
 
 
 # ==================== FEED ENDPOINTS (firewall-facing, unauthenticated) ======
+# The same tier catalogue is served twice, once per indicator kind:
+#   /feeds/{tier}.{fmt}          -> IPs/CIDRs only (never a domain — a
+#                                   FortiGate address feed errors the whole
+#                                   import on a hostname)
+#   /feeds/domains/{tier}.{fmt}  -> domains only (DNS-filter / RPZ consumers)
+# One shared body builder per format so the two kinds can never drift apart.
 
-@router.get("/feeds/{name}.txt", response_class=PlainTextResponse)
-def feed_txt(name: str):
-    """Plain-text block list, one IP/CIDR per line — the firewall feed format."""
+
+def _feed_txt(name: str, kind: str) -> PlainTextResponse:
     if name not in _FEEDS_BY_NAME:
         raise HTTPException(status_code=404, detail="Unknown feed")
-    body = "".join(f"{firewall_value(i)}\n" for i in _indicators_for(name))
+    body = "".join(f"{firewall_value(i)}\n" for i in _indicators_for(name, kind=kind))
     return PlainTextResponse(body, headers={"Cache-Control": "no-cache"})
 
 
-@router.get("/feeds/{name}.csv")
-def feed_csv(name: str):
-    """CSV with metadata (for SIEM / spreadsheet use)."""
+def _feed_csv(name: str, kind: str) -> Response:
     if name not in _FEEDS_BY_NAME:
         raise HTTPException(status_code=404, detail="Unknown feed")
     buf = io.StringIO()
     writer = csv.writer(buf)
+    # The first column is the indicator value; the header keeps the historical
+    # name "ip" for both kinds so existing SIEM column mappings don't break.
     writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
-    for i in _indicators_for(name):
+    for i in _indicators_for(name, kind=kind):
         writer.writerow([
             firewall_value(i), i.confidence_score, i.tier.value,
             i.first_seen, i.last_seen, ";".join(i.sources),
@@ -45,14 +50,12 @@ def feed_csv(name: str):
     return Response(buf.getvalue(), media_type="text/csv")
 
 
-@router.get("/feeds/{name}.json")
-def feed_json(name: str):
-    """JSON with full details (for programmatic / SIEM ingestion)."""
+def _feed_json(name: str, kind: str) -> dict:
     if name not in _FEEDS_BY_NAME:
         raise HTTPException(status_code=404, detail="Unknown feed")
-    indicators = _indicators_for(name)
+    indicators = _indicators_for(name, kind=kind)
     return {
-        "feed": name,
+        "feed": name if kind == "ip" else f"domains/{name}",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_count": len(indicators),
         "indicators": [
@@ -67,6 +70,42 @@ def feed_json(name: str):
             for i in indicators
         ],
     }
+
+
+@router.get("/feeds/{name}.txt", response_class=PlainTextResponse)
+def feed_txt(name: str):
+    """Plain-text block list, one IP/CIDR per line — the firewall feed format."""
+    return _feed_txt(name, kind="ip")
+
+
+@router.get("/feeds/{name}.csv")
+def feed_csv(name: str):
+    """CSV with metadata (for SIEM / spreadsheet use)."""
+    return _feed_csv(name, kind="ip")
+
+
+@router.get("/feeds/{name}.json")
+def feed_json(name: str):
+    """JSON with full details (for programmatic / SIEM ingestion)."""
+    return _feed_json(name, kind="ip")
+
+
+@router.get("/feeds/domains/{name}.txt", response_class=PlainTextResponse)
+def domain_feed_txt(name: str):
+    """Plain-text domain block list, one domain per line (DNS filter / RPZ)."""
+    return _feed_txt(name, kind="domain")
+
+
+@router.get("/feeds/domains/{name}.csv")
+def domain_feed_csv(name: str):
+    """Domain CSV with metadata (for SIEM / spreadsheet use)."""
+    return _feed_csv(name, kind="domain")
+
+
+@router.get("/feeds/domains/{name}.json")
+def domain_feed_json(name: str):
+    """Domain JSON with full details (for programmatic / SIEM ingestion)."""
+    return _feed_json(name, kind="domain")
 
 
 # ==================== JSON API (authenticated when auth enabled) ============

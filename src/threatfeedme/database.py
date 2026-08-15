@@ -420,14 +420,23 @@ class Database:
     def get_domain_tld_counts(self) -> list:
         """Count domain indicators by TLD (last label after the final dot).
         Returns [(tld, count), ...] sorted by count descending, used by the
-        dashboard TLD panel (ranked bars)."""
+        dashboard TLD panel (ranked bars).
+
+        Counted in Python: SQLite's INSTR finds the FIRST dot, so a pure-SQL
+        SUBSTR turns "evil.co.uk" into "co.uk" — not a TLD. The domain corpus
+        is small enough (~100k) that a single-column scan is cheap.
+        """
+        counts: Dict[str, int] = {}
         with self._cursor() as cur:
-            cur.execute(
-                "SELECT LOWER(SUBSTR(ip, INSTR(ip, '.') + 1)) AS tld, COUNT(*) AS cnt "
-                "FROM indicators WHERE kind = 'domain' AND ip LIKE '%.%' "
-                "GROUP BY tld ORDER BY cnt DESC"
-            )
-            return [(r["tld"], r["cnt"]) for r in cur.fetchall()]
+            cur.execute("SELECT ip FROM indicators WHERE kind = 'domain'")
+            for row in cur.fetchall():
+                value = row["ip"]
+                _, _, tld = value.rpartition('.')
+                if not tld:
+                    continue
+                tld = tld.lower()
+                counts[tld] = counts.get(tld, 0) + 1
+        return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
     def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
         """Get a single indicator by its value (IP address or domain)."""
@@ -449,22 +458,29 @@ class Database:
         medium.txt is every high- OR medium-tier indicator)."""
         return list(self.iter_indicators_by_tiers(tiers))
 
-    def iter_indicators_by_tiers(self, tiers, batch: int = 5000):
+    def iter_indicators_by_tiers(self, tiers, batch: int = 5000, kind: str = None):
         """Stream indicators whose tier is in `tiers`, in score order.
 
         Generator so the tier-file exports never hold the whole table as
         model objects — a full materialized list is hundreds of MB at 100k+
         indicators, which OOMed small (2 GB) container deployments when
         exports overlapped with a dashboard load or rescore.
+
+        `kind` filters to one indicator kind ('ip' or 'domain'); None streams
+        both. The on-disk tier exports pass it so the *_ips files never
+        contain a domain and vice versa (same never-bleed rule as the URLs).
         """
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
+        kind_sql = " AND i.kind = ?" if kind is not None else ""
+        if kind is not None:
+            values = values + [kind]
         conn = self._get_connection()
         try:
             cur = conn.cursor()
             cur.execute(
                 "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
-                f"FROM indicators i WHERE i.tier IN ({marks}) ORDER BY i.confidence_score DESC",
+                f"FROM indicators i WHERE i.tier IN ({marks}){kind_sql} ORDER BY i.confidence_score DESC",
                 values)
             while True:
                 rows = cur.fetchmany(batch)
