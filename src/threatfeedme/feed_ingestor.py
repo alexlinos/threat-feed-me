@@ -77,6 +77,56 @@ NOT_MODIFIED = _NotModified()
 _IP_PATTERN = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
 _CIDR_PATTERN = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/\d{1,2}\b'
 
+# Domain-safe pattern: at least one dot, does not look like an IP or CIDR.
+_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9-]+)+$')
+# Hosts-file line: optional leading 0.0.0.0 / 127.0.0.1 / ::1 then a domain.
+_HOSTS_FILE_RE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s]+)\s*$', re.IGNORECASE)
+# URL whose registrable host we keep (openphish style).
+_URL_RE = re.compile(r'^https?://([^/\s]+)', re.IGNORECASE)
+
+
+def _is_valid_domain(value: str) -> bool:
+    """True when value is a plausible domain (dot present, not IP/CIDR)."""
+    if '.' not in value or '/' in value or ':' in value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return False
+    except ValueError:
+        pass
+    return bool(_DOMAIN_RE.match(value))
+
+
+def parse_domain_feed_content(content: str) -> List[Dict]:
+    """Parse domain feed content: hosts-file lines (urlhaus style), plain
+    domain-per-line lists, or URLs whose registrable host we keep (openphish).
+
+    Returns ['ip': domain, 'kind': 'domain'] dicts, deduped within the feed.
+    IP-looking lines and comments are never treated as domains.
+    """
+    indicators: Dict[str, Dict] = {}
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith(';'):
+            continue
+        hosts = _HOSTS_FILE_RE.match(line)
+        if hosts:
+            domain = hosts.group(1).lower()
+            if _is_valid_domain(domain):
+                indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
+            continue
+        url = _URL_RE.match(line)
+        if url:
+            host = url.group(1).lower()
+            host = host[4:] if host.startswith('www.') else host
+            if _is_valid_domain(host):
+                indicators.setdefault(host, {'ip': host, 'kind': 'domain'})
+            continue
+        # Plain domain-per-line; skip lines that look like IPs/CIDRs.
+        if _is_valid_domain(line) and not re.search(_IP_PATTERN, line):
+            indicators.setdefault(line, {'ip': line, 'kind': 'domain'})
+    return list(indicators.values())
+
 
 def parse_feed_content(content: str) -> List[Dict]:
     """Parse feed content and extract IPs and netblocks.
@@ -178,7 +228,7 @@ class FeedIngestor:
             logger.error(f"Failed to fetch {feed.name}: {e}")
             raise
 
-        parsed = self._parse_feed_content(content)
+        parsed = self._parse_feed_content(content, kind=feed.indicator_kind)
         # A scraper feed that yields zero indicators means the scrape returned
         # something other than the block list (e.g. an HTTP 200 error/terms
         # page, a Cloudflare interstitial). Treat that as a failure rather than
@@ -310,8 +360,15 @@ class FeedIngestor:
         with open(path, 'r') as f:
             return f.read()
 
-    def _parse_feed_content(self, content: str) -> List[Dict]:
-        """Instance shim around the module-level parser."""
+    def _parse_feed_content(self, content: str, kind: str = "ip") -> List[Dict]:
+        """Instance shim around the module-level parser, dispatching by kind.
+
+        Domain feeds go through parse_domain_feed_content (hosts-file/domain/
+        URL extraction); IP feeds (the default) keep the historical path.
+        The feed declares its kind; the caller passes it through.
+        """
+        if kind == "domain":
+            return parse_domain_feed_content(content)
         return parse_feed_content(content)
 
     def ingest_feed(self, feed: FeedSource) -> int:
@@ -376,7 +433,7 @@ class FeedIngestor:
 
                 rows.append((entry['ip'], metadata))
 
-            count = self.db.add_indicators_bulk(rows, source=feed.name)
+            count = self.db.add_indicators_bulk(rows, source=feed.name, kind=feed.indicator_kind)
 
             if skipped:
                 logger.info(f"{feed.name}: skipped {skipped} private/reserved/known-good entries")
