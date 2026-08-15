@@ -19,6 +19,7 @@ import requests
 # memory exhaustion from a multi-GB feed response.
 _MAX_FETCH_BYTES = 50 * 1024 * 1024  # 50 MB
 
+from threatfeedme.domains import normalize_domain
 from threatfeedme.models import FeedSource, FeedType
 from threatfeedme.database import Database
 
@@ -77,54 +78,56 @@ NOT_MODIFIED = _NotModified()
 _IP_PATTERN = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
 _CIDR_PATTERN = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/\d{1,2}\b'
 
-# Domain-safe pattern: at least one dot, does not look like an IP or CIDR.
-_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9-]+)+$')
 # Hosts-file line: optional leading 0.0.0.0 / 127.0.0.1 / ::1 then a domain.
 _HOSTS_FILE_RE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s]+)\s*$', re.IGNORECASE)
-# URL whose registrable host we keep (openphish style).
+# URL whose host we keep (openphish style). Captures the full authority;
+# userinfo/port are stripped below before validation.
 _URL_RE = re.compile(r'^https?://([^/\s]+)', re.IGNORECASE)
 
 
-def _is_valid_domain(value: str) -> bool:
-    """True when value is a plausible domain (dot present, not IP/CIDR)."""
-    if '.' not in value or '/' in value or ':' in value:
-        return False
-    try:
-        ipaddress.ip_address(value)
-        return False
-    except ValueError:
-        pass
-    return bool(_DOMAIN_RE.match(value))
+def _url_host(authority: str) -> str:
+    """Bare hostname from a URL authority: drop user:pass@ and :port. A feed
+    entry like http://evil.example:8080/x must yield evil.example, not be
+    dropped because the port fails domain validation."""
+    host = authority.rpartition('@')[2]
+    return host.partition(':')[0]
 
 
 def parse_domain_feed_content(content: str) -> List[Dict]:
     """Parse domain feed content: hosts-file lines (urlhaus style), plain
-    domain-per-line lists, or URLs whose registrable host we keep (openphish).
+    domain-per-line lists, or URLs whose host we keep (openphish; the full
+    host, not the registrable domain — blocking login.evil.weebly.com must
+    not take down the whole hosting platform).
 
-    Returns ['ip': domain, 'kind': 'domain'] dicts, deduped within the feed.
-    IP-looking lines and comments are never treated as domains.
+    Returns ['ip': domain, 'kind': 'domain'] dicts, deduped within the feed
+    AFTER normalize_domain (lowercase, IDNA to punycode), so the unicode and
+    punycode spellings of one domain collapse to one indicator. IP-looking
+    lines and comments are never treated as domains.
     """
     indicators: Dict[str, Dict] = {}
+
+    def _add(candidate: str) -> None:
+        domain = normalize_domain(candidate)
+        if domain:
+            indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
+
     for line in content.split('\n'):
         line = line.strip()
         if not line or line.startswith('#') or line.startswith(';'):
             continue
         hosts = _HOSTS_FILE_RE.match(line)
         if hosts:
-            domain = hosts.group(1).lower()
-            if _is_valid_domain(domain):
-                indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
+            _add(hosts.group(1))
             continue
         url = _URL_RE.match(line)
         if url:
-            host = url.group(1).lower()
+            host = _url_host(url.group(1).lower())
             host = host[4:] if host.startswith('www.') else host
-            if _is_valid_domain(host):
-                indicators.setdefault(host, {'ip': host, 'kind': 'domain'})
+            _add(host)
             continue
         # Plain domain-per-line; skip lines that look like IPs/CIDRs.
-        if _is_valid_domain(line) and not re.search(_IP_PATTERN, line):
-            indicators.setdefault(line, {'ip': line, 'kind': 'domain'})
+        if not re.search(_IP_PATTERN, line):
+            _add(line)
     return list(indicators.values())
 
 

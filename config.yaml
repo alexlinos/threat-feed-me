@@ -241,6 +241,14 @@ safety:
   # known_good:
   #   - 203.0.113.10
   #
+  # Domain feeds get the same floor: a core list of OS-update/CDN/mail
+  # infrastructure is always protected (with all subdomains), and special-use
+  # TLDs (.test .example .invalid .localhost .local .onion) are always
+  # rejected. Add YOUR OWN domains here — a feed listing your mail server
+  # must never reach your firewall.
+  # known_good_domains:
+  #   - yourcompany.example.org
+  #
   # Remote feed URLs whose host resolves to a private/internal address are
   # refused (SSRF guard: a dashboard user could otherwise point a "feed" at
   # cloud metadata services or internal hosts). Set true only if you fetch
