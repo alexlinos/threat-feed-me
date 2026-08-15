@@ -75,26 +75,31 @@ def _feed_base(request: Request, tier_key: str = "") -> str:
     return f"{scheme}://{hostname}"
 
 
-def _indicators_for(tier=None):
+def _indicators_for(tier=None, kind: str = "ip"):
     """Live indicator query with whitelist applied (global excludes dropped).
 
-    Accepts None (all indicators), a ConfidenceTier enum, or a string tier key
-    ("high", "medium", "low", "all") for callers that pass the URL path
+    Accepts None (all indicators), a ConfidenceTier enum, or a string tier
+    key ("high", "medium", "low", "all") for callers that pass the URL path
     parameter directly. "all" returns every indicator regardless of tier.
+
+    `kind` filters the population ('ip' or 'domain') so the IP feed URLs
+    never emit a domain and the domain feed URLs never emit an IP — a
+    FortiGate address feed fed a hostname errors the whole import, so the
+    two kinds must never bleed into each other's files.
     Returns ThreatIndicator objects so downstream callers (export, feed
     construction) have structured data instead of raw dicts.
     """
     wl_map = core.db.get_whitelist_map()
     if tier is None or tier == "all":
-        indicators = core.db.get_all_indicators()
+        indicators = core.db.get_indicators_by_kind(kind)
         return [i for i in indicators if is_included(i, wl_map)]
     tier_enum = ConfidenceTier(tier) if isinstance(tier, str) else tier
     # Cumulative: medium.txt serves high + medium, low.txt serves everything —
     # a firewall polling one URL must get every indicator at or above that
     # confidence. Tier-scoped whitelist exclusions still key off the OUTPUT
-    # feed (tier=tier_enum), so "exclude from medium" hides an IP from
-    # medium.txt regardless of which tier the indicator itself carries.
-    indicators = core.db.get_all_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum])
+    # feed (tier=tier_enum), so "exclude from medium" hides an indicator from
+    # medium.txt regardless of which tier it carries.
+    indicators = core.db.get_indicators_by_kind_and_tiers(kind, CUMULATIVE_TIERS[tier_enum])
     return [i for i in indicators if is_included(i, wl_map, tier=tier_enum)]
 
 

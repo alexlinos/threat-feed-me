@@ -387,8 +387,47 @@ class Database:
         finally:
             conn.close()
 
-    def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
-        """Get a single indicator by IP"""
+    def get_indicators_by_kind(self, kind: str = "ip") -> List[ThreatIndicator]:
+        """All indicators of a specific kind (used by the kind-filtered
+        feed URLs; IP and domain populations never bleed into each other)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                "WHERE indicator_id = i.id) AS sources_str "
+                "FROM indicators i WHERE i.kind = ? ORDER BY i.confidence_score DESC",
+                (kind,),
+            )
+            return [self._row_to_indicator(r) for r in cur.fetchall()]
+
+    def get_indicators_by_kind_and_tiers(self, kind: str, tiers,
+                                         batch: int = 5000) -> List[ThreatIndicator]:
+        """Indicators of a specific kind in one or more tiers (cumulative
+        serving). Streams in batches; mid-tier rows are collected here."""
+        out = []
+        marks = ",".join("?" * len(tiers))
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                "WHERE indicator_id = i.id) AS sources_str "
+                f"FROM indicators i WHERE i.kind = ? AND i.tier IN ({marks}) "
+                "ORDER BY i.confidence_score DESC",
+                (kind,) + tuple(t.value for t in tiers),
+            )
+            for r in cur.fetchall():
+                out.append(self._row_to_indicator(r))
+        return out
+
+    def get_domain_tld_counts(self) -> list:
+        """Count domain indicators by TLD (last label after the final dot).
+        Returns [(tld, count), ...] sorted by count descending, used by the
+        dashboard TLD panel (ranked bars)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT LOWER(SUBSTR(ip, INSTR(ip, '.') + 1)) AS tld, COUNT(*) AS cnt "
+                "FROM indicators WHERE kind = 'domain' AND ip LIKE '%.%' "
+                "GROUP BY tld ORDER BY cnt DESC"
+            )
+            return [(r["tld"], r["cnt"]) for r in cur.fetchall()]
         with self._cursor() as cur:
             cur.execute(
                 "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
