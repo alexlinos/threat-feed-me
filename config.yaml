@@ -56,6 +56,37 @@ feeds:
     feed_type: "threat_intel"
     update_interval: 3600
 
+  # --- Domain feeds (kind='domain'; served under /feeds/domains/*) ------
+  # Domains are stored in the existing ip column with kind='domain' (D1);
+  # feeds DECLARE indicator_kind='domain' rather than us sniffing domains
+  # out of IP feeds (D8). Defaults per ratification: urlhaus + openphish +
+  # hagezi ON (keyless = the product promise), joewein OFF (spam-centric,
+  # low volume, no embedded freshness header).
+  - name: urlhaus_hostfile
+    url: https://urlhaus.abuse.ch/downloads/hostfile/
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    update_interval: 3600
+
+  - name: openphish_community
+    url: https://openphish.com/feed.txt
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    update_interval: 900
+
+  - name: hagezi_threat_intel
+    url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domain/threat-intelligence.txt
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    update_interval: 3600
+
+  - name: joewein_dom_bl
+    url: https://www.joewein.net/dl/bl/dom-bl.txt
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    enabled: false
+    update_interval: 86400
+
   # --- DShield / SANS ISC recommended block list (top attacking /24s) ----
   # Netblock-shaped: rows are start/end/mask, rewritten to CIDR by the
   # dshield_block scraper so the real /24 prefixes drive overlap scoring.
