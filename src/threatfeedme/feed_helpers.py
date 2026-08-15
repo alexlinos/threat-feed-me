@@ -93,7 +93,11 @@ def _indicators_for(tier=None, kind: str = "ip"):
     wl_map = core.db.get_whitelist_map()
     if tier is None or tier == "all":
         indicators = core.db.get_indicators_by_kind(kind)
-        return [i for i in indicators if is_included(i, wl_map)]
+        # "all" is documented as an alias of the low feed, so it honors
+        # tier:low-scoped whitelist exclusions the same way low.txt does —
+        # otherwise the two URLs diverge the moment a tier:low entry exists.
+        return [i for i in indicators
+                if is_included(i, wl_map, tier=ConfidenceTier.LOW)]
     tier_enum = ConfidenceTier(tier) if isinstance(tier, str) else tier
     # Cumulative: medium.txt serves high + medium, low.txt serves everything —
     # a firewall polling one URL must get every indicator at or above that

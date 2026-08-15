@@ -60,11 +60,14 @@ async function removeWl(ip, feed) {
 // ---- Feeds ----
 async function addFeed(e) {
     e.preventDefault();
+    // NaN check, not ||: parseFloat('0') is falsy, and an explicit weight of
+    // 0 (neutralize a feed without disabling it) must not turn into 0.5.
+    const w = parseFloat(document.getElementById('f-weight').value);
     const body = {
         name: document.getElementById('f-name').value.trim(),
         url: document.getElementById('f-url').value.trim(),
         feed_type: document.getElementById('f-type').value,
-        weight: parseFloat(document.getElementById('f-weight').value) || 0.5,
+        weight: isNaN(w) ? 1.0 : w,
         indicator_kind: document.getElementById('f-kind').value,
     };
     const r = await apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});

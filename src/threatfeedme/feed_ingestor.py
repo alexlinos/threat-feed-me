@@ -78,8 +78,9 @@ NOT_MODIFIED = _NotModified()
 _IP_PATTERN = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
 _CIDR_PATTERN = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/\d{1,2}\b'
 
-# Hosts-file line: optional leading 0.0.0.0 / 127.0.0.1 / ::1 then a domain.
-_HOSTS_FILE_RE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s]+)\s*$', re.IGNORECASE)
+# Hosts-file line: a sinkhole address then one OR MORE hostnames (multi-
+# hostname lines are valid hosts syntax and common in compacted blocklists).
+_HOSTS_FILE_RE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+(.+)$', re.IGNORECASE)
 # URL whose host we keep (openphish style). Captures the full authority;
 # userinfo/port are stripped below before validation.
 _URL_RE = re.compile(r'^https?://([^/\s]+)', re.IGNORECASE)
@@ -101,33 +102,48 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
 
     Returns ['ip': domain, 'kind': 'domain'] dicts, deduped within the feed
     AFTER normalize_domain (lowercase, IDNA to punycode), so the unicode and
-    punycode spellings of one domain collapse to one indicator. IP-looking
-    lines and comments are never treated as domains.
+    punycode spellings of one domain collapse to one indicator. IPs, CIDRs,
+    and comments are never treated as domains — normalize_domain rejects
+    them (including all-numeric-TLD shapes like 1.2.3.4.5), so no separate
+    IP-pattern guard is needed and domains that merely EMBED a dotted quad
+    (10.0.0.1.nip.io — real phishing infrastructure) still ingest.
     """
     indicators: Dict[str, Dict] = {}
 
     def _add(candidate: str) -> None:
         domain = normalize_domain(candidate)
-        if domain:
-            indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
+        if not domain:
+            return
+        # One host, one identity: URL lists prefix www. spam onto the same
+        # hosts that plain lists carry bare, splitting votes across two rows.
+        # Strip it everywhere (only when a registrable name remains, so a
+        # literal www.com is left alone).
+        if domain.startswith('www.') and domain.count('.') >= 2:
+            domain = domain[4:]
+        indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
 
-    for line in content.split('\n'):
+    # A UTF-8 BOM survives .strip() (U+FEFF is not whitespace) and breaks the
+    # ^-anchored regexes on the first line.
+    for line in content.lstrip('﻿').split('\n'):
         line = line.strip()
         if not line or line.startswith('#') or line.startswith(';'):
             continue
+        # Inline comments: domains can never contain '#' or ';', so truncate.
+        line = line.split('#')[0].split(';')[0].strip()
+        if not line:
+            continue
         hosts = _HOSTS_FILE_RE.match(line)
         if hosts:
-            _add(hosts.group(1))
+            for token in hosts.group(1).split():
+                _add(token)
             continue
         url = _URL_RE.match(line)
         if url:
-            host = _url_host(url.group(1).lower())
-            host = host[4:] if host.startswith('www.') else host
-            _add(host)
+            _add(_url_host(url.group(1).lower()))
             continue
-        # Plain domain-per-line; skip lines that look like IPs/CIDRs.
-        if not re.search(_IP_PATTERN, line):
-            _add(line)
+        # Plain domain-per-line (first token, so trailing annotations on
+        # loosely-formatted lists don't cost the indicator).
+        _add(line.split()[0])
     return list(indicators.values())
 
 
@@ -161,8 +177,17 @@ def parse_feed_content(content: str) -> List[Dict]:
                 indicators[net_addr] = {'ip': net_addr, 'cidr': str(network)}
         else:
             for found_ip in re.findall(_IP_PATTERN, line):
+                # Validate + canonicalize: the regex alone admits shapes
+                # ipaddress rejects (leading-zero octets like 01.2.3.4), and
+                # serving such a string on the IP-only URLs errors a strict
+                # firewall address import — the exact D2 failure. The CIDR
+                # branch above already gets this via ip_network().
+                try:
+                    canon = str(ipaddress.ip_address(found_ip))
+                except ValueError:
+                    continue
                 # Do not let a bare IP overwrite a netblock's CIDR metadata.
-                indicators.setdefault(found_ip, {'ip': found_ip, 'cidr': None})
+                indicators.setdefault(canon, {'ip': canon, 'cidr': None})
 
     return list(indicators.values())
 
@@ -359,8 +384,11 @@ class FeedIngestor:
         raise RuntimeError(f"too many redirects fetching {url}")
 
     def _read_local_file(self, path: str) -> str:
-        """Read raw content from a local file."""
-        with open(path, 'r') as f:
+        """Read raw content from a local file. Explicit UTF-8 (mirroring the
+        HTTP path's decode) — the locale default on Windows is cp1252, which
+        reads a UTF-8 domain list as mojibake that then IDNA-encodes into a
+        WRONG punycode domain."""
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
 
     def _parse_feed_content(self, content: str, kind: str = "ip") -> List[Dict]:

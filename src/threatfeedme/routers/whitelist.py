@@ -40,6 +40,12 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
     """Add an IP to the whitelist"""
     if request.reason_code not in WHITELIST_REASONS:
         raise HTTPException(status_code=400, detail="Invalid reason_code")
+    # A tier scope must name a real tier: "tier:hgih" would store an entry
+    # that suppresses nothing, silently. (Feed-name scopes stay unvalidated
+    # on purpose — entries may legitimately outlive or predate their feed.)
+    feed_scope = request.feed_name or ALL_FEEDS
+    if feed_scope.startswith('tier:') and feed_scope[5:] not in ('high', 'medium', 'low'):
+        raise HTTPException(status_code=400, detail="Unknown tier scope")
     # Validate the value so junk can't be persisted (defends the whitelist
     # table and eliminates any HTML/JS-injection vector on render). Accepts
     # an IP, a CIDR, a domain, or a "*.domain" wildcard (D6).
@@ -71,9 +77,13 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
             else:
                 blamed = [feed_name]
             core.db.record_false_positive(stored_ip, [f for f in blamed if f])
-        else:
+        elif pattern is None:
             # Not an attributable FP: clear any prior FP attribution this
             # scope governs (all feeds for */tier: scopes, one feed otherwise).
+            # Only for EXACT entries — a range add (*.example.com, 10.0.0.0/8)
+            # is a different whitelist key that merely shares its anchor value,
+            # and clearing the anchor's feedback here silently restored the
+            # blamed feeds' reputations while the exact FP entry still stood.
             core.db.clear_feedback(stored_ip, feed_name=_feedback_scope(feed_name))
 
         core.db.add_to_whitelist(
@@ -120,19 +130,26 @@ def remove_from_whitelist(ip: str, feed: Optional[str] = None, _=Depends(require
     10.0.0.0/8 — whose slash won't route as a path param — can be removed.
     Pass feed=<name> (or feed=* for the global entry) to remove a single scope;
     omit it to remove all scopes for the IP."""
+    # Normalize to the canonical key the ADD path stored (10.0.0.5/8 was
+    # stored as 10.0.0.0/8; *.EXAMPLE.COM. as *.example.com) so scripted
+    # callers can delete by the value they originally submitted. Values that
+    # don't normalize fall through raw, keeping legacy junk rows removable.
+    try:
+        stored_ip, pattern = _normalize_indicator(ip)
+        ip = pattern or stored_ip
+    except ValueError:
+        stored_ip, pattern = ip, None
     if core.db.remove_from_whitelist(ip, feed_name=feed):
         # Withdraw the false-positive feedback this entry's scope governs.
         # Tier/global scopes blamed every reporting feed at add time, so they
         # must clear feedback for all feeds — clearing by the literal scope
         # name would match nothing and leave the penalty stuck.
         core.db.clear_feedback(ip, feed_name=_feedback_scope(feed))
-        # Rescore the IP and re-export all tier feeds so the IP reappears
-        # in the correct tier immediately (not just on the next pipeline run).
-        try:
-            stored_ip, _ = _normalize_indicator(ip)  # strip /cidr
-        except ValueError:
-            stored_ip = ip
-        if '/' not in stored_ip:  # bare IP — CIDR ranges excluded live by matcher
+        # Rescore and re-export so the value reappears in the correct tier
+        # immediately (not just on the next pipeline run). Exact entries
+        # only: a range (CIDR/wildcard) has no single indicator to rescore —
+        # its contained values settle on the next full recalc.
+        if pattern is None:
             from threatfeedme.scorer import ConfidenceScorer
             scorer = ConfidenceScorer(core.db, pipeline.scorer_config(core.db, core.config))
             score, tier = scorer.calculate_score(stored_ip)

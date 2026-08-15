@@ -2,7 +2,7 @@
 Threat Feed Me! - Core Data Models
 """
 import ipaddress
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any, Set, Tuple
 from datetime import datetime
 from enum import Enum
@@ -184,6 +184,17 @@ class FeedSource(BaseModel):
     # 'domain'. Feeds DECLARE their kind; domain extraction only runs for
     # domain feeds. Never sniff domains out of IP feeds.
     indicator_kind: str = "ip"
+
+    @field_validator('indicator_kind')
+    @classmethod
+    def _kind_must_be_known(cls, v):
+        # Rejecting at the model catches config typos (indicator_kind:
+        # domains) on the seed/sync paths too, not just the API: a junk kind
+        # stored on rows would be invisible to every kind-filtered feed URL
+        # while still counted by the dashboard.
+        if v not in ("ip", "domain"):
+            raise ValueError("indicator_kind must be 'ip' or 'domain'")
+        return v
 
     # Allow "type" in YAML to map to "feed_type"
     model_config = ConfigDict(populate_by_name=True)

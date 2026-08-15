@@ -127,9 +127,14 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # domain feeds, zero triple-corroborated domains is steady state), not
     # a spinner.
     from threatfeedme.scorer import ConfidenceScorer
+    # Legacy tiering never persists breaks, so the settings probe would show
+    # "Processing…" forever there; legacy tiers synchronously at rescore, so
+    # treat it as always-scored.
+    legacy = ((core.config.get('scoring', {}).get('tiering', {}) or {})
+              .get('method') == 'legacy')
     kind_scored = {
-        "ip": core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY) is not None,
-        "domain": core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY_DOMAINS) is not None,
+        "ip": legacy or core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY) is not None,
+        "domain": legacy or core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY_DOMAINS) is not None,
     }
     matrix_rows = []
     for f in TIER_FEEDS:
@@ -213,8 +218,10 @@ def dashboard(request: Request, _=Depends(require_auth)):
     ))
 
     # One table, kind-grouped (D9): slim group header rows carry the per-kind
-    # feed + indicator counts. Entries are the currently-attributed telemetry
-    # counts (same number the rows show), summed within kind.
+    # feed count and DISTINCT indicator count (total_inds from the counting
+    # pass above). Summing the rows' per-feed attributions double-counts
+    # every shared indicator — with the roster's documented overlap the IP
+    # header would read ~2x the real corpus, beside a matrix showing truth.
     feed_groups = []
     for kind, label in (("ip", "IP feeds"), ("domain", "Domain feeds")):
         rows = [r for r in feed_rows if r["kind"] == kind]
@@ -224,8 +231,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "kind": kind,
             "label": label,
             "feed_count": len(rows),
-            "entry_count": sum((r["tele"]["indicators"] if r["tele"] else (r["indicators"] or 0))
-                               for r in rows),
+            "entry_count": total_inds[kind],
         })
 
     return core.templates.TemplateResponse(request, "dashboard.html", {

@@ -174,16 +174,27 @@ class ConfidenceScorer:
                         if kind == 'ip' and sources]
             dom_votes = [votes for _ip, _s, votes, sources, kind in evidence
                         if kind == 'domain' and sources]
-            ip_med, ip_high = self._breaks_for_votes(ip_votes, kind='ip')
-            self._persist_breaks(ip_med, ip_high, kind='ip')
-            dom_med, dom_high = self._breaks_for_votes(dom_votes, kind='domain')
-            self._persist_breaks(dom_med, dom_high, kind='domain')
+            ip_med, ip_high = self.medium_floor, self.high_floor
+            dom_med, dom_high = self.medium_floor, self.high_floor
+            # A kind with no population keeps (or never gains) its stored
+            # breaks: persisting floor breaks for an EMPTY kind would mark it
+            # "already tiered" (the dashboard's Processing gate reads exactly
+            # this key) before a single indicator of that kind ever scored.
+            if ip_votes:
+                ip_med, ip_high = self._breaks_for_votes(ip_votes, kind='ip')
+                self._persist_breaks(ip_med, ip_high, kind='ip')
+            if dom_votes:
+                dom_med, dom_high = self._breaks_for_votes(dom_votes, kind='domain')
+                self._persist_breaks(dom_med, dom_high, kind='domain')
+            # Unknown/future kind values fall to the IP breaks — the same
+            # fallback the dashboard's counting uses — rather than silently
+            # adopting domain boundaries.
             updates = [
                 (score,
                  self._tier_from_votes(
                      votes, sources,
-                     ip_med if kind == 'ip' else dom_med,
-                     ip_high if kind == 'ip' else dom_high).value,
+                     dom_med if kind == 'domain' else ip_med,
+                     dom_high if kind == 'domain' else ip_high).value,
                  votes, ip)
                 for ip, score, votes, sources, kind in evidence
             ]
@@ -270,8 +281,6 @@ class ConfidenceScorer:
     # dashboard's overlap heatmap — so the discount tracks reality as feeds
     # drift, with no hand-tuned correlation constants.
 
-    TIER_BREAKS_KEY = 'tier_breaks'
-
     def _load_overlap(self) -> Dict:
         """Pairwise overlap ratios |A∩B|/min(|A|,|B|), cached per scorer
         instance (one instance per rescore). Failure degrades to no
@@ -334,7 +343,7 @@ class ConfidenceScorer:
             self._persist_fingerprint(votes, kind=kind)
             return med_b, high_b
 
-        if self._fingerprint_moved(votes, fingerprint):
+        if self._fingerprint_moved(votes, fingerprint, kind=kind):
             med_b, high_b = self._natural_breaks(votes)
             self._persist_fingerprint(votes, kind=kind)
             return med_b, high_b
@@ -362,7 +371,7 @@ class ConfidenceScorer:
             self.db.set_setting(
                 key,
                 json.dumps({'votes': self._fingerprint(votes),
-                            'sources': self._source_fingerprint()}),
+                            'sources': self._source_fingerprint(kind)}),
             )
         except Exception:
             pass  # never let bookkeeping break a rescore
@@ -377,17 +386,27 @@ class ConfidenceScorer:
         qs = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0]
         return [vals[min(len(vals) - 1, int(q * (len(vals) - 1)))] for q in qs]
 
-    def _source_fingerprint(self) -> List[str]:
-        """Roster fingerprint: feed names sorted by current source count, so a
-        feed added/removed or materially resized trips the shift check."""
-        sizes = dict(self._source_sizes or {})
-        return sorted((f"{n}={int(sizes.get(n, 0))}" for n in sizes),
-                      key=lambda s: (s.count('='), s))
+    def _source_fingerprint(self, kind: str = 'ip') -> Dict[str, int]:
+        """Roster fingerprint for one kind: {feed_name: attribution count}
+        over indicators OF THAT KIND only.
 
-    def _fingerprint_moved(self, votes: List[float],
-                           fingerprint: dict) -> bool:
+        Two properties matter here. Per-kind: the shared whole-roster
+        snapshot let routine IP-feed churn force a DOMAIN break recompute
+        (and vice versa) — the exact cross-kind re-bucketing D3's split
+        exists to prevent. Tolerant compare (see _fingerprint_moved): the
+        old exact-count string equality tripped on every single-indicator
+        change, so the "held stable between rescores" guarantee never
+        actually held on a live system."""
+        try:
+            return {n: int(c) for n, c in self.db.get_source_counts(kind=kind).items()}
+        except Exception:
+            return {}
+
+    def _fingerprint_moved(self, votes: List[float], fingerprint: dict,
+                           kind: str = 'ip') -> bool:
         """True when the current vote distribution differs from the stored one
-        past a relative threshold, or the feed roster changed."""
+        past a relative threshold, or the feed roster materially changed
+        (feed added/removed, or any feed resized >25%)."""
         new = self._fingerprint(votes)
         old = fingerprint.get('votes') or []
         if len(new) != len(old):
@@ -398,8 +417,18 @@ class ConfidenceScorer:
             denom = max(abs(o), 1.0)
             if abs(n - o) / denom > 0.25:
                 return True
-        if fingerprint.get('sources') != self._source_fingerprint():
+        old_sources = fingerprint.get('sources')
+        if not isinstance(old_sources, dict):
+            # Legacy format (pre-per-kind list of "name=count" strings):
+            # recompute once, after which the dict format is stored.
             return True
+        new_sources = self._source_fingerprint(kind)
+        if set(old_sources) != set(new_sources):
+            return True  # feed added or removed
+        for name, n in new_sources.items():
+            o = old_sources.get(name, 0)
+            if abs(n - o) / max(o, 1) > 0.25:
+                return True  # materially resized, not routine churn
         return False
 
     def _natural_breaks(self, votes: List[float]) -> tuple[float, float]:

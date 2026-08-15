@@ -113,7 +113,7 @@
                unseen. Long scroll is the honest trade. #}
             <tr class="group-row group-{{ g.kind }}"><td colspan="8">
                 {{ g.label }} <span class="muted">· {{ g.feed_count }} feed{{ 's' if g.feed_count != 1 }} ·
-                {{ '{:,}'.format(g.entry_count) }} entries</span>
+                {{ '{:,}'.format(g.entry_count) }} distinct indicators</span>
             </td></tr>
             {% for row in feed_rows if row.kind == g.kind %}
             <tr{% if not row.enabled %} class="row-off"{% endif %}>

@@ -66,6 +66,12 @@ def _health(feed, stat, new_count: int) -> Dict[str, Any]:
     if stat is None or not stat.last_update:
         return {"state": "never run", "level": "muted",
                 "detail": "no successful fetch yet"}
+    # Disabled beats error/stale: a deliberately-off feed's last run aging
+    # out is expected, not an alarm — checked after stale, every disabled
+    # feed eventually reported "stale" and pinned itself above healthy rows
+    # in the problems-float sort, forever.
+    if not feed.enabled:
+        return {"state": "disabled", "level": "muted", "detail": "not fetched"}
     if stat.status != "success":
         return {"state": "error", "level": "bad",
                 "detail": stat.error_message or "last run failed"}
@@ -79,8 +85,6 @@ def _health(feed, stat, new_count: int) -> Dict[str, Any]:
         hours = int(age_s // 3600)
         return {"state": "stale", "level": "warn",
                 "detail": f"no successful run in {hours}h (interval {interval // 3600 or 1}h)"}
-    if not feed.enabled:
-        return {"state": "disabled", "level": "muted", "detail": "not fetched"}
     if new_count == 0:
         return {"state": "no new", "level": "warn",
                 "detail": f"nothing new in {NEW_WINDOW_HOURS}h — list may be static"}

@@ -375,11 +375,16 @@ class Database:
             cur = conn.cursor()
             for start in range(0, len(rows), self.BULK_CHUNK):
                 chunk = rows[start:start + self.BULK_CHUNK]
+                # Kind is set on INSERT only — the update arm deliberately
+                # leaves it alone, matching add_indicator: an existing row's
+                # kind never flips. Without this, a value both parsers accept
+                # (e.g. the leading-zero shape 01.2.3.4 before it was
+                # rejected) ping-ponged between /feeds/* and /feeds/domains/*
+                # on alternating fetches.
                 cur.executemany(
                     "INSERT INTO indicators (ip, first_seen, last_seen, metadata, kind) VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(ip) DO UPDATE SET last_seen = excluded.last_seen, "
-                    "metadata = json_patch(COALESCE(metadata, '{}'), excluded.metadata), "
-                    "kind = excluded.kind",
+                    "metadata = json_patch(COALESCE(metadata, '{}'), excluded.metadata)",
                     [(ip, now, now, json.dumps(meta or {}), kind) for ip, meta in chunk],
                 )
                 cur.executemany(
@@ -423,23 +428,31 @@ class Database:
         return out
 
     def get_domain_tld_counts(self) -> list:
-        """Count domain indicators by TLD (last label after the final dot).
-        Returns [(tld, count), ...] sorted by count descending, used by the
-        dashboard TLD panel (ranked bars).
+        """Count BLOCKED domain indicators by TLD (last label after the final
+        dot). Returns [(tld, count), ...] sorted by count descending, used by
+        the dashboard TLD panel (ranked bars).
+
+        Globally-whitelisted domains are excluded — the panel is labeled
+        "blocked domains" and every neighboring count (matrix cells, exports)
+        is whitelist-scoped, so counting suppressed domains here would be a
+        quiet lie (an operator whitelists their own domain, D4's motivating
+        case, and it still reads as "problematic").
 
         Counted in Python: SQLite's INSTR finds the FIRST dot, so a pure-SQL
         SUBSTR turns "evil.co.uk" into "co.uk" — not a TLD. The domain corpus
         is small enough (~100k) that a single-column scan is cheap.
         """
+        wl_map = self.get_whitelist_map()
         counts: Dict[str, int] = {}
         with self._cursor() as cur:
             cur.execute("SELECT ip FROM indicators WHERE kind = 'domain'")
             for row in cur.fetchall():
                 value = row["ip"]
+                if ALL_FEEDS in wl_map.scoped_feeds(value):
+                    continue
                 _, _, tld = value.rpartition('.')
                 if not tld:
                     continue
-                tld = tld.lower()
                 counts[tld] = counts.get(tld, 0) + 1
         return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
@@ -549,11 +562,34 @@ class Database:
                 cur.execute(select_sql + " LIMIT ? OFFSET ?", params + [limit, offset])
                 page_rows = cur.fetchall()
             else:
-                cur.execute(select_sql, params)
-                survivors = [r for r in cur.fetchall()
+                # A global RANGE entry can't be expressed in the SQL, but the
+                # old fallback ran select_sql — a correlated GROUP_CONCAT
+                # subquery per row — over the FULL table and materialized
+                # every row (~5s CPU and ~120 MB per request at 280k rows,
+                # re-fired by every dashboard search keystroke: one wildcard
+                # whitelist entry turned the browse box into a self-DoS).
+                # Two cheap phases instead: scan just the values in sort
+                # order, filter+page in Python, then hydrate only the page.
+                cur.execute(
+                    f"SELECT i.ip FROM indicators i{where_sql} "
+                    "ORDER BY i.confidence_score DESC, i.ip",
+                    params)
+                surviving = [r['ip'] for r in cur.fetchall()
                              if ALL_FEEDS not in matcher.scoped_feeds(r['ip'])]
-                total = len(survivors)
-                page_rows = survivors[offset:offset + limit]
+                total = len(surviving)
+                page_ips = surviving[offset:offset + limit]
+                if page_ips:
+                    marks = ",".join("?" * len(page_ips))
+                    cur.execute(
+                        "SELECT i.ip, i.confidence_score, i.tier, i.metadata, i.effective_votes, "
+                        "(SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                        " WHERE indicator_id = i.id) AS sources_str "
+                        f"FROM indicators i WHERE i.ip IN ({marks}) "
+                        "ORDER BY i.confidence_score DESC, i.ip",
+                        page_ips)
+                    page_rows = cur.fetchall()
+                else:
+                    page_rows = []
 
             rows = []
             for row in page_rows:
@@ -584,7 +620,10 @@ class Database:
         except Exception:
             return []
         with self._cursor() as cur:
-            cur.execute("SELECT ip FROM indicators")
+            # kind gate (D1): domains never geo-map. Declared here rather
+            # than relying on ip-parse failures downstream — and it keeps a
+            # 167k-domain corpus out of the scan entirely.
+            cur.execute("SELECT ip FROM indicators WHERE kind = 'ip'")
             rows = cur.fetchall()
         from .geo.buckets import bucket_ip_strings
         return bucket_ip_strings((r["ip"] for r in rows), buckets)
@@ -599,7 +638,9 @@ class Database:
         table; no index on last_seen, so COUNT and MAX are full scans, but
         cheap enough to run on every geo request."""
         with self._cursor() as cur:
-            cur.execute("SELECT COUNT(*), COALESCE(MAX(last_seen), 0) FROM indicators")
+            # Same kind gate as country_counts: a domain-only refresh must
+            # not invalidate the geo cache (the map can't change).
+            cur.execute("SELECT COUNT(*), COALESCE(MAX(last_seen), 0) FROM indicators WHERE kind = 'ip'")
             total, max_last = cur.fetchone()
         return (total or 0, max_last or 0)
     def set_indicator_score(self, ip: str, score: float, tier: str,
@@ -914,14 +955,26 @@ class Database:
             )
             return [{"a": r['x'], "b": r['y'], "n": r['n']} for r in cur.fetchall()]
 
-    def get_source_counts(self) -> Dict[str, int]:
+    def get_source_counts(self, kind: str = None) -> Dict[str, int]:
         """How many indicators each source currently reports. Together with
         get_feed_overlap this normalizes pair counts into overlap ratios
-        (|A∩B| / min(|A|,|B|)) for effective-vote scoring."""
+        (|A∩B| / min(|A|,|B|)) for effective-vote scoring.
+
+        `kind` restricts the count to attributions on indicators of one kind
+        — the scorer's per-kind roster fingerprint uses this so IP-feed churn
+        can't trip a DOMAIN break recompute (and vice versa)."""
         with self._cursor() as cur:
-            cur.execute(
-                "SELECT source_name, COUNT(*) AS n FROM indicator_sources GROUP BY source_name"
-            )
+            if kind is None:
+                cur.execute(
+                    "SELECT source_name, COUNT(*) AS n FROM indicator_sources GROUP BY source_name"
+                )
+            else:
+                cur.execute(
+                    "SELECT s.source_name, COUNT(*) AS n FROM indicator_sources s "
+                    "JOIN indicators i ON i.id = s.indicator_id "
+                    "WHERE i.kind = ? GROUP BY s.source_name",
+                    (kind,),
+                )
             return {r['source_name']: r['n'] for r in cur.fetchall()}
 
     # ==================== FEED STATS ====================
@@ -997,8 +1050,10 @@ class Database:
             enabled=bool(row['enabled']),
             # Kind drives parser dispatch and which URLs serve the feed's
             # data; without reading it back every feed degraded to 'ip'.
-            indicator_kind=(row['indicator_kind'] if 'indicator_kind' in row.keys()
-                            else 'ip') or 'ip',
+            # Unknown stored values (a pre-validation junk row) coerce to
+            # 'ip' so loading the roster can't crash.
+            indicator_kind=(lambda k: k if k in ('ip', 'domain') else 'ip')(
+                row['indicator_kind'] if 'indicator_kind' in row.keys() else 'ip'),
         )
 
     def seed_feeds_from_config(self, config: Dict) -> int:

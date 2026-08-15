@@ -273,6 +273,114 @@ def test_export_stats_per_kind(client):
     assert stats["high_domain_count"] == 1     # tri-source only
 
 
+# ==================== adversarial-review regressions ====================
+
+def test_normalize_preserves_idna2008_deviation_characters():
+    """faß.de and fass.de are SEPARATELY registrable (.de, since 2010) and
+    browsers resolve faß.de as xn--fa-hia.de. The stdlib IDNA2003 codec
+    casefolds ß→ss, which would store (and block!) the innocent fass.de
+    while the actual threat never entered the corpus."""
+    assert normalize_domain("faß.de") == "xn--fa-hia.de"
+    assert normalize_domain("fass.de") == "fass.de"
+
+
+def test_normalize_maps_unicode_dot_separators():
+    assert normalize_domain("evil。example-uni.com") == "evil.example-uni.com"
+    assert normalize_domain("update．microsoft．com") == "update.microsoft.com"
+    assert normalize_domain("microsoft.com。") == "microsoft.com"
+    # ...which means the safety floor holds for those spellings too.
+    assert SafetyFilter().excluded_reason("update．microsoft．com")
+
+
+def test_normalize_rejects_invalid_punycode_and_numeric_tlds():
+    assert normalize_domain("xn--zzzzzzzz.com") is None   # undecodable alabel
+    # All-numeric TLDs cannot exist in DNS; these shapes also pass both
+    # parsers otherwise (leading-zero octets aren't IPs to ipaddress).
+    assert normalize_domain("1.2.3.4.5") is None
+    assert normalize_domain("01.2.3.4") is None
+    assert normalize_domain("012.034.056.078") is None
+
+
+def test_parser_multi_hostname_hosts_lines():
+    got = {e["ip"] for e in parse_domain_feed_content(
+        "0.0.0.0 multi-a.example.com multi-b.example.com\n")}
+    assert got == {"multi-a.example.com", "multi-b.example.com"}
+
+
+def test_parser_bom_and_inline_comments_and_embedded_quads():
+    content = (
+        "﻿0.0.0.0 bom-first.example.com\n"
+        "inline-comment.example.com # seen 2026-08\n"
+        "semi-comment.example.com ; spam\n"
+        "10.0.0.1.nip.example.io\n"   # embeds a dotted quad; real infra shape
+    )
+    got = {e["ip"] for e in parse_domain_feed_content(content)}
+    assert got == {"bom-first.example.com", "inline-comment.example.com",
+                   "semi-comment.example.com", "10.0.0.1.nip.example.io"}
+
+
+def test_parser_www_stripped_consistently_across_arms():
+    content = (
+        "https://www.split-id.example.com/login\n"
+        "www.split-id.example.com\n"
+        "0.0.0.0 www.split-id.example.com\n"
+    )
+    entries = parse_domain_feed_content(content)
+    assert len(entries) == 1
+    assert entries[0]["ip"] == "split-id.example.com"
+
+
+def test_ip_parser_rejects_uncanonical_addresses():
+    from threatfeedme.feed_ingestor import parse_feed_content
+    got = {e["ip"] for e in parse_feed_content("01.2.3.4\n203.0.113.9\n")}
+    # Leading-zero octets aren't parseable by ipaddress, so serving them
+    # would error a strict firewall address import (D2).
+    assert got == {"203.0.113.9"}
+
+
+def test_bulk_upsert_never_flips_kind(tmp_path):
+    """A value stored under one kind stays that kind, matching
+    add_indicator: an ambiguous value reported by feeds of both kinds must
+    not ping-pong between /feeds/* and /feeds/domains/*."""
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("stable.example.io", "domfeed", {}, kind="domain")
+    db.add_indicators_bulk([("stable.example.io", {})], source="ipfeed", kind="ip")
+    assert db.get_indicator("stable.example.io").kind == "domain"
+
+
+def test_source_counts_per_kind(tmp_path):
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("203.0.113.1", "mixed_feed", {}, kind="ip")
+    db.add_indicator("kindsplit.example.io", "mixed_feed", {}, kind="domain")
+    assert db.get_source_counts()["mixed_feed"] == 2
+    assert db.get_source_counts(kind="ip")["mixed_feed"] == 1
+    assert db.get_source_counts(kind="domain")["mixed_feed"] == 1
+
+
+def test_feed_source_rejects_unknown_kind():
+    import pytest as _pytest
+    from threatfeedme.models import FeedSource
+    with _pytest.raises(Exception):
+        FeedSource(name="x", url="https://example.com/x.txt", indicator_kind="domains")
+
+
+def test_health_disabled_beats_stale():
+    """A feed disabled after it has run must report 'disabled' (muted), not
+    'stale' — a deliberately-off feed pinning itself above healthy rows in
+    the problems-float sort forever was the bug."""
+    from datetime import datetime, timedelta, timezone
+    from threatfeedme.telemetry import _health
+    from threatfeedme.models import FeedSource, FeedStats
+    feed = FeedSource(name="off", url="https://example.com/x.txt",
+                      update_interval=3600, enabled=False)
+    stat = FeedStats(feed_name="off", total_indicators=10, status="success",
+                     last_update=datetime.now(timezone.utc) - timedelta(days=3))
+    h = _health(feed, stat, new_count=0)
+    assert h["state"] == "disabled" and h["level"] == "muted"
+
+
 # ==================== feed persistence: indicator_kind round-trip ====================
 
 def test_feed_kind_survives_db_round_trip(tmp_path):
@@ -369,6 +477,83 @@ def test_whitelist_api_rejects_junk(client):
         "reason": "x", "added_by": "x",
     })
     assert r.status_code == 400
+
+
+def test_whitelist_api_rejects_bogus_tier_scope(client):
+    r = client.post("/api/whitelist", json={
+        "ip": "203.0.113.200", "reason_code": "other",
+        "reason": "x", "added_by": "x", "feed_name": "tier:hgih",
+    })
+    assert r.status_code == 400
+
+
+def test_whitelist_delete_accepts_uncanonical_spelling(client):
+    r = client.post("/api/whitelist", json={
+        "ip": "*.Wildcard-Del.example.ORG.", "reason_code": "other",
+        "reason": "x", "added_by": "x",
+    })
+    assert r.status_code == 200 and r.json()["success"], r.text
+    # Delete by the ORIGINAL (un-normalized) spelling must find the
+    # canonical stored key.
+    r = client.request("DELETE", "/api/whitelist",
+                       params={"ip": "*.Wildcard-Del.example.ORG."})
+    assert r.status_code == 200, r.text
+
+
+def test_wildcard_add_does_not_clear_anchor_fp_blame(client):
+    from threatfeedme import core
+    # FP-whitelist the apex: feeds get blamed.
+    r = client.post("/api/whitelist", json={
+        "ip": "solo.example.net", "reason_code": "false_positive",
+        "reason": "fp", "added_by": "t",
+    })
+    assert r.status_code == 200 and r.json()["success"], r.text
+    assert core.db.get_feed_fp_counts().get("domfeed_a", 0) == 1
+    # Adding a RANGE entry sharing the anchor must not clear that blame.
+    r = client.post("/api/whitelist", json={
+        "ip": "*.solo.example.net", "reason_code": "internal_asset",
+        "reason": "range", "added_by": "t",
+    })
+    assert r.status_code == 200 and r.json()["success"], r.text
+    assert core.db.get_feed_fp_counts().get("domfeed_a", 0) == 1, \
+        "range add silently cleared the anchor's FP attribution"
+    # Cleanup: removing the FP entry withdraws the blame.
+    client.request("DELETE", "/api/whitelist", params={"ip": "*.solo.example.net"})
+    client.request("DELETE", "/api/whitelist", params={"ip": "solo.example.net"})
+    assert core.db.get_feed_fp_counts().get("domfeed_a", 0) == 0
+
+
+def test_query_indicators_with_global_wildcard(client):
+    """The global-range slow path must stay CORRECT (perf is why it was
+    rewritten: one wildcard used to materialize the full table with a
+    correlated subquery per row on every dashboard search keystroke)."""
+    from threatfeedme import core
+    r = client.post("/api/whitelist", json={
+        "ip": "*.tri-source.example.net", "reason_code": "internal_asset",
+        "reason": "x", "added_by": "x",
+    })
+    assert r.status_code == 200 and r.json()["success"], r.text
+    try:
+        result = core.db.query_indicators(limit=100)
+        values = {row["ip"] for row in result["rows"]}
+        assert "tri-source.example.net" not in values
+        assert "solo.example.net" in values
+        assert result["total"] == len(values)
+    finally:
+        client.request("DELETE", "/api/whitelist",
+                       params={"ip": "*.tri-source.example.net"})
+
+
+def test_tld_counts_exclude_whitelisted_domains(client):
+    from threatfeedme import core
+    # wl.example.net is globally whitelisted in the fixture; a same-TLD
+    # domain that isn't whitelisted keeps counting.
+    data = dict(core.db.get_domain_tld_counts())
+    total_net = data.get("net", 0)
+    with core.db._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM indicators WHERE kind='domain' AND ip LIKE '%.net'")
+        raw_net = cur.fetchone()[0]
+    assert total_net == raw_net - 1  # exactly the whitelisted one missing
 
 
 # ==================== manual indicator add: domains ====================
