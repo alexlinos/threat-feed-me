@@ -32,6 +32,9 @@ class FeedRequest(BaseModel):
     auth_header: str = "Authorization"
     local_file: bool = False
     enabled: bool = True
+    # 'ip' (default) or 'domain' — what the feed's lines parse as (D8: feeds
+    # declare their kind; domains are never sniffed out of IP feeds).
+    indicator_kind: str = "ip"
 
 
 class SettingsRequest(BaseModel):

@@ -2,69 +2,82 @@
 {% block subtitle %}Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.{% endblock %}
 
 {% block content %}
-    {# Tiles show what each feed URL actually serves (feeds are cumulative:
-       medium contains high). No separate "low" tile: the low/all feeds serve
-       everything blockable, so that number IS the total: repeating it read
-       as a bug. The exclusive per-tier distribution lives in the tooltips. #}
-    <div class="stats">
-        <div class="stat" title="Everything with any evidence: exactly what the low and all feeds serve"><div class="n">{{ '{:,}'.format(served['all']) }}</div><div class="l">Total blockable</div></div>
-        <div class="stat" title="{{ '{:,}'.format(counts['high']) }} indicators sit at exactly this tier"><div class="n">{{ '{:,}'.format(served['high']) }}</div><div class="l">High feed serves</div></div>
-        <div class="stat" title="{{ '{:,}'.format(counts['medium']) }} indicators sit at exactly this tier; the feed also includes high"><div class="n">{{ '{:,}'.format(served['medium']) }}</div><div class="l">Medium feed serves</div></div>
-        <div class="stat"><div class="n">{{ '{:,}'.format(whitelist_count) }}</div><div class="l">Whitelisted</div></div>
-    </div>
-
     <h2>Firewall feed URLs</h2>
-    {% for f in feed_cards %}
-    <div class="feed-card feed-{{ f.name }}">
-        <div class="feed-head">
-            <span class="feed-label">{{ f.label }}</span>
-            {% if f.recommended %}<span class="rec">Recommended</span>{% endif %}
-            <span class="feed-count">{% if f.count == 0 and f.processing %}<span class="processing">Processing…</span>{% else %}{{ '{:,}'.format(f.count) }} entries{% endif %}</span>
+    {# FEED MATRIX (D2 revised): rows = tiers, columns = kinds. The stat-tile
+       row is retired — each cell carries its URL and the count it serves
+       inline, so the page answers "what do I paste and how big is it" in one
+       block. Below 720px the grid collapses to stacked tier groups (CSS);
+       the kind chips inside each cell label the stacked lines there. #}
+    <div class="matrix">
+        <div class="mx-h"></div>
+        <div class="mx-h mx-h-ip">IP feeds</div>
+        <div class="mx-h mx-h-dom">Domain feeds</div>
+        {% for row in matrix_rows %}
+        <div class="mx-tier mx-{{ row.name }}">
+            <span class="mx-label">{{ row.label }}</span>
+            {% if row.recommended %}<span class="rec">Recommended</span>{% endif %}
+            <div class="mx-blurb">{{ row.blurb }}</div>
         </div>
-        <p class="feed-blurb">{{ f.blurb }}</p>
-        <div class="url-row">
-            <input class="url-box" type="text" readonly value="{{ feed_base }}/feeds/{{ f.name }}.txt"
-                   onclick="this.select()" aria-label="{{ f.label }} feed URL">
-            <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
+        {% for kind in ('ip', 'domain') %}
+        {% set cell = row[kind] %}
+        <div class="mx-cell">
+            <div class="mx-cell-head">
+                <span class="kind-chip kind-{{ kind }}">{{ 'IP' if kind == 'ip' else 'Domain' }}</span>
+                <span class="feed-count" title="{{ '{:,}'.format(cell.count) }} entries served by this URL right now">
+                    {% if cell.processing %}<span class="processing">Processing…</span>
+                    {% else %}<span class="count-full">{{ '{:,}'.format(cell.count) }}</span><span class="count-compact">{{ cell.compact }}</span> entries{% endif %}
+                </span>
+            </div>
+            <div class="url-row">
+                <input class="url-box" type="text" readonly value="{{ feed_base }}{{ cell.path }}.txt"
+                       onclick="this.select()" aria-label="{{ row.label }} {{ kind }} feed URL">
+                <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
+            </div>
+            <div class="alt-formats">
+                Also: <a href="{{ feed_base }}{{ cell.path }}.csv">CSV</a> ·
+                <a href="{{ feed_base }}{{ cell.path }}.json">JSON</a>
+            </div>
         </div>
-        <div class="alt-formats">
-            Also: <a href="{{ feed_base }}/feeds/{{ f.name }}.csv">CSV</a> ·
-            <a href="{{ feed_base }}/feeds/{{ f.name }}.json">JSON</a>
-        </div>
+        {% endfor %}
+        {% endfor %}
     </div>
-    {% endfor %}
 
     <!-- Read once per deployment, then pure noise: collapsed by default. -->
     <details class="howto">
         <summary><b>How to use these</b>: per-firewall instructions</summary>
         <ul>
-            <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i>, then paste the URL.</li>
-            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i>, action <i>Block</i>, paste the URL.</li>
+            <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL.</li>
+            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL.</li>
             <li><b>SonicWall</b> (SonicOS 7): Object → Match Objects → Dynamic External Object → protocol <i>HTTPS</i>, paste the URL; use the created address group in a rule.</li>
-            <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i>.</li>
-            <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> → add a feed URL.</li>
+            <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>
+            <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> (IPs) / <i>DNS Lists and Feeds</i> (domains).</li>
             <li><b>Check Point</b> (R81+ SmartConsole): Security Policies → Threat Prevention → Custom Policy Tools → Indicators → New → <i>External IOC Feed</i>, paste the URL.</li>
-            <li><b>pfSense (pfBlockerNG):</b> Firewall → pfBlockerNG → IPv4 → add the URL as a new source.</li>
-            <li><b>OPNsense:</b> Firewall → Aliases → add a URL Table (IPs) alias.</li>
+            <li><b>pfSense (pfBlockerNG):</b> Firewall → pfBlockerNG → IPv4 for IP URLs; DNSBL → DNSBL Groups for domain URLs.</li>
+            <li><b>OPNsense:</b> Firewall → Aliases → URL Table (IPs); domain lists fit Unbound DNS block lists.</li>
+            <li><b>Pi-hole / AdGuard Home:</b> add a domain URL as a blocklist (Adlists / DNS blocklists).</li>
         </ul>
-        The list is plain text, one IP or CIDR per line, refreshed each pipeline run and with whitelisted IPs removed automatically.
-        Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feed.
-        If the URL shows a loopback address, replace the host with this server's LAN IP or hostname.
+        Lists are plain text, one entry per line, generated live with whitelisted entries removed automatically.
+        IP URLs never contain a domain and domain URLs never contain an IP — an address-type
+        feed import fed the wrong kind errors out on most firewalls.
+        Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feeds.
+        If a URL shows a loopback address, replace the host with this server's LAN IP or hostname.
     </details>
 
-    <!-- The common question ("is this IP in my feeds?") without the 51k-row list. -->
+    <!-- The common question ("is this IP/domain in my feeds?") without the 51k-row list. -->
     <form class="lookup" onsubmit="return lookupIndicator(event)">
-        <label for="lookup-ip">Look up an IP</label>
-        <input id="lookup-ip" type="text" class="text-input" placeholder="e.g. 203.0.113.10">
+        <label for="lookup-ip">Look up an IP or domain</label>
+        <input id="lookup-ip" type="text" class="text-input" placeholder="e.g. 203.0.113.10 or evil.example.com">
         <button class="mini-btn" type="submit">Search</button>
-        <span class="muted">Opens the indicators page filtered to that address.</span>
+        <span class="muted">Opens the indicators page filtered to that value.</span>
     </form>
 
     <h2>Feeds</h2>
-    <p class="hint">Sorted by what each feed contributes that nothing else does: the ones you would
-       actually miss are at the top. <b>Unique</b> is the share of a feed's indicators no other feed
-       reports; <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and the
-       status badge catch a feed that has quietly gone stale.</p>
+    <p class="hint">One table, grouped by what the feeds produce (IP feeds, then domain feeds), and
+       sorted within each group by what each feed contributes that nothing else does — after any feed
+       with a problem, which always floats to the top of its group. <b>Unique</b> is the share of a
+       feed's entries no other feed reports (compared within its own kind; IP and domain feeds can
+       never overlap); <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and
+       the status badge catch a feed that has quietly gone stale.</p>
     <div class="toolbar">
         <button class="btn" id="refresh-all-btn" onclick="refreshAll(this)">↻ Refresh all now</button>
         <button class="mini-btn" onclick="restoreDefaults()">Restore default feeds</button>
@@ -75,8 +88,8 @@
             <input id="interval-min" type="number" min="1" value="{{ interval_min }}">
             min <button class="mini-btn" onclick="saveInterval()">Save</button>
         </span>
-        <span class="interval-box" title="How long an IP is kept after it was last seen in any feed. 0 = keep forever.">
-            Keep IPs for
+        <span class="interval-box" title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
+            Keep entries for
             <input id="retention-days" type="number" min="0" max="3650" value="{{ retention_days }}">
             days <button class="mini-btn" onclick="saveRetention()">Save</button>
         </span>
@@ -86,7 +99,7 @@
         <thead><tr>
             <th>Feed</th>
             <th>On</th>
-            <th title="Indicators this feed currently reports">IPs</th>
+            <th title="Indicators this feed currently reports">Entries</th>
             <th title="Share of this feed's indicators that no other feed reports">Unique</th>
             <th title="Times this feed was first to report an indicator in the last {{ telemetry.first_report_window_days }} days">First {{ telemetry.first_report_window_days }}d</th>
             <th title="Indicators first reported by this feed in the last {{ telemetry.new_window_hours }} hours">New {{ telemetry.new_window_hours }}h</th>
@@ -94,7 +107,15 @@
             <th></th>
         </tr></thead>
         <tbody>
-        {% for row in feed_rows %}
+        {% for g in feed_groups %}
+            {# Slim kind-group header (D9). No collapse on purpose: this is a
+               monitoring surface, and a collapsed group is where a feed rots
+               unseen. Long scroll is the honest trade. #}
+            <tr class="group-row group-{{ g.kind }}"><td colspan="8">
+                {{ g.label }} <span class="muted">· {{ g.feed_count }} feed{{ 's' if g.feed_count != 1 }} ·
+                {{ '{:,}'.format(g.entry_count) }} entries</span>
+            </td></tr>
+            {% for row in feed_rows if row.kind == g.kind %}
             <tr{% if not row.enabled %} class="row-off"{% endif %}>
                 <td>
                     <b>{{ row.name }}</b>
@@ -136,6 +157,7 @@
                     <button class="rm-btn" onclick='removeFeed({{ row.name|tojson }})'>Remove</button>
                 </td>
             </tr>
+            {% endfor %}
         {% else %}
             <tr><td colspan="8" class="muted">No feeds configured. Add one below.</td></tr>
         {% endfor %}
@@ -146,6 +168,10 @@
     <form class="wl-form" onsubmit="return addFeed(event)" style="margin-top:12px">
         <input class="ip" id="f-name" type="text" placeholder="feed name" required>
         <input class="reason" id="f-url" type="url" placeholder="https://example.com/blocklist.txt" required>
+        <select id="f-kind" title="What the feed's lines are: IP addresses/CIDRs, or domains">
+            <option value="ip">IP feed</option>
+            <option value="domain">Domain feed</option>
+        </select>
         <select id="f-type" title="Type">
             {% for t in feed_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
         </select>
@@ -156,22 +182,30 @@
         <input class="ip" id="u-name" type="text" placeholder="custom list name" required>
         <input id="u-file" type="file" accept=".txt,.csv,text/plain" required
                class="reason" style="padding:6px">
+        <select id="u-kind" title="What the uploaded lines are: IP addresses/CIDRs, or domains">
+            <option value="ip">IP list</option>
+            <option value="domain">Domain list</option>
+        </select>
         <input id="u-weight" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px" title="Reputation weight 0-1 (1.0 = default; false-positive flags lower it automatically)">
         <button type="submit">⬆ Upload list</button>
     </form>
-    <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one IP or CIDR.</p>
+    <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one entry of the selected kind.</p>
 
     <details class="howto">
         <summary><b>Overlap map</b>: which feeds report the same indicators</summary>
-        {% if telemetry.has_overlap %}
+        {# Two blocks, one per kind (D9): cross-kind overlap is structurally
+           zero, so one mixed grid would waste most cells on guaranteed blanks. #}
+        {% for k in telemetry.kinds %}
+        <h3 class="heat-title heat-title-{{ k.kind }}">{{ 'IP feeds' if k.kind == 'ip' else 'Domain feeds' }}</h3>
+        {% if k.has_overlap %}
         <p class="hint" style="margin-top:8px">Each cell is the share of the <i>smaller</i> feed that
            both report. Dark cells are pairs that are effectively one list: their agreement inflates
            confidence tiers without adding evidence. Hover a cell to zoom it.</p>
         <div class="table-scroll">
-        <div class="heat" style="grid-template-columns: 132px repeat({{ telemetry.names|length }}, 26px)">
+        <div class="heat" style="grid-template-columns: 132px repeat({{ k.names|length }}, 26px)">
             <div></div>
-            {% for n in telemetry.names %}<div class="hl-col" title="{{ n }}">{{ n }}</div>{% endfor %}
-            {% for r in telemetry.matrix %}
+            {% for n in k.names %}<div class="hl-col" title="{{ n }}">{{ n }}</div>{% endfor %}
+            {% for r in k.matrix %}
                 <div class="hl-row" title="{{ r.name }}">{{ r.name }}</div>
                 {% for c in r.cells %}
                     {% if c.pct is none %}<div class="hc diag"></div>
@@ -181,9 +215,14 @@
             {% endfor %}
         </div>
         </div>
-        <div class="heat-legend"><span>0%</span><i class="ov-0"></i><i class="ov-1"></i><i class="ov-2"></i><i class="ov-3"></i><i class="ov-4"></i><i class="ov-5"></i><span>100% — same list</span></div>
+        {% else %}
+        <p class="muted">No {{ 'IP' if k.kind == 'ip' else 'domain' }} feeds report overlapping indicators yet, so there is nothing to compare.</p>
+        {% endif %}
         {% else %}
         <p class="muted">No feeds report overlapping indicators yet, so there is nothing to compare.</p>
+        {% endfor %}
+        {% if telemetry.has_overlap %}
+        <div class="heat-legend"><span>0%</span><i class="ov-0"></i><i class="ov-1"></i><i class="ov-2"></i><i class="ov-3"></i><i class="ov-4"></i><i class="ov-5"></i><span>100% — same list</span></div>
         {% endif %}
     </details>
 
@@ -193,6 +232,16 @@
             <p class=muted>Geo data loads when you open this section.</p>
         </div>
         <p class="muted geo-credit">Country data © DB-IP (db-ip.com), CC-BY · borders © Natural Earth (public domain): both bucketed offline, no external geo call.</p>
+    </details>
+
+    {# TLD panel (D10): the domain corpus's analogue of the geo heatmap —
+       lazy fetch on first expand, plain ranked bars (top 15 + an honest
+       "other" bucket; TLD abuse is heavily skewed and pies fail long tails). #}
+    <details class=howto id=tld-panel>
+        <summary><b>Problematic TLDs</b>: where blocked domains live</summary>
+        <div class=tld-wrap>
+            <p class=muted>TLD data loads when you open this section.</p>
+        </div>
     </details>
 {% endblock %}
 

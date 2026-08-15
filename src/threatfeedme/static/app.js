@@ -65,6 +65,7 @@ async function addFeed(e) {
         url: document.getElementById('f-url').value.trim(),
         feed_type: document.getElementById('f-type').value,
         weight: parseFloat(document.getElementById('f-weight').value) || 0.5,
+        indicator_kind: document.getElementById('f-kind').value,
     };
     const r = await apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
@@ -79,6 +80,7 @@ async function uploadFeed(e) {
     const fd = new FormData();
     fd.append('name', document.getElementById('u-name').value.trim());
     fd.append('weight', document.getElementById('u-weight').value || '1.0');
+    fd.append('indicator_kind', document.getElementById('u-kind').value);
     fd.append('file', file);
     const r = await apiFetch('/api/feeds/upload', {method:'POST', body: fd});
     const j = await r.json().catch(() => ({}));
@@ -440,4 +442,62 @@ document.addEventListener('DOMContentLoaded', () => {
     const box = document.getElementById('geo-heatmap');
     if (!box) return;
     box.addEventListener('toggle', () => { if (box.open) loadGeoOnce(); });
+});
+
+// ---- Problematic TLDs (lazy, on-demand — same pattern as the geo panel) ----
+// Ranked horizontal bars: TLD abuse is heavily skewed and a pie fails on the
+// long tail, so the top ~15 get bars and the rest collapse into one honest
+// "other" row instead of vanishing.
+let tldLoaded = false;
+const TLD_TOP = 15;
+
+function renderTlds(data) {
+    const wrap = document.querySelector('#tld-panel .tld-wrap');
+    if (!wrap) return;
+    const rows = data.data || [];
+    const total = data.total || 0;
+    if (!rows.length) {
+        wrap.innerHTML = '<p class="muted">No domain indicators yet — enable a domain feed and refresh.</p>';
+        return;
+    }
+    const top = rows.slice(0, TLD_TOP);
+    const rest = rows.slice(TLD_TOP);
+    const otherN = rest.reduce((s, r) => s + r[1], 0);
+    const max = top[0][1];
+    let bars = '<div class="tld-bars">';
+    for (const [tld, n] of top) {
+        const pct = total ? (100 * n / total).toFixed(1) : '0.0';
+        bars += '<div class="geo-bar-row"><span class="geo-bar-name"><code>.' + esc(tld) +
+                '</code></span><span class="geo-bar-track"><i style="width:' +
+                (max ? (100 * n / max).toFixed(1) : 0) + '%"></i></span>' +
+                '<span class="geo-bar-val">' + n.toLocaleString() + ' (' + pct + '%)</span></div>';
+    }
+    if (otherN) {
+        const pct = total ? (100 * otherN / total).toFixed(1) : '0.0';
+        bars += '<div class="geo-bar-row tld-other"><span class="geo-bar-name muted">other (' +
+                rest.length + ' TLDs)</span><span class="geo-bar-track"><i style="width:' +
+                (max ? Math.min(100, 100 * otherN / max).toFixed(1) : 0) + '%"></i></span>' +
+                '<span class="geo-bar-val">' + otherN.toLocaleString() + ' (' + pct + '%)</span></div>';
+    }
+    bars += '</div>';
+    wrap.innerHTML = '<p class="hint" style="margin-top:8px">Blocked domains by top-level domain — ' +
+        'a TLD carrying a big share of the corpus is one to watch (or block wholesale at the DNS filter).</p>' + bars;
+}
+
+function loadTldsOnce() {
+    if (tldLoaded) return;
+    tldLoaded = true;
+    const wrap = document.querySelector('#tld-panel .tld-wrap');
+    if (wrap) wrap.innerHTML = '<p class="muted">Loading TLD data…</p>';
+    apiFetch('/api/domains/tlds').then(r => r.json()).then(renderTlds)
+        .catch(() => {
+            tldLoaded = false;  // allow a retry on the next expand
+            const w = document.querySelector('#tld-panel .tld-wrap');
+            if (w) w.innerHTML = '<p class="muted">TLD data unavailable — reopen to retry.</p>';
+        });
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const box = document.getElementById('tld-panel');
+    if (!box) return;
+    box.addEventListener('toggle', () => { if (box.open) loadTldsOnce(); });
 });

@@ -109,6 +109,11 @@ def feed_telemetry(db: Database) -> Dict[str, Any]:
         rows.append({
             "name": name,
             "enabled": feed.enabled,
+            # Indicator kind this feed contributes ('ip'/'domain'). Overlap,
+            # exclusivity, and twins are structurally within-kind already (an
+            # IP value can never equal a domain value), but the kind is needed
+            # to GROUP the dashboard table and split the overlap matrices.
+            "kind": getattr(feed, "indicator_kind", "ip") or "ip",
             "indicators": total,
             "exclusive": excl,
             # Share of this feed's own reports that no other feed corroborates.
@@ -157,12 +162,37 @@ def feed_telemetry(db: Database) -> Dict[str, Any]:
         for a in names
     ]
 
+    def _kind_matrix(kind: str):
+        """Per-kind overlap block (D9): cross-kind overlap is structurally
+        zero, so a mixed grid wastes most of its cells on guaranteed blanks.
+        One block per kind, ordered like the (kind-filtered) rows."""
+        knames = [r["name"] for r in rows if r["kind"] == kind]
+        kmatrix = [
+            {"name": a,
+             "cells": [{"other": b, "pct": (None if a == b else by_pair.get((a, b), 0))}
+                       for b in knames]}
+            for a in knames
+        ]
+        return {
+            "kind": kind,
+            "names": knames,
+            "matrix": kmatrix,
+            "has_overlap": any(c["pct"] for r in kmatrix for c in r["cells"] if c["pct"]),
+        }
+
+    kinds_present = []
+    for kind in ("ip", "domain"):
+        if any(r["kind"] == kind for r in rows):
+            kinds_present.append(_kind_matrix(kind))
+
     return {
         "rows": rows,
         "overlap": sorted(overlap, key=lambda p: -p["n"]),
         "redundant_pairs": redundant,
         "matrix": matrix,
         "names": names,
+        # Per-kind overlap blocks for the dashboard (only kinds with feeds).
+        "kinds": kinds_present,
         # True only when at least one real pair reports any shared indicators.
         # A grid full of zeros is noise — the overlap map earns its pixels only
         # when some cells actually carry signal.

@@ -683,13 +683,16 @@ def test_footer_shows_running_version(client):
     assert f"v{__version__}" in body
 
 
-def test_stat_tiles_show_served_counts(client):
-    """The headline tiles answer "what does my firewall get" — they must
-    match the cumulative feed files, not the exclusive tier distribution."""
+def test_matrix_cells_show_served_counts(client):
+    """The matrix cells answer "what does my firewall get" — they must match
+    the cumulative feed files, not the exclusive tier distribution. (The v1
+    stat-tile row is retired in v2.0; counts live inline in the feed matrix,
+    one column per indicator kind.)"""
     body = client.get("/").text
-    assert "feed serves" in body          # tiles renamed to served semantics
+    assert "Domain feeds" in body                 # the kind columns render
+    assert "/feeds/domains/medium.txt" in body    # domain URLs in the matrix
     med_served = len([l for l in client.get("/feeds/medium.txt").text.splitlines() if l.strip()])
-    assert f'{med_served:,}' in body      # medium tile == medium.txt size
+    assert f'{med_served:,}' in body      # medium IP cell == medium.txt size
 
 
 def test_low_card_hidden_but_url_stays_live(client):

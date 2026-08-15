@@ -4,6 +4,9 @@
   --muted:#8b8b95; --dim:#5b5b64; --line:#232329;
   --accent:#10b981; --accent-hi:#34d399; --accent-glow:rgba(16,185,129,.14);
   --amber:#fbbf24; --red:#f87171; --blue:#60a5fa;
+  /* Domain-kind accent: green marks IPs everywhere already, purple is the
+     one hue in the palette that can't be confused with a tier color. */
+  --purple:#a78bfa;
   --mono:"Cascadia Code", ui-monospace, "JetBrains Mono", Consolas, monospace;
   --radius:6px;
 }
@@ -268,6 +271,71 @@ input::placeholder { color:var(--dim); }
 .switch input:checked + span { background:rgba(16,185,129,.25); border-color:rgba(16,185,129,.5); }
 .switch input:checked + span:before { transform:translateX(18px); background:var(--accent-hi);
                                        box-shadow:0 0 6px rgba(16,185,129,.6); }
+
+/* --- Feed matrix (tiers x kinds; replaces the stat tiles + tier cards) --- */
+.matrix { display:grid; grid-template-columns:180px 1fr 1fr; gap:8px; margin:12px 0; }
+.mx-h { font-size:.72em; font-weight:600; text-transform:uppercase; letter-spacing:.12em;
+        color:var(--muted); padding:2px 4px; align-self:end; }
+.mx-h-ip { color:var(--accent-hi); }
+.mx-h-dom { color:var(--purple); }
+.mx-tier { background:var(--card); border:1px solid var(--line);
+           border-left:3px solid var(--dim); border-radius:var(--radius);
+           padding:12px 14px; }
+.mx-high { border-left-color:var(--accent); }
+.mx-medium { border-left-color:var(--amber); }
+.mx-all { border-left-color:var(--blue); }
+.mx-label { font-weight:650; }
+.mx-blurb { color:var(--muted); font-size:.8em; margin-top:6px; }
+.mx-cell { background:var(--card); border:1px solid var(--line);
+           border-radius:var(--radius); padding:10px 12px; min-width:0; }
+.mx-cell-head { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.mx-cell .feed-count { margin-left:auto; }
+.mx-cell .url-box { min-width:0; padding:8px 10px; font-size:.82em; }
+.mx-cell .copy-btn { padding:8px 12px; font-size:.85em; }
+.kind-chip { font-size:.66em; font-weight:600; font-family:var(--mono);
+             text-transform:uppercase; letter-spacing:.08em;
+             padding:2px 7px; border-radius:3px; border:1px solid transparent; }
+.kind-ip { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
+.kind-domain { background:rgba(167,139,250,.12); color:var(--purple); border-color:rgba(167,139,250,.3); }
+/* Compact counts (42.4k) exist for the narrow layout only; desktop shows
+   the exact number. Both are rendered; the media query flips them. */
+.count-compact { display:none; }
+@media (max-width:720px) {
+  /* Each matrix row collapses to a tier group: label, then the two kinds
+     stacked as chip-labeled lines. */
+  .matrix { grid-template-columns:1fr; gap:6px; }
+  .mx-h { display:none; }
+  .mx-tier { border-radius:var(--radius) var(--radius) 0 0; margin-top:8px; }
+  .mx-cell { border-radius:0; }
+  .mx-cell + .mx-tier { margin-top:14px; }
+  .count-full { display:none; }
+  .count-compact { display:inline; }
+  /* Left-ellipsis so the URL's distinctive tail (/feeds/domains/high.txt)
+     stays readable; the scheme+host prefix is the same on every row. RTL
+     direction only while unfocused — flipping back on focus keeps
+     selection/editing sane. */
+  .mx-cell .url-box { direction:rtl; text-align:left; }
+  .mx-cell .url-box:focus { direction:ltr; }
+}
+
+/* --- Kind group header rows in the feeds table (D9) --- */
+.feeds .group-row td { background:var(--card-2); font-size:.78em; font-weight:650;
+    text-transform:uppercase; letter-spacing:.12em; padding:7px 8px;
+    border-left:3px solid var(--dim); }
+.feeds .group-ip td { color:var(--accent-hi); border-left-color:var(--accent); }
+.feeds .group-domain td { color:var(--purple); border-left-color:var(--purple); }
+.feeds .group-row .muted { text-transform:none; letter-spacing:normal; font-weight:400; }
+
+/* Per-kind overlap block titles inside the disclosure */
+.heat-title { margin:14px 0 2px; font-size:.78em; font-weight:650;
+              text-transform:uppercase; letter-spacing:.12em; }
+.heat-title-ip { color:var(--accent-hi); }
+.heat-title-domain { color:var(--purple); }
+
+/* --- TLD panel (ranked bars; reuses the geo bar layout) --- */
+.tld-bars { display:flex; flex-direction:column; gap:5px; margin-top:10px; }
+.tld-bars .geo-bar-track i { background:var(--purple); }
+.tld-bars .tld-other i { background:var(--dim); }
 
 ::-webkit-scrollbar { width:10px; height:10px; }
 ::-webkit-scrollbar-track { background:var(--bg); }

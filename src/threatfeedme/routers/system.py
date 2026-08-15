@@ -66,9 +66,16 @@ def _geo_counts(db):
     _geo_cache["key"] = key
     return data
 
+def _compact(n: int) -> str:
+    """Human-compact count for the matrix's narrow layout (42.4k, 1.2M)."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{n:,}"
+
+
 @router.get("/", response_class=HTMLResponse)
-
-
 def dashboard(request: Request, _=Depends(require_auth)):
     """Main dashboard page.
 
@@ -78,20 +85,18 @@ def dashboard(request: Request, _=Depends(require_auth)):
     feed_base = _feed_base(request)
     feed_sources = core.db.get_feed_sources()
     feed_stats = {fs.feed_name: fs for fs in core.db.get_feed_stats()}
-    whitelist = core.db.get_whitelist()
 
     # Per-feed counts, whitelist-scoped (including tier-scoped entries) so
-    # each card's number matches what its URL actually serves.
+    # each matrix cell's number matches what its URL actually serves.
     #
-    # Load the indicator list ONCE and derive every tier count + the total
-    # from that single pass. The old code re-fetched the full table per tier
+    # Load the indicator list ONCE and derive every (tier x kind) count from
+    # that single pass. The old code re-fetched the full table per tier
     # (get_all_indicators_by_tier) and again for total_inds — each fetch runs
     # a correlated GROUP_CONCAT subquery per row, so with tens of thousands
     # of indicators the dashboard was spending seconds just to count.
     wl_map = core.db.get_whitelist_map()
-    # Two different numbers per tier, both needed: `counts` is the exclusive
-    # distribution (the stat tiles — where indicators sit), `served` is what
-    # each feed URL actually returns (cumulative: medium.txt contains high).
+    # `served` is what each feed URL actually returns (cumulative: medium.txt
+    # contains high), computed PER KIND for the feed matrix (D2 revised).
     # Which output feeds contain an indicator is the inverse of
     # CUMULATIVE_TIERS; tier-scoped whitelist exclusions apply per output.
     # Streamed, not materialized: a full-table model list on every dashboard
@@ -99,34 +104,56 @@ def dashboard(request: Request, _=Depends(require_auth)):
     outputs_containing = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
                                    if t in members)
                           for t in ConfidenceTier}
-    counts = {t.value: 0 for t in ConfidenceTier}
-    served = {t.value: 0 for t in ConfidenceTier}
-    counts["all"] = served["all"] = 0
-    total_inds = 0
+    served = {k: {t.value: 0 for t in ConfidenceTier} for k in ("ip", "domain")}
+    served["ip"]["all"] = served["domain"]["all"] = 0
+    total_inds = {"ip": 0, "domain": 0}
     for i in core.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
-        total_inds += 1
+        kind = i.kind if i.kind in served else "ip"
+        total_inds[kind] += 1
         if not is_included(i, wl_map):
             continue
-        counts["all"] += 1
-        served["all"] += 1
-        if is_included(i, wl_map, tier=i.tier):
-            counts[i.tier.value] += 1
+        served[kind]["all"] += 1
         for out in outputs_containing[i.tier]:
             if is_included(i, wl_map, tier=out):
-                served[out.value] += 1
+                served[kind][out.value] += 1
 
-    # ---- Feed URL cards (the hero of the page) ----
-    feed_cards = [
-        {
-            "name": f["key"],
+    # ---- Feed matrix (the hero of the page; D2 revised) ----
+    # Rows = tiers, columns = kinds; each cell is a URL + the count it serves.
+    # The old stat-tile row is retired — the counts live inline in the cells.
+    #
+    # "Processing…" is only honest in the window between first ingest and
+    # first rescore. Once a kind has tier breaks persisted it HAS been
+    # tiered, and an empty high feed is a real answer (with only a few
+    # domain feeds, zero triple-corroborated domains is steady state), not
+    # a spinner.
+    from threatfeedme.scorer import ConfidenceScorer
+    kind_scored = {
+        "ip": core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY) is not None,
+        "domain": core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY_DOMAINS) is not None,
+    }
+    matrix_rows = []
+    for f in TIER_FEEDS:
+        if f.get("hidden"):
+            continue
+        key = f["key"]
+        cells = {}
+        for kind, prefix in (("ip", "/feeds/"), ("domain", "/feeds/domains/")):
+            n = served[kind][key]
+            cells[kind] = {
+                "path": f"{prefix}{key}",
+                "count": n,
+                "compact": _compact(n),
+                "processing": (key != "all" and n == 0 and total_inds[kind] > 0
+                               and not kind_scored[kind]),
+            }
+        matrix_rows.append({
+            "name": key,
             "label": f["label"],
             "blurb": f["description"],
             "recommended": f["recommended"],
-            "count": served[f["key"]],
-            "processing": f["key"] != "all" and served[f["key"]] == 0 and total_inds > 0,
-        }
-        for f in TIER_FEEDS if not f.get("hidden")
-    ]
+            "ip": cells["ip"],
+            "domain": cells["domain"],
+        })
 
     # ---- Feed false-positive health ----
     fp_counts = core.db.get_feed_fp_counts()
@@ -147,10 +174,12 @@ def dashboard(request: Request, _=Depends(require_auth)):
             factor = fp_penalty_factor(fp, report_counts.get(fsrc.name, 0))
             if factor <= FP_DEGRADED_FACTOR:
                 degraded_pct = int(round((1 - factor) * 100))
+        tele = tele_by_name.get(fsrc.name)
         feed_rows.append({
             "name": fsrc.name,
             "url": fsrc.url,
             "feed_type": fsrc.feed_type.value,
+            "kind": fsrc.indicator_kind or "ip",
             "source_kind": "file" if fsrc.local_file else "url",
             "weight": fsrc.weight,
             "enabled": fsrc.enabled,
@@ -158,6 +187,12 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "indicators": st.total_indicators if st else None,
             "fp_count": fp,
             "degraded_pct": degraded_pct,
+            # Problems float (D9): a feed that is erroring, stale, or
+            # reputation-degraded surfaces above healthy rows within its kind
+            # group — a monitoring table must not hide its alarms mid-scroll.
+            "problem": bool(
+                (tele and tele["health"]["state"] in ("error", "stale"))
+                or degraded_pct is not None),
             # API-key UI: only whether a key exists — never the value.
             "auth_env": fsrc.auth_env,
             # Multi-credential feeds (comma-separated auth_env): the badge
@@ -166,25 +201,40 @@ def dashboard(request: Request, _=Depends(require_auth)):
                 os.environ.get(v.strip())
                 for v in fsrc.auth_env.split(',') if v.strip()),
             # Telemetry, merged in so each row answers "is this feed worth it?"
-            "tele": tele_by_name.get(fsrc.name),
+            "tele": tele,
         })
-    # Feeds that contribute nothing unique sink to the bottom; the ones you
-    # would actually miss sort to the top.
+    # Within each kind group: problems first, then the feeds you would most
+    # miss (exclusive contribution), then size, then name.
     feed_rows.sort(key=lambda r: (
+        0 if r["problem"] else 1,
         -(r["tele"]["exclusive"] if r["tele"] else 0),
         -(r["indicators"] or 0),
         r["name"],
     ))
 
+    # One table, kind-grouped (D9): slim group header rows carry the per-kind
+    # feed + indicator counts. Entries are the currently-attributed telemetry
+    # counts (same number the rows show), summed within kind.
+    feed_groups = []
+    for kind, label in (("ip", "IP feeds"), ("domain", "Domain feeds")):
+        rows = [r for r in feed_rows if r["kind"] == kind]
+        if not rows:
+            continue
+        feed_groups.append({
+            "kind": kind,
+            "label": label,
+            "feed_count": len(rows),
+            "entry_count": sum((r["tele"]["indicators"] if r["tele"] else (r["indicators"] or 0))
+                               for r in rows),
+        })
+
     return core.templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
         "telemetry": telemetry,
         "feed_base": feed_base,
-        "counts": counts,
-        "served": served,
-        "whitelist_count": len(whitelist),
-        "feed_cards": feed_cards,
+        "matrix_rows": matrix_rows,
         "feed_rows": feed_rows,
+        "feed_groups": feed_groups,
         "feed_types": [t.value for t in FeedType],
         "interval_min": _refresh_interval_minutes(),
         "retention_days": retention_max_age_days(core.db, core.config),

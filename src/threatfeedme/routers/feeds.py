@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
-from threatfeedme.feed_ingestor import parse_feed_content
+from threatfeedme.feed_ingestor import parse_domain_feed_content, parse_feed_content
 from threatfeedme.models import FeedSource, FeedType
 from threatfeedme.scheduler import _refresh_state, start_refresh_async
 from threatfeedme.schemas import ApiKeyRequest, FeedRequest, WhitelistResponse
@@ -77,6 +77,8 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
     # Remote feeds must be plain http/https URLs (no file://, ftp://, etc.).
     if not request.local_file and not re.match(r"https?://", url, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Feed URL must start with http:// or https://")
+    if request.indicator_kind not in ("ip", "domain"):
+        raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
     try:
         feed = FeedSource(
             name=name,
@@ -89,6 +91,7 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
             auth_header=request.auth_header,
             local_file=request.local_file,
             enabled=request.enabled,
+            indicator_kind=request.indicator_kind,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid feed: {e}")
@@ -118,24 +121,29 @@ async def upload_feed(
     name: str = Form(...),
     weight: float = Form(1.0),
     feed_type: str = Form(FeedType.CUSTOM.value),
+    indicator_kind: str = Form("ip"),
     file: UploadFile = File(...),
     _=Depends(require_auth),
     _csrf=Depends(csrf_check),
 ):
-    """Upload a custom IP/CIDR list as a local-file feed.
+    """Upload a custom IP/CIDR or domain list as a local-file feed.
 
     Security controls:
       - storage path is derived from the feed name and boundary-checked to stay
         inside UPLOAD_DIR (the client filename is never trusted);
       - the upload is size-capped and read in bounded chunks;
       - binary content (null bytes) is rejected;
-      - the list must contain at least one valid IP/CIDR.
+      - the list must contain at least one valid entry of the declared kind
+        (D8: the kind is declared, never sniffed — an IP upload never yields
+        domains and vice versa).
     """
     # Validate the feed type early.
     try:
         ftype = FeedType(feed_type)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid feed_type")
+    if indicator_kind not in ("ip", "domain"):
+        raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
 
     # Resolve a safe destination path (raises on traversal / bad name).
     try:
@@ -164,9 +172,14 @@ async def upload_feed(
         text = data.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         raise HTTPException(status_code=415, detail="File must be UTF-8 text")
-    indicators = parse_feed_content(text)
-    if not indicators:
-        raise HTTPException(status_code=422, detail="No valid IPs or CIDRs found in file")
+    if indicator_kind == "domain":
+        indicators = parse_domain_feed_content(text)
+        if not indicators:
+            raise HTTPException(status_code=422, detail="No valid domains found in file")
+    else:
+        indicators = parse_feed_content(text)
+        if not indicators:
+            raise HTTPException(status_code=422, detail="No valid IPs or CIDRs found in file")
 
     # Persist the sanitized list, then register/point the feed at it.
     with open(dest, "w", encoding="utf-8", newline="\n") as f:
@@ -176,6 +189,7 @@ async def upload_feed(
     feed = FeedSource(
         name=re.sub(r'[^A-Za-z0-9._-]', '_', name).strip('._')[:64],
         url=dest, feed_type=ftype, weight=weight, local_file=True, enabled=True,
+        indicator_kind=indicator_kind,
     )
     core.db.add_feed(feed)
     return WhitelistResponse(

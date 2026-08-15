@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Indicators: Threat Feed Me!{% endblock %}
-{% block subtitle %}The deduplicated result across all feeds. Search for an IP, add one manually,
+{% block subtitle %}The deduplicated result across all feeds. Search for an IP or domain, add one manually,
    or remove one (removing globally whitelists it so a refresh won't bring it back).{% endblock %}
 
 {% block content %}
     <h2>Merged indicators</h2>
     <div class="toolbar">
-        <input id="ind-q" type="text" class="text-input" placeholder="Search IP / CIDR…" value="{{ q }}">
+        <input id="ind-q" type="text" class="text-input" placeholder="Search IP / domain…" value="{{ q }}">
         <form onsubmit="return addIndicator(event)" style="display:flex;gap:8px;align-items:center">
-            <input id="ind-add" type="text" class="text-input" placeholder="add IP or CIDR">
+            <input id="ind-add" type="text" class="text-input" placeholder="add IP, CIDR, or domain">
             <button class="mini-btn" type="submit">+ Add</button>
         </form>
         <span class="grow"></span>
@@ -18,7 +18,7 @@
     </div>
     <div class="table-scroll">
     <table>
-        <thead><tr><th>IP / CIDR</th><th>Tier</th><th>Score</th>
+        <thead><tr><th>Indicator</th><th>Tier</th><th>Score</th>
             <th title="Independent witnesses: each source's vote is discounted by its measured overlap with sources already counted. Includes netblock votes, so it can exceed the listed sources.">Votes</th>
             <th>Sources</th><th></th></tr></thead>
         <tbody id="ind-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
@@ -26,10 +26,12 @@
     </div>
 
     <h2>Whitelist</h2>
-    <p class="hint">Whitelist an IP from <b>all tiers</b> (excluded everywhere) or from a
-       <b>single tier</b> (only that tier's feed drops it; the others still list it).</p>
+    <p class="hint">Whitelist an entry from <b>all tiers</b> (excluded everywhere) or from a
+       <b>single tier</b> (only that tier's feed drops it; the others still list it).
+       Accepts an IP, a CIDR, a domain, or a wildcard like <code>*.example.com</code>
+       (covers the domain and every subdomain).</p>
     <form class="wl-form" onsubmit="return addWl(event)">
-        <input class="ip" id="wl-ip" type="text" placeholder="IP or CIDR" required>
+        <input class="ip" id="wl-ip" type="text" placeholder="IP, CIDR, or *.domain" required style="width:190px">
         <select id="wl-feed" title="Scope">
             <option value="{{ all_feeds }}">All tiers</option>
             <option value="tier:high">High only</option>
