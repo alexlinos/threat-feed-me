@@ -273,6 +273,46 @@ def test_export_stats_per_kind(client):
     assert stats["high_domain_count"] == 1     # tri-source only
 
 
+# ==================== feed persistence: indicator_kind round-trip ====================
+
+def test_feed_kind_survives_db_round_trip(tmp_path):
+    """indicator_kind must survive add_feed -> get_feed_source: the ingest
+    pipeline reads feeds from the DB, so a kind dropped at this layer means
+    every domain feed silently degrades to the IP parser (the bug that
+    shipped: the column existed but no write/read path touched it)."""
+    from threatfeedme.database import Database
+    from threatfeedme.models import FeedSource
+    db = Database(str(tmp_path / "t.db"))
+    db.add_feed(FeedSource(name="domfeed", url="https://example.com/d.txt",
+                           indicator_kind="domain"))
+    assert db.get_feed_source("domfeed").indicator_kind == "domain"
+    assert db.get_feed_source("domfeed") in db.get_feed_sources()
+
+
+def test_seed_and_sync_carry_kind_and_heal_wrong_rows(tmp_path):
+    """Seeding writes the declared kind; sync_default_feeds treats kind as
+    PLUMBING, so a database whose domain feeds were seeded as 'ip' (any DB
+    created before the kind column was wired through) self-heals on the
+    next startup."""
+    from threatfeedme.database import Database
+    from threatfeedme.models import FeedSource
+    cfg = {"feeds": [{"name": "hagezi", "url": "https://example.com/ti.txt",
+                      "feed_type": "threat_intel", "indicator_kind": "domain"}]}
+    db = Database(str(tmp_path / "t.db"))
+    db.seed_feeds_from_config(cfg)
+    assert db.get_feed_source("hagezi").indicator_kind == "domain"
+    # Simulate the pre-fix state: same feed stored as kind 'ip' with seed
+    # provenance. Sync must correct the kind without touching preferences.
+    with db._cursor() as cur:
+        cur.execute("UPDATE feeds SET indicator_kind = 'ip', enabled = 0 WHERE name = 'hagezi'")
+    assert db.get_feed_source("hagezi").indicator_kind == "ip"
+    actions = db.sync_default_feeds(cfg)
+    assert "hagezi" in actions["updated"]
+    healed = db.get_feed_source("hagezi")
+    assert healed.indicator_kind == "domain"
+    assert healed.enabled is False  # preference untouched by the heal
+
+
 # ==================== whitelist: domain matcher (D6) ====================
 
 def test_matcher_wildcard_covers_apex_and_subdomains():

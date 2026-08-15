@@ -26,8 +26,12 @@ def _meta_cidr(meta: Dict) -> str:
 # Feed fields that are mechanics (bug-fixable plumbing) rather than operator
 # preferences. sync_default_feeds applies shipped changes to these on any
 # seed-provenance row; enabled/weight/update_interval are never synced.
+# indicator_kind is plumbing: what a feed's lines parse as is a property of
+# the upstream source, not an operator preference — and syncing it heals
+# databases whose domain feeds were seeded as 'ip' before the column was
+# threaded through this layer.
 _PLUMBING_FIELDS = ('url', 'feed_type', 'requires_auth', 'auth_env',
-                    'auth_header', 'local_file', 'scraper')
+                    'auth_header', 'local_file', 'scraper', 'indicator_kind')
 
 
 def _plumbing_differs(a: FeedSource, b: FeedSource) -> bool:
@@ -54,6 +58,7 @@ def _feed_fingerprint(feed: FeedSource) -> str:
         'local_file': bool(feed.local_file),
         'scraper': feed.scraper,
         'enabled': bool(feed.enabled),
+        'indicator_kind': feed.indicator_kind or 'ip',
     }, sort_keys=True)
 
 
@@ -990,6 +995,10 @@ class Database:
             local_file=bool(row['local_file']),
             scraper=row['scraper'],
             enabled=bool(row['enabled']),
+            # Kind drives parser dispatch and which URLs serve the feed's
+            # data; without reading it back every feed degraded to 'ip'.
+            indicator_kind=(row['indicator_kind'] if 'indicator_kind' in row.keys()
+                            else 'ip') or 'ip',
         )
 
     def seed_feeds_from_config(self, config: Dict) -> int:
@@ -1009,12 +1018,13 @@ class Database:
                     "INSERT OR IGNORE INTO feeds "
                     "(name, url, feed_type, weight, update_interval, requires_auth, "
                     "auth_env, auth_header, local_file, scraper, enabled, added_by, "
-                    "added_at, seed_fingerprint) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?, ?)",
+                    "added_at, seed_fingerprint, indicator_kind) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?, ?, ?)",
                     (feed.name, feed.url, feed.feed_type.value, feed.weight,
                      feed.update_interval, int(feed.requires_auth), feed.auth_env,
                      feed.auth_header, int(feed.local_file), feed.scraper,
-                     int(feed.enabled), now, _feed_fingerprint(feed)),
+                     int(feed.enabled), now, _feed_fingerprint(feed),
+                     feed.indicator_kind or 'ip'),
                 )
                 seeded += 1
             return seeded
@@ -1082,10 +1092,10 @@ class Database:
                     cur.execute(
                         "UPDATE feeds SET url = ?, feed_type = ?, requires_auth = ?, "
                         "auth_env = ?, auth_header = ?, local_file = ?, scraper = ?, "
-                        "seed_fingerprint = ? WHERE name = ?",
+                        "indicator_kind = ?, seed_fingerprint = ? WHERE name = ?",
                         (feed.url, feed.feed_type.value, int(feed.requires_auth),
                          feed.auth_env, feed.auth_header, int(feed.local_file),
-                         feed.scraper, new_fp, feed.name),
+                         feed.scraper, feed.indicator_kind or 'ip', new_fp, feed.name),
                     )
                 actions["updated"].append(feed.name)
         return actions
@@ -1140,19 +1150,21 @@ class Database:
                 "INSERT INTO feeds "
                 "(name, url, feed_type, weight, update_interval, requires_auth, "
                 "auth_env, auth_header, local_file, scraper, enabled, added_by, "
-                "added_at, seed_fingerprint) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "added_at, seed_fingerprint, indicator_kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(name) DO UPDATE SET "
                 "url = excluded.url, feed_type = excluded.feed_type, weight = excluded.weight, "
                 "update_interval = excluded.update_interval, "
                 "requires_auth = excluded.requires_auth, auth_env = excluded.auth_env, "
                 "auth_header = excluded.auth_header, local_file = excluded.local_file, "
                 "scraper = excluded.scraper, enabled = excluded.enabled, "
-                "seed_fingerprint = excluded.seed_fingerprint",
+                "seed_fingerprint = excluded.seed_fingerprint, "
+                "indicator_kind = excluded.indicator_kind",
                 (feed.name, feed.url, feed.feed_type.value, feed.weight,
                  feed.update_interval, int(feed.requires_auth), feed.auth_env,
                  feed.auth_header, int(feed.local_file), feed.scraper,
-                 int(feed.enabled), added_by, now, seed_fingerprint),
+                 int(feed.enabled), added_by, now, seed_fingerprint,
+                 feed.indicator_kind or 'ip'),
             )
             cur.execute("DELETE FROM deleted_feeds WHERE name = ?", (feed.name,))
             if url_changed:
