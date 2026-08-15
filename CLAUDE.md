@@ -205,6 +205,24 @@ inside hagezi TIF + phishing_army). FortiGate operators: external-resource
 caps (~131k entries on mid-range) mean the DNS filter should point at
 domains/medium or high, not Everything — noted in the dashboard how-to.
 
+### UniFi push integration (built 2026-08-15, NOT yet live-verified)
+
+Alex's home gateway is a UDM SE; UniFi cannot poll a blocklist URL (open
+feature request for years), so `pusher_unifi.py` PUSHES the configured tier
+into firewall groups `{prefix}-{tier}-1..N` via the gateway's local Network
+API after every refresh (hooked in pipeline.run_refresh, guarded so a push
+failure never breaks a refresh; one-shot: `--push-unifi`). Key mechanics:
+login via /api/auth/login with UNIFI_USER/UNIFI_PASSWORD env (CSRF token
+echoed + rotated), groups chunked at 5k (UniFi caps ~10k/group), stale
+chunks EMPTIED not deleted (in-use groups refuse deletion), IPv4 only
+(address-group type), default tier medium, hard max_entries cap with
+strongest-kept truncation. Unit-tested against a faked UniFi API (278
+green) but NOT verified against real UniFi OS — the login/group API shapes
+are from community integrations, and UniFi changes them between releases.
+**Release gate: Alex live-verifies against his UDM SE first; then cut
+v2.1.0.** Domains can't be pushed (UniFi ad-block has no list-URL support);
+README points UniFi users at Pi-hole/AdGuard for the domain side.
+
 ### v2.0.0 build state (2026-08-15, shipped)
 
 The whole D1-D10 path is implemented, tested (269 green), live-verified

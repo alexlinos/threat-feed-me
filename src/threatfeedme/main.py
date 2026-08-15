@@ -117,12 +117,14 @@ def main():
                         help='Start the web dashboard now and fetch feeds in the background (default container mode)')
     parser.add_argument('--stats', action='store_true', help='Show statistics')
     parser.add_argument('--backup', action='store_true', help='Take a database backup now')
+    parser.add_argument('--push-unifi', action='store_true',
+                        help='Push the configured tier into UniFi firewall groups now (integrations.unifi)')
     parser.add_argument('--config', default='config.yaml', help='Config file path')
 
     args = parser.parse_args()
 
     if not any([args.fetch, args.score, args.export, args.full,
-                args.serve, args.stats, args.backup]):
+                args.serve, args.stats, args.backup, args.push_unifi]):
         parser.print_help()
         return
 
@@ -159,6 +161,19 @@ def main():
         bdir = bcfg.get('dir') or f"{db_path.rsplit('/', 1)[0]}/backups"
         path = db.backup_database(bdir, keep=int(bcfg.get('keep', 7)))
         logger.info(f"Backup written to {path}")
+
+    if args.push_unifi:
+        # Dashboard-saved credentials live in the data-volume .env; load it so
+        # a one-shot push works without exporting vars by hand. Real env wins.
+        from threatfeedme.core import load_env_file
+        load_env_file(os.path.join(os.path.dirname(db_path) or ".", ".env"))
+        from threatfeedme.pusher_unifi import push_to_unifi
+        summary = push_to_unifi(db, cfg)
+        if summary is None:
+            # ASCII only: Windows consoles default to cp1252 (see _stats_table).
+            logger.error("UniFi push is not enabled - set integrations.unifi in config.yaml")
+            sys.exit(2)
+        logger.info(f"UniFi push complete: {summary}")
 
 
 

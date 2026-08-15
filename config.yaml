@@ -365,6 +365,31 @@ output:
     - csv
     - json
 
+integrations:
+  # UniFi gateways (UDM / UDM Pro / UDM SE / Cloud Gateway) cannot poll an
+  # external blocklist URL, so this PUSHES the chosen tier into firewall
+  # groups named {group_prefix}-{tier}-1..N via the gateway's local API
+  # after every refresh (and on demand: python -m threatfeedme.main
+  # --push-unifi). Reference the groups once in a drop rule; membership
+  # then maintains itself. Credentials come from UNIFI_USER /
+  # UNIFI_PASSWORD env vars (the data-volume .env works) — use a dedicated
+  # local-only admin restricted to the Network app.
+  unifi:
+    enabled: false
+    # host: https://192.168.1.1
+    site: default
+    # Which cumulative tier to push. medium (default) is ~2-4 groups;
+    # NEVER point this at low/"everything" on a home gateway.
+    tier: medium
+    group_prefix: threatfeedme
+    # UDM certs are self-signed; enable only if yours has a real cert.
+    verify_ssl: false
+    # Safety rails: groups cap out around ~10k members on UniFi OS, so the
+    # set is chunked; the total cap keeps a huge tier from wedging a home
+    # gateway (strongest indicators are kept, the log reports any drop).
+    max_per_group: 5000
+    max_entries: 50000
+
 retention:
   # How long an IP is kept after it was last seen in ANY feed. Because last_seen
   # is refreshed whenever any feed re-reports an IP, this mainly evicts transient

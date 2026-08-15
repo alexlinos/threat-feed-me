@@ -222,7 +222,8 @@ def retention_max_age_days(db: Database, config: Dict) -> int:
 # ---- Full refresh ----
 
 def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
-    """Full refresh: fetch -> score -> export. Returns per-feed fetch results."""
+    """Full refresh: fetch -> score -> export -> push. Returns per-feed fetch
+    results."""
     fetched = fetch_feeds(db, config, only=only)
     max_age_days = retention_max_age_days(db, config)
     if max_age_days > 0:
@@ -230,4 +231,12 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
         logger.info(f"[retention] purged {purged} stale indicators (> {max_age_days}d)")
     recalculate(db, config)
     export_tiers(db, config)
+    # Push integrations (UniFi has no poll-a-URL feature, so we push instead).
+    # Guarded: an unreachable gateway must never break the refresh — the
+    # served block lists are already updated at this point either way.
+    try:
+        from threatfeedme.pusher_unifi import push_to_unifi
+        push_to_unifi(db, config)
+    except Exception:
+        logger.exception("[unifi] push failed (refresh itself succeeded)")
     return fetched

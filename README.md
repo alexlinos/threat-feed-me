@@ -244,6 +244,10 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 `*_confidence_domains.*`).
 
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
+- **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
+  [push integration](#unifi-udm--udm-pro--udm-se) instead
+  (`integrations.unifi` in config.yaml): it maintains firewall groups on the
+  gateway after every refresh.
 - **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block)
 - **SonicWall** (SonicOS 7): Object → Match Objects → Dynamic External Object (HTTPS URL)
 - **Palo Alto:** Objects → External Dynamic Lists → *IP List*
@@ -251,6 +255,32 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 - **Check Point** (R81+): Security Policies → Threat Prevention → Custom Policy Tools → Indicators → External IOC Feed
 - **pfSense (pfBlockerNG):** Firewall → pfBlockerNG → IPv4 → add the URL as a source
 - **OPNsense:** Firewall → Aliases → URL Table (IPs)
+
+### UniFi (UDM / UDM Pro / UDM SE)
+
+UniFi OS has no external-blocklist subscription, so threat-feed-me **pushes**
+instead of serving: after every refresh it maintains firewall groups named
+`threatfeedme-<tier>-1..N` on the gateway through the local Network API
+(chunked, because UniFi groups cap out around ~10k members).
+
+1. On the UDM, create a **dedicated local admin** restricted to the Network
+   app (Admins & Users → Add Admin → *Restrict to local access only*).
+2. Set the credentials as `UNIFI_USER` / `UNIFI_PASSWORD` (environment or the
+   data volume's `.env`).
+3. In `config.yaml`, set `integrations.unifi.enabled: true` and `host:` to the
+   gateway (e.g. `https://192.168.1.1`); the default pushes the **medium**
+   tier in 5k-member chunks.
+4. After the first push, add a firewall rule on the UDM (Firewall & Security):
+   *Block* traffic where source (WAN-in) or destination (LAN-out) matches the
+   `threatfeedme-medium-*` groups. Membership updates itself every refresh;
+   a one-shot push is `python -m threatfeedme.main --push-unifi`.
+
+Groups shrink to empty rather than being deleted when the set contracts (a
+group referenced by a rule can't be deleted, and an empty group matches
+nothing). IPv6 indicators are skipped (UniFi address groups are v4-only).
+For the **domain** side on a UniFi network, run Pi-hole or AdGuard Home and
+point it at `/feeds/domains/medium.txt` — UniFi's ad-block has no custom list
+URL support.
 
 ### Custom lists
 
