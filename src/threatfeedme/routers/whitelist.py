@@ -40,16 +40,18 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
     """Add an IP to the whitelist"""
     if request.reason_code not in WHITELIST_REASONS:
         raise HTTPException(status_code=400, detail="Invalid reason_code")
-    # Validate the IP/CIDR so a non-IP value can't be persisted (defends the
-    # whitelist table and eliminates any HTML/JS-injection vector on render).
+    # Validate the value so junk can't be persisted (defends the whitelist
+    # table and eliminates any HTML/JS-injection vector on render). Accepts
+    # an IP, a CIDR, a domain, or a "*.domain" wildcard (D6).
     try:
-        stored_ip, cidr = _normalize_indicator(request.ip)
+        stored_ip, pattern = _normalize_indicator(request.ip)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Not a valid IP or CIDR")
-    # For a CIDR, store the whitelist entry WITH its prefix (e.g. 10.0.0.0/8)
-    # so it suppresses every contained IP (WhitelistMatcher builds a CIDR rule
-    # from slash-bearing keys). A bare host is stored as-is.
-    wl_key = cidr or stored_ip
+        raise HTTPException(status_code=400, detail="Not a valid IP, CIDR, or domain")
+    # A range entry (CIDR or wildcard) is stored WITH its range syntax
+    # (10.0.0.0/8, *.example.com) so it suppresses everything it contains
+    # (WhitelistMatcher builds range rules from those keys). A bare host or
+    # exact domain is stored as-is.
+    wl_key = pattern or stored_ip
     try:
         expires = datetime.fromisoformat(request.expires_at) if request.expires_at else None
         feed_name = request.feed_name or ALL_FEEDS
@@ -57,11 +59,11 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
         # Capture which feeds are "blamed" for a false positive BEFORE any
         # state change, so scoring feedback is attributed correctly. FP feedback
         # is a HOST-level signal — attributed to the feeds that reported this
-        # exact IP — and is always keyed on stored_ip (consistent with the
-        # indicator lookup). A CIDR/range has no single reporting indicator, so
-        # it is still suppressed via the whitelist but records no (un-
-        # attributable) feed feedback.
-        if request.reason_code == REASON_FALSE_POSITIVE and cidr is None:
+        # exact IP/domain — and is always keyed on stored_ip (consistent with
+        # the indicator lookup). A range (CIDR or wildcard) has no single
+        # reporting indicator, so it is still suppressed via the whitelist but
+        # records no (un-attributable) feed feedback.
+        if request.reason_code == REASON_FALSE_POSITIVE and pattern is None:
             ind = core.db.get_indicator(stored_ip)
             sources = ind.sources if ind else []
             if feed_name == ALL_FEEDS or feed_name.startswith('tier:'):
@@ -83,13 +85,12 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
             reason_code=request.reason_code,
         )
 
-        # Rescore so the change is reflected immediately. For a single host this
-        # updates that indicator; for a CIDR, contained IPs are excluded live by
-        # the matcher and their tiers settle on the next full recalc.
-        # Rescoring a CIDR network address is meaningless — the contained IPs
-        # are excluded live by WhitelistMatcher and the network address itself
-        # is unlikely to be an indicator.
-        if cidr is None:
+        # Rescore so the change is reflected immediately. For a single host or
+        # domain this updates that indicator; for a range (CIDR or wildcard),
+        # contained values are excluded live by the matcher and their tiers
+        # settle on the next full recalc — rescoring the range's anchor value
+        # is meaningless.
+        if pattern is None:
             from threatfeedme.scorer import ConfidenceScorer
             scorer = ConfidenceScorer(core.db, pipeline.scorer_config(core.db, core.config))
             score, tier = scorer.calculate_score(stored_ip)

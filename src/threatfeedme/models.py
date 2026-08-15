@@ -29,15 +29,20 @@ WHITELIST_REASONS = {
 
 
 class WhitelistMatcher(dict):
-    """Whitelist scoping map: exact ip (str) -> set(feed_names).
+    """Whitelist scoping map: exact indicator value (str) -> set(feed_names).
 
     Subclasses ``dict`` so existing callers/tests that treat the whitelist map
     as a plain dict (``.get(ip)``, ``in``, ``==`` comparison, iteration) keep
-    working unchanged. On top of the exact map it also holds parsed CIDR rules,
-    so that whitelisting a network (e.g. "10.0.0.0/8") suppresses every IP the
-    network contains -- mirroring the containment the Spamhaus overlap path
-    already does. A bare host or an explicit /32 (or /128) stays an exact
-    entry only.
+    working unchanged. On top of the exact map it also holds parsed range
+    rules, one flavour per indicator kind:
+
+      - CIDR rules ("10.0.0.0/8") suppress every IP the network contains,
+        mirroring the containment the Spamhaus overlap path already does. A
+        bare host or an explicit /32 (or /128) stays an exact entry only.
+      - Wildcard domain rules ("*.example.com") suppress the apex domain and
+        every subdomain — the D6 domain analogue of a CIDR (a phishing kit
+        rotates hostnames under one domain the way a botnet rotates IPs
+        inside one netblock).
     """
 
     def __init__(self, *args, **kwargs):
@@ -45,43 +50,61 @@ class WhitelistMatcher(dict):
         # Parsed CIDR rules: list of (ip_network, set(feed_names)). Built only
         # from entries that are real networks with a non-host prefix.
         self.cidr_rules: List[Tuple[Any, Set[str]]] = []
+        # Wildcard domain rules: list of (apex_domain, set(feed_names)),
+        # built from "*.apex" keys. Matching is label-edge suffix match.
+        self.wildcard_rules: List[Tuple[str, Set[str]]] = []
 
     def add_cidr_rules_from_keys(self) -> None:
-        """(Re)build CIDR rules from the current exact keys.
+        """(Re)build CIDR and wildcard-domain rules from the current keys.
 
-        An entry is treated as a CIDR rule when its stored ip parses as a
+        An entry is treated as a CIDR rule when its stored value parses as a
         network whose prefix is shorter than a single host (so a plain host or
-        a /32 // /128 is left as an exact match only)."""
+        a /32 // /128 is left as an exact match only), and as a wildcard rule
+        when it starts with "*."."""
         rules: List[Tuple[Any, Set[str]]] = []
-        for ip_key, feeds in self.items():
-            if "/" not in ip_key:
+        wildcards: List[Tuple[str, Set[str]]] = []
+        for key, feeds in self.items():
+            if key.startswith("*."):
+                apex = key[2:]
+                if apex:
+                    wildcards.append((apex, set(feeds)))
+                continue
+            if "/" not in key:
                 continue
             try:
-                net = ipaddress.ip_network(ip_key, strict=False)
+                net = ipaddress.ip_network(key, strict=False)
             except ValueError:
                 continue
             if net.prefixlen >= net.max_prefixlen:
                 continue  # a /32 or /128 is a single host -> exact only
             rules.append((net, set(feeds)))
         self.cidr_rules = rules
+        self.wildcard_rules = wildcards
 
-    def scoped_feeds(self, ip: str) -> Set[str]:
-        """Feeds whitelisting ``ip``: exact match plus any containing CIDR rule.
+    def scoped_feeds(self, value: str) -> Set[str]:
+        """Feeds whitelisting ``value`` (an IP or a domain): the exact match
+        plus any containing CIDR rule (IPs) or wildcard rule (domains).
 
-        Returns the union of the exact-match set and the feeds of every CIDR
-        rule that contains the IP. On parse failure the exact set is returned
-        alone. Empty set if nothing matches."""
-        exact = self.get(ip)
+        Returns the union of every matching rule's feed set; empty set if
+        nothing matches."""
+        exact = self.get(value)
         scoped: Set[str] = set(exact) if exact else set()
-        if not self.cidr_rules:
-            return scoped
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return scoped
-        for net, feeds in self.cidr_rules:
-            if addr.version == net.version and addr in net:
-                scoped |= feeds
+        if self.cidr_rules or self.wildcard_rules:
+            try:
+                addr = ipaddress.ip_address(value)
+            except ValueError:
+                addr = None
+            if addr is not None:
+                for net, feeds in self.cidr_rules:
+                    if addr.version == net.version and addr in net:
+                        scoped |= feeds
+            else:
+                # Not an IP -> match domain wildcards. "*.example.com" covers
+                # example.com itself and any depth of subdomain (label-edge
+                # match, so notexample.com never matches).
+                for apex, feeds in self.wildcard_rules:
+                    if value == apex or value.endswith('.' + apex):
+                        scoped |= feeds
         return scoped
 
 

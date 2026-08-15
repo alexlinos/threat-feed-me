@@ -11,7 +11,8 @@ from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
 from threatfeedme.exporter import firewall_value
-from threatfeedme.feed_helpers import _FEEDS_BY_NAME, _indicators_for, _normalize_indicator
+from threatfeedme.feed_helpers import (_FEEDS_BY_NAME, _indicators_for,
+                                       _normalize_indicator, _value_kind)
 from threatfeedme.models import ALL_FEEDS
 from threatfeedme.schemas import IndicatorRequest, WhitelistResponse
 
@@ -129,30 +130,37 @@ def get_indicators(q: Optional[str] = None, limit: int = 50, offset: int = 0,
 
 @router.post("/api/indicators", response_model=WhitelistResponse)
 def add_indicator(request: "IndicatorRequest", _=Depends(require_auth), _csrf=Depends(csrf_check)):
-    """Manually add an IP/CIDR to the merged set (source 'manual')."""
+    """Manually add an IP/CIDR/domain to the merged set (source 'manual')."""
     try:
-        stored_ip, cidr = _normalize_indicator(request.ip)
+        stored_ip, pattern = _normalize_indicator(request.ip)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Not a valid IP or CIDR")
+        raise HTTPException(status_code=400, detail="Not a valid IP, CIDR, or domain")
+    # A CIDR is a real indicator (stored as network + prefix metadata); a
+    # wildcard is only a whitelist matcher pattern — there is nothing to score.
+    if pattern is not None and pattern.startswith("*."):
+        raise HTTPException(status_code=400,
+                            detail="A wildcard can be whitelisted, not added as an indicator")
 
-    # Safety guard: refuse to add internal/reserved space or well-known good
-    # infrastructure (e.g. 8.8.8.8) that must never be blocked.
-    reason = core.SAFETY.excluded_reason(cidr or stored_ip)
+    # Safety guard: refuse to add internal/reserved space, special-use TLDs,
+    # or well-known good infrastructure (e.g. 8.8.8.8, update.microsoft.com)
+    # that must never be blocked.
+    reason = core.SAFETY.excluded_reason(pattern or stored_ip)
     if reason:
-        raise HTTPException(status_code=400, detail=f"Refusing to add {cidr or stored_ip}: {reason}")
+        raise HTTPException(status_code=400, detail=f"Refusing to add {pattern or stored_ip}: {reason}")
 
     # If it was previously removed (globally whitelisted), un-remove it.
     core.db.remove_from_whitelist(stored_ip, feed_name=ALL_FEEDS)
 
-    meta = {"cidr": cidr} if cidr else {}
-    core.db.add_indicator(ip=stored_ip, source="manual", metadata=meta)
+    meta = {"cidr": pattern} if pattern else {}
+    core.db.add_indicator(ip=stored_ip, source="manual", metadata=meta,
+                          kind=_value_kind(stored_ip))
 
     # Score just this indicator so it lands in the right tier immediately.
     from threatfeedme.scorer import ConfidenceScorer
     scorer = ConfidenceScorer(core.db, pipeline.scorer_config(core.db, core.config))
     score, tier = scorer.calculate_score(stored_ip)
     core.db.set_indicator_score(stored_ip, score, tier.value)
-    return WhitelistResponse(success=True, message=f"Added {cidr or stored_ip}")
+    return WhitelistResponse(success=True, message=f"Added {pattern or stored_ip}")
 
 
 @router.get("/api/indicators/{ip}")
@@ -183,12 +191,12 @@ def remove_indicator(ip: str, _=Depends(require_auth), _csrf=Depends(csrf_check)
     This globally whitelists it (so a feed refresh won't bring it back) and
     deletes the current row for immediate effect."""
     # Normalize so a CIDR value (e.g. 1.2.3.0/24) maps to the stored network
-    # address the same way the add path does; reject values that aren't IPs so
-    # no junk is persisted to the whitelist.
+    # address the same way the add path does; reject junk so nothing invalid
+    # is persisted to the whitelist.
     try:
-        stored_ip, _cidr = _normalize_indicator(ip)
+        stored_ip, _pattern = _normalize_indicator(ip)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Not a valid IP or CIDR")
+        raise HTTPException(status_code=400, detail="Not a valid IP, CIDR, or domain")
     core.db.add_to_whitelist(stored_ip, reason="removed via dashboard", added_by="dashboard",
                         feed_name=ALL_FEEDS)
     core.db.delete_indicator(stored_ip)

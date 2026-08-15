@@ -522,8 +522,12 @@ class Database:
         matcher = None
         if not include_whitelisted:
             matcher = self.get_whitelist_map()
-        has_global_cidr = matcher is not None and any(
-            ALL_FEEDS in feeds for _net, feeds in matcher.cidr_rules)
+        # A globally-scoped RANGE entry (CIDR or domain wildcard) can't be
+        # expressed in the SQL NOT IN, so its presence switches to the
+        # match-in-Python slow path below.
+        has_global_range = matcher is not None and (
+            any(ALL_FEEDS in feeds for _net, feeds in matcher.cidr_rules)
+            or any(ALL_FEEDS in feeds for _apex, feeds in matcher.wildcard_rules))
 
         select_sql = f"""
             SELECT i.ip, i.confidence_score, i.tier, i.metadata, i.effective_votes,
@@ -534,7 +538,7 @@ class Database:
         """
 
         with self._cursor() as cur:
-            if not has_global_cidr:
+            if not has_global_range:
                 cur.execute(f"SELECT COUNT(*) FROM indicators i{where_sql}", params)
                 total = cur.fetchone()[0]
                 cur.execute(select_sql + " LIMIT ? OFFSET ?", params + [limit, offset])

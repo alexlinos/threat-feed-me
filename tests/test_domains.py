@@ -271,3 +271,91 @@ def test_export_stats_per_kind(client):
     assert stats["total_unique_ips"] == 1
     assert stats["total_unique_domains"] == 2  # wl.example.net excluded
     assert stats["high_domain_count"] == 1     # tri-source only
+
+
+# ==================== whitelist: domain matcher (D6) ====================
+
+def test_matcher_wildcard_covers_apex_and_subdomains():
+    from threatfeedme.models import WhitelistMatcher, ALL_FEEDS
+    m = WhitelistMatcher({"*.corp.example.org": {ALL_FEEDS}})
+    m.add_cidr_rules_from_keys()
+    assert ALL_FEEDS in m.scoped_feeds("corp.example.org")
+    assert ALL_FEEDS in m.scoped_feeds("mail.corp.example.org")
+    assert ALL_FEEDS in m.scoped_feeds("a.b.corp.example.org")
+    # Label-edge only: a lookalike never matches.
+    assert m.scoped_feeds("evilcorp.example.org") == set()
+    # And IPs never hit domain wildcards.
+    assert m.scoped_feeds("203.0.113.1") == set()
+
+
+def test_matcher_exact_domain_and_feed_scope():
+    from threatfeedme.models import WhitelistMatcher, effective_sources
+    m = WhitelistMatcher({"fp.example.org": {"domfeed_a"}})
+    m.add_cidr_rules_from_keys()
+    # Feed-scoped: only that feed's report is suppressed.
+    assert effective_sources("fp.example.org", ["domfeed_a", "domfeed_b"], m) == ["domfeed_b"]
+    assert effective_sources("other.example.org", ["domfeed_a"], m) == ["domfeed_a"]
+
+
+def test_whitelist_api_accepts_exact_domain(client):
+    r = client.post("/api/whitelist", json={
+        "ip": "SOLO.example.NET.", "reason_code": "false_positive",
+        "reason": "test", "added_by": "test",
+    })
+    assert r.status_code == 200 and r.json()["success"], r.text
+    # Normalized key, excluded from serving immediately.
+    assert "solo.example.net" not in client.get("/feeds/domains/all.txt").text
+    r = client.request("DELETE", "/api/whitelist", params={"ip": "solo.example.net"})
+    assert r.status_code == 200
+    assert "solo.example.net" in client.get("/feeds/domains/all.txt").text
+
+
+def test_whitelist_api_accepts_wildcard(client):
+    r = client.post("/api/whitelist", json={
+        "ip": "*.tri-source.example.net", "reason_code": "internal_asset",
+        "reason": "test", "added_by": "test",
+    })
+    assert r.status_code == 200 and r.json()["success"], r.text
+    # The apex indicator is suppressed by its own wildcard (apex + subdomains).
+    assert "tri-source.example.net" not in client.get("/feeds/domains/all.txt").text
+    r = client.request("DELETE", "/api/whitelist", params={"ip": "*.tri-source.example.net"})
+    assert r.status_code == 200
+    assert "tri-source.example.net" in client.get("/feeds/domains/all.txt").text
+
+
+def test_whitelist_api_rejects_junk(client):
+    r = client.post("/api/whitelist", json={
+        "ip": "<script>alert(1)</script>", "reason_code": "other",
+        "reason": "x", "added_by": "x",
+    })
+    assert r.status_code == 400
+
+
+# ==================== manual indicator add: domains ====================
+
+def test_manual_add_domain_gets_domain_kind(client):
+    r = client.post("/api/indicators", json={"ip": "manually-added.example.org"})
+    assert r.status_code == 200 and r.json()["success"], r.text
+    assert "manually-added.example.org" in client.get("/feeds/domains/all.txt").text
+    # Kind separation holds for manual adds too.
+    assert "manually-added.example.org" not in client.get("/feeds/all.txt").text
+    client.request("DELETE", "/api/indicators/manually-added.example.org")
+
+
+def test_manual_add_wildcard_rejected(client):
+    r = client.post("/api/indicators", json={"ip": "*.example.org"})
+    assert r.status_code == 400
+
+
+def test_manual_add_known_good_domain_refused(client):
+    r = client.post("/api/indicators", json={"ip": "update.microsoft.com"})
+    assert r.status_code == 400
+    assert "protected" in r.json()["detail"]
+
+
+def test_manual_add_reserved_tld_refused(client):
+    # This fixture runs with drop_private_reserved OFF (TEST-NET IPs), so
+    # reserved-TLD rejection is toggle-tested in the SafetyFilter unit tests;
+    # here we only assert the known-good floor holds through the API.
+    r = client.post("/api/indicators", json={"ip": "gmail.com"})
+    assert r.status_code == 400

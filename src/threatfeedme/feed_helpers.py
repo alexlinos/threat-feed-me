@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple, Union
 from fastapi import Request
 
 from threatfeedme import core
+from threatfeedme.domains import normalize_domain
 from threatfeedme.exporter import is_included
 from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS, ThreatIndicator
 
@@ -120,11 +121,15 @@ def _lan_ip() -> str:
 
 
 def _normalize_indicator(value: str):
-    """Normalize an IP or CIDR string. Returns (stored_ip, cidr_or_None).
+    """Normalize an indicator value: IP, CIDR, domain, or wildcard domain.
+    Returns (stored, pattern_or_None).
 
-    For a bare IP, stored_ip is the canonical form and cidr is None.
-    For a CIDR, stored_ip is the network address and cidr is the full CIDR.
-    Raises ValueError if the value is not a valid IP or network.
+    `stored` is the canonical single-indicator value (IP address, network
+    address, or punycode domain). `pattern` is non-None when the value names
+    a RANGE rather than one indicator — the full CIDR, or the "*.apex"
+    wildcard — which is what gets stored as a whitelist key and why callers
+    skip single-indicator rescoring for it. Raises ValueError if the value is
+    none of the four shapes.
     """
     v = value.strip()
     if not v:
@@ -132,6 +137,21 @@ def _normalize_indicator(value: str):
     if "/" in v:
         network = ipaddress.ip_network(v, strict=False)
         return (str(network.network_address), str(network))
-    else:
-        addr = ipaddress.ip_address(v)
-        return (str(addr), None)
+    try:
+        return (str(ipaddress.ip_address(v)), None)
+    except ValueError:
+        pass
+    wildcard = v.startswith("*.")
+    domain = normalize_domain(v[2:] if wildcard else v)
+    if domain is None:
+        raise ValueError(f"not an IP, CIDR, or domain: {value!r}")
+    return (domain, f"*.{domain}" if wildcard else None)
+
+
+def _value_kind(stored: str) -> str:
+    """Indicator kind of a normalized single value: 'ip' or 'domain'."""
+    try:
+        ipaddress.ip_address(stored)
+        return "ip"
+    except ValueError:
+        return "domain"
