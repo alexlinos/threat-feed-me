@@ -74,11 +74,19 @@ feeds:
     indicator_kind: "domain"
     update_interval: 900
 
+  # HaGeZi's Threat Intelligence Feeds, MINI variant. The design-doc URL
+  # (domain/threat-intelligence.txt) 404s — the list lives under wildcard/
+  # as *-onlydomains.txt. Variant sizes (2026-08): full 2.0M entries,
+  # medium 386k, mini 167k. Full/medium would dwarf the entire IP corpus
+  # and blow the small-deployment memory envelope (the rescorer walks every
+  # indicator), so the shipped default is the mini ("most important
+  # threats", published for weak devices). Operators with headroom can
+  # point the URL at tif.medium-/tif-onlydomains.txt from the dashboard.
   - name: hagezi_threat_intel
-    url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domain/threat-intelligence.txt
+    url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini-onlydomains.txt
     feed_type: "threat_intel"
     indicator_kind: "domain"
-    update_interval: 3600
+    update_interval: 43200  # list header says "Expires: 12 hours"
 
   - name: joewein_dom_bl
     url: https://www.joewein.net/dl/bl/dom-bl.txt
