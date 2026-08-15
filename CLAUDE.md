@@ -181,3 +181,36 @@ live-verified 2026-08-13.
 
 Roster stays open for curation: Alex ratifies new sources one at a time;
 keep blocklist-source research additive rather than fixing a walled list.
+
+### v2.0.0 build state (2026-08-15, shipped)
+
+The whole D1-D10 path is implemented, tested (269 green), live-verified
+against the real roster (114k IPs + 167k domains), and released as v2.0.0.
+Things that CHANGED vs. the design above, for whoever reads it later:
+
+- **Hagezi URL + variant (PENDING ALEX RE-RATIFICATION)**: the ratified URL
+  (domain/threat-intelligence.txt) 404s; the list lives at
+  wildcard/tif*-onlydomains.txt. Live sizes 2026-08-15: full 2.0M entries,
+  medium 386k, mini 167k. Shipped default = **mini** on deployment-envelope
+  grounds (full/medium would dwarf the IP corpus and strain the 2 GB
+  rescore path). Operators can repoint the URL from the dashboard.
+- Serving commit c484cd6 had only added queries, not routes — the actual
+  /feeds/domains/* routes, kind-split on-disk exports
+  (*_confidence_domains.*), and /api/domains/tlds landed later (23925f7).
+- **indicator_kind was dead at the feeds persistence layer** (never
+  read/written by _row_to_feed/seed/add_feed/sync): every DB-loaded feed
+  came back kind='ip'. Fixed in e3d497d; kind is PLUMBING for
+  sync_default_feeds, which self-heals DBs that seeded domain feeds as ip.
+- A 4-agent adversarial pass (b02bf50) found and fixed 20 issues; the big
+  ones: stdlib IDNA2003 eszett-folding blocked the WRONG domain (now
+  IDNA2008/UTS46 via the idna package, a pinned direct dep);
+  multi-hostname hosts lines parsed as empty; ambiguous shapes (01.2.3.4,
+  1.2.3.4.5) could flip a row's kind between serving surfaces (all-numeric
+  TLDs now rejected, bulk upsert never flips kind); one global wildcard
+  whitelist entry made /api/indicators materialize the full table per
+  keystroke; scorer roster fingerprints were shared across kinds (IP churn
+  silently moved domain tier lines — now per-kind with 25% tolerance).
+- Deliberately NOT fixed: *.co.uk-style public-suffix wildcards and
+  0.0.0.0/0 are accepted in the whitelist (no-PSL is ratified D4; the
+  whitelist is the operator's own gun). Rescore peak memory ~200 MB at
+  280k rows: acceptable, revisit if the corpus grows.
