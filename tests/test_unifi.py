@@ -176,6 +176,25 @@ def test_sync_updates_changed_keeps_identical_empties_stale():
     assert s.groups["d"]["group_members"] == ["7.7.7.7"]
 
 
+def test_sync_switching_tier_empties_other_tiers_groups():
+    """A tier change must not leave the previous tier's groups silently
+    blocking the old list: every group under our prefix that isn't part of
+    the current chunk set gets emptied (bit a real gateway: a tier=low push
+    left threatfeedme-low-1..10 populated after switching to medium)."""
+    s = FakeSession(groups=[
+        {"_id": "L1", "name": "tfm-low-1", "group_type": "address-group",
+         "group_members": ["5.5.5.5"]},
+        {"_id": "L2", "name": "tfm-low-2", "group_type": "address-group",
+         "group_members": ["6.6.6.6"]},
+    ])
+    p = _pusher(s, max_per_group=2)   # tier=medium
+    p.login()
+    summary = p.sync(["1.1.1.1"])
+    assert summary["created"] == 1 and summary["emptied"] == 2
+    assert s.groups["L1"]["group_members"] == []
+    assert s.groups["L2"]["group_members"] == []
+
+
 def test_sync_empty_corpus_pushes_one_empty_group():
     s = FakeSession()
     p = _pusher(s)

@@ -260,8 +260,14 @@
            <b>dedicated local-only UniFi admin</b> restricted to the Network app.
            For domains, point a Pi-hole/AdGuard at the domain feed URLs above instead.</p>
         <div class="wl-form" style="margin-top:8px">
-            <label class="switch" title="When enabled, every refresh pushes the tier to the gateway">
-                <input type="checkbox" id="unifi-enabled"><span></span></label>
+            {# The bare switch shipped unlabeled and an operator saved with it
+               untouched, then hit "enable the integration first" on Push —
+               the label names the control. Push now also saves the visible
+               form first (see unifiPush), so the trap is closed twice. #}
+            <label class="unifi-enable-label" title="When enabled, every refresh pushes the tier to the gateway">
+                Enabled
+                <span class="switch"><input type="checkbox" id="unifi-enabled"><span></span></span>
+            </label>
             <input class="ip" id="unifi-host" type="text" placeholder="https://192.168.1.1" style="width:200px" title="Gateway address (the UDM's LAN IP)">
             <select id="unifi-tier" title="Which cumulative tier to push (medium recommended; never point a home gateway at Everything)">
                 <option value="high">High tier</option>
@@ -271,7 +277,7 @@
             <button type="button" onclick="unifiSave()">Save</button>
             <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>
             <button type="button" class="mini-btn" onclick="unifiTest(this)">Test connection</button>
-            <button type="button" class="mini-btn" onclick="unifiPush(this)">Push now</button>
+            <button type="button" class="mini-btn" onclick="unifiPush(this)" title="Saves the settings above, then pushes">Save &amp; push now</button>
         </div>
         <p class="hint" id="unifi-status">—</p>
     </details>

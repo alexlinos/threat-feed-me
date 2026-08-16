@@ -178,9 +178,10 @@ class UniFiPusher:
             logger.info("[unifi] skipped %d IPv6 indicators (address-group is v4-only)",
                         skipped_v6)
         if len(values) > self.max_entries:
+            # ASCII only: Windows consoles default to cp1252.
             logger.warning(
                 "[unifi] %s tier has %d entries; pushing the strongest %d "
-                "(max_entries) — consider tier: high, or raise the cap",
+                "(max_entries) - consider a higher tier, or raise the cap",
                 self.tier, len(values), self.max_entries)
             values = values[:self.max_entries]
         return values
@@ -216,16 +217,18 @@ class UniFiPusher:
             else:
                 unchanged += 1
 
-        # Trailing chunks from a previously-larger set: empty them.
-        marker = f"{self.group_prefix}-{self.tier}-"
+        # Any OTHER group under our prefix that still has members is stale:
+        # trailing chunks from a previously-larger set, AND the whole group
+        # set of a previously-selected tier (switching medium->high must not
+        # leave threatfeedme-medium-* silently blocking the old list).
+        # Empty, never delete: a group referenced by a rule refuses deletion,
+        # and an empty group matches nothing.
+        current = {self._chunk_name(i) for i in range(1, len(chunks) + 1)}
+        marker = f"{self.group_prefix}-"
         for name, g in groups.items():
-            if not (name or "").startswith(marker):
+            if not (name or "").startswith(marker) or name in current:
                 continue
-            try:
-                n = int(name.rsplit('-', 1)[1])
-            except (ValueError, IndexError):
-                continue
-            if n > len(chunks) and (g.get('group_members') or []):
+            if g.get('group_members') or []:
                 body = dict(g)
                 body['group_members'] = []
                 self._api('PUT', f"/rest/firewallgroup/{g['_id']}", json=body)

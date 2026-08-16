@@ -332,6 +332,12 @@ input::placeholder { color:var(--dim); }
 .heat-title-ip { color:var(--accent-hi); }
 .heat-title-domain { color:var(--purple); }
 
+/* UniFi panel: the enable switch carries a visible text label (an unlabeled
+   bare switch got saved untouched in the field). */
+.unifi-enable-label { display:inline-flex; align-items:center; gap:8px;
+    font-size:.9em; color:var(--muted); cursor:pointer; }
+.unifi-enable-label .switch { display:inline-block; }
+
 /* --- TLD panel (ranked bars; reuses the geo bar layout) --- */
 .tld-bars { display:flex; flex-direction:column; gap:5px; margin-top:10px; }
 .tld-bars .geo-bar-track i { background:var(--purple); }

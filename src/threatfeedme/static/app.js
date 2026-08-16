@@ -550,7 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
     box.addEventListener('toggle', () => { if (box.open) loadUnifiOnce(); });
 });
 
-async function unifiSave() {
+async function unifiSave(quiet) {
     const body = {
         enabled: document.getElementById('unifi-enabled').checked,
         host: document.getElementById('unifi-host').value.trim(),
@@ -559,8 +559,9 @@ async function unifiSave() {
     const r = await apiFetch('/api/integrations/unifi', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { unifiRenderStatus(j); alert('UniFi settings saved'); }
-    else { alert('Could not save: ' + (j.detail || r.status)); }
+    if (r.ok) { unifiRenderStatus(j); if (!quiet) alert('UniFi settings saved'); return true; }
+    alert('Could not save: ' + (j.detail || r.status));
+    return false;
 }
 
 function openUnifiCredsModal() {
@@ -601,8 +602,13 @@ async function unifiTest(btn) {
 
 async function unifiPush(btn) {
     const el = document.getElementById('unifi-status');
-    btn.disabled = true; el.textContent = 'Pushing… (a large tier can take a minute)';
+    btn.disabled = true;
     try {
+        // Save the visible form first: an operator who set the toggle but
+        // not Save got "enable the integration first" from a form that
+        // LOOKED enabled. What you see is what gets pushed.
+        if (!await unifiSave(true)) return;
+        el.textContent = 'Pushing… (a large tier can take a minute)';
         const r = await apiFetch('/api/integrations/unifi/push', {method: 'POST'});
         const j = await r.json().catch(() => ({}));
         if (r.ok) {
