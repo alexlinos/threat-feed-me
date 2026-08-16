@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 # done at import time. The lifespan below explicitly warms the singletons.
 from threatfeedme import core  # noqa: F401  (module-level __getattr__ lazy init)
 from threatfeedme.scheduler import _scheduler_loop, _scheduler_stop
-from threatfeedme.routers import feeds, indicators, system, whitelist
+from threatfeedme.routers import feeds, indicators, integrations, system, whitelist
 
 
 @asynccontextmanager
@@ -44,3 +44,4 @@ app.include_router(indicators.router)
 app.include_router(system.router)
 app.include_router(feeds.router)
 app.include_router(whitelist.router)
+app.include_router(integrations.router)

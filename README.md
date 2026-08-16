@@ -261,19 +261,26 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 UniFi OS has no external-blocklist subscription, so threat-feed-me **pushes**
 instead of serving: after every refresh it maintains firewall groups named
 `threatfeedme-<tier>-1..N` on the gateway through the local Network API
-(chunked, because UniFi groups cap out around ~10k members).
+(chunked, because UniFi groups cap out around ~10k members). Everything is
+managed from the dashboard's **UniFi integration** panel:
 
 1. On the UDM, create a **dedicated local admin** restricted to the Network
    app (Admins & Users → Add Admin → *Restrict to local access only*).
-2. Set the credentials as `UNIFI_USER` / `UNIFI_PASSWORD` (environment or the
-   data volume's `.env`).
-3. In `config.yaml`, set `integrations.unifi.enabled: true` and `host:` to the
-   gateway (e.g. `https://192.168.1.1`); the default pushes the **medium**
-   tier in 5k-member chunks.
+2. In the dashboard panel: enter the gateway address (e.g.
+   `https://192.168.1.1`), pick the tier (**medium** recommended), click
+   **Set credentials** (stored write-only in the data volume's `.env`,
+   never displayed again), then **Test connection** — it logs in and reads
+   the gateway's groups without changing anything.
+3. Toggle the integration on, **Save**, and **Push now** (or wait for the
+   next refresh).
 4. After the first push, add a firewall rule on the UDM (Firewall & Security):
    *Block* traffic where source (WAN-in) or destination (LAN-out) matches the
-   `threatfeedme-medium-*` groups. Membership updates itself every refresh;
-   a one-shot push is `python -m threatfeedme.main --push-unifi`.
+   `threatfeedme-medium-*` groups. Membership updates itself every refresh.
+
+Prefer files? The same settings live under `integrations.unifi` in
+`config.yaml` (the dashboard's values take precedence), credentials as
+`UNIFI_USER` / `UNIFI_PASSWORD` env vars, and
+`python -m threatfeedme.main --push-unifi` does a one-shot push.
 
 Groups shrink to empty rather than being deleted when the set contracts (a
 group referenced by a rule can't be deleted, and an empty group matches

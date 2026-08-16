@@ -27,8 +27,10 @@ Design constraints, learned from the community's scar tissue:
 Failures here must never break a refresh — the caller wraps the push and
 logs; the block lists keep serving either way.
 """
+import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -40,6 +42,12 @@ logger = logging.getLogger(__name__)
 
 ENV_USER = "UNIFI_USER"
 ENV_PASSWORD = "UNIFI_PASSWORD"
+
+# Runtime settings (saved from the dashboard's Integrations panel) override
+# the config.yaml seed block field-by-field, same precedence model as the
+# refresh interval. Last push outcome is recorded for the panel's status line.
+SETTINGS_KEY = "unifi_integration"
+LAST_PUSH_KEY = "unifi_last_push"
 
 # Chunk size stays well under the ~10k member cap community reports; the
 # total cap keeps a misconfigured tier=low from shoving 100k+ entries at a
@@ -80,10 +88,11 @@ class UniFiPusher:
         self._csrf: Optional[str] = None
 
     @classmethod
-    def from_config(cls, config: Dict) -> Optional["UniFiPusher"]:
-        """Build from the integrations.unifi config block; None if disabled."""
-        cfg = ((config or {}).get('integrations', {}) or {}).get('unifi', {}) or {}
-        if not cfg.get('enabled') or not cfg.get('host'):
+    def from_block(cls, cfg: Dict) -> Optional["UniFiPusher"]:
+        """Build from a settings block (enabled flag NOT consulted — the
+        dashboard's Test button must work before the operator commits to
+        enabling). None when no host is configured."""
+        if not (cfg or {}).get('host'):
             return None
         return cls(
             host=cfg['host'],
@@ -95,7 +104,28 @@ class UniFiPusher:
             max_per_group=cfg.get('max_per_group', DEFAULT_MAX_PER_GROUP),
         )
 
+    @classmethod
+    def from_config(cls, config: Dict, db=None) -> Optional["UniFiPusher"]:
+        """Build from the effective settings; None if disabled or hostless."""
+        cfg = effective_block(db, config)
+        if not cfg.get('enabled'):
+            return None
+        return cls.from_block(cfg)
+
     # ---------------- UniFi OS API plumbing ----------------
+
+    def credentials_configured(self) -> bool:
+        return bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD))
+
+    def test_connection(self) -> Dict:
+        """Login and READ the firewall groups — no writes. The dashboard's
+        Test button, so the operator can verify host/credentials before
+        enabling the push."""
+        self.login()
+        groups = self._api('GET', '/rest/firewallgroup')
+        ours = [g.get('name') for g in groups
+                if (g.get('name') or '').startswith(f"{self.group_prefix}-")]
+        return {"ok": True, "groups_total": len(groups), "our_groups": sorted(ours)}
 
     def login(self) -> None:
         user = os.environ.get(ENV_USER)
@@ -205,19 +235,55 @@ class UniFiPusher:
                 "updated": updated, "unchanged": unchanged, "emptied": emptied}
 
 
+def effective_block(db, config: Dict) -> Dict:
+    """The integration's effective settings: dashboard-saved values (a JSON
+    settings row) override the config.yaml seed block field-by-field — the
+    same precedence model as the refresh interval, so the product promise
+    ("manage it from the dashboard, no config editing") holds here too."""
+    block = dict(((config or {}).get('integrations', {}) or {}).get('unifi', {}) or {})
+    if db is not None:
+        try:
+            raw = db.get_setting(SETTINGS_KEY)
+            if raw:
+                stored = json.loads(raw)
+                if isinstance(stored, dict):
+                    block.update(stored)
+        except Exception:
+            pass  # unreadable runtime settings degrade to the config seed
+    return block
+
+
+def record_push_outcome(db, summary: Optional[Dict] = None, error: str = None) -> None:
+    """Persist the last push outcome for the dashboard's status line."""
+    try:
+        db.set_setting(LAST_PUSH_KEY, json.dumps({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "summary": summary,
+            "error": error,
+        }))
+    except Exception:
+        pass  # status bookkeeping must never break a push/refresh
+
+
 def push_to_unifi(db, config: Dict) -> Optional[Dict]:
     """Push the configured tier into UniFi firewall groups. Returns the sync
     summary, or None when the integration is disabled. Raises on failure —
-    the refresh pipeline wraps this so a push error never breaks a refresh."""
-    pusher = UniFiPusher.from_config(config)
+    the refresh pipeline wraps this so a push error never breaks a refresh.
+    Outcomes (success AND failure) are recorded for the dashboard."""
+    pusher = UniFiPusher.from_config(config, db=db)
     if pusher is None:
         return None
-    pusher.login()
-    values = pusher.collect(db)
-    summary = pusher.sync(values)
+    try:
+        pusher.login()
+        values = pusher.collect(db)
+        summary = pusher.sync(values)
+    except Exception as e:
+        record_push_outcome(db, error=str(e))
+        raise
     logger.info(
         "[unifi] pushed %d entries into %d group(s) [%s-%s-*]: "
         "%d created, %d updated, %d unchanged, %d emptied",
         summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
         summary["created"], summary["updated"], summary["unchanged"], summary["emptied"])
+    record_push_outcome(db, summary=summary)
     return summary

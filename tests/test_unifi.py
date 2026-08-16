@@ -184,3 +184,114 @@ def test_sync_empty_corpus_pushes_one_empty_group():
     assert summary["groups"] == 1 and summary["entries"] == 0
     (g,) = s.groups.values()
     assert g["name"] == "tfm-medium-1" and g["group_members"] == []
+
+
+# ---------------- dashboard API (settings, credentials, test, push) ----------------
+
+@pytest.fixture(scope="module")
+def api_client(tmp_path_factory):
+    work = tmp_path_factory.mktemp("unifi_api")
+    db_path = str(work / "t.db").replace("\\", "/")
+    cfg_path = work / "config.yaml"
+    cfg_path.write_text(
+        "database:\n"
+        f"  path: {db_path}\n"
+        "feeds: []\n"
+        "dashboard: {auth_required: false}\n"
+    )
+    os.environ["CONFIG_PATH"] = str(cfg_path)
+    for m in list(sys.modules.keys()):
+        if m == "threatfeedme" or m.startswith("threatfeedme."):
+            sys.modules.pop(m, None)
+    from threatfeedme import core
+    core.reset()
+    core.init(str(cfg_path))
+    from starlette.testclient import TestClient
+    from threatfeedme import dashboard
+    return TestClient(dashboard.app, headers={"X-Requested-With": "XMLHttpRequest"})
+
+
+def test_api_status_defaults_and_no_credential_echo(api_client, monkeypatch):
+    monkeypatch.delenv(ENV_USER, raising=False)
+    monkeypatch.delenv(ENV_PASSWORD, raising=False)
+    j = api_client.get("/api/integrations/unifi").json()
+    assert j["enabled"] is False and j["tier"] == "medium"
+    assert j["credentials_configured"] is False
+    # The status payload must never carry credential VALUES under any key.
+    assert "password" not in str(j).lower()
+
+
+def test_api_settings_roundtrip_and_validation(api_client):
+    r = api_client.post("/api/integrations/unifi",
+                        json={"enabled": True, "host": "192.168.1.1", "tier": "high"})
+    assert r.status_code == 200
+    j = api_client.get("/api/integrations/unifi").json()
+    assert j["enabled"] is True and j["host"] == "192.168.1.1" and j["tier"] == "high"
+    assert api_client.post("/api/integrations/unifi", json={"tier": "bogus"}).status_code == 400
+    assert api_client.post("/api/integrations/unifi",
+                           json={"host": "https://gw/path/x"}).status_code == 400
+    # Partial update merges — host survives a tier-only change.
+    api_client.post("/api/integrations/unifi", json={"tier": "medium"})
+    assert api_client.get("/api/integrations/unifi").json()["host"] == "192.168.1.1"
+
+
+def test_api_credentials_write_only(api_client, monkeypatch):
+    from threatfeedme import core
+    r = api_client.post("/api/integrations/unifi/credentials",
+                        json={"username": "svc-tfm", "password": "s3cret!"})
+    assert r.status_code == 200
+    assert r.json() == {"success": True, "credentials_configured": True}
+    assert os.environ[ENV_USER] == "svc-tfm"
+    with open(core.env_file(), encoding="utf-8") as f:
+        env_text = f.read()
+    assert "UNIFI_PASSWORD=s3cret!" in env_text  # persisted for restarts
+    # ...but no API response ever echoes it back.
+    assert "s3cret" not in api_client.get("/api/integrations/unifi").text
+    # Clearing works.
+    api_client.post("/api/integrations/unifi/credentials", json={})
+    assert api_client.get("/api/integrations/unifi").json()["credentials_configured"] is False
+    assert ENV_PASSWORD not in os.environ
+
+
+def test_api_test_endpoint(api_client, monkeypatch):
+    # Fresh module identity after the fixture's purge — patch the live one.
+    from threatfeedme import pusher_unifi as pu
+    api_client.post("/api/integrations/unifi/credentials",
+                    json={"username": "svc", "password": "pw"})
+    monkeypatch.setattr(pu.UniFiPusher, "test_connection",
+                        lambda self: {"ok": True, "groups_total": 4,
+                                      "our_groups": ["threatfeedme-medium-1"]})
+    j = api_client.post("/api/integrations/unifi/test").json()
+    assert j["ok"] is True and "4 firewall group(s)" in j["message"]
+    # A connection failure comes back inline, not as a 500.
+    def boom(self):
+        raise RuntimeError("connection refused")
+    monkeypatch.setattr(pu.UniFiPusher, "test_connection", boom)
+    j = api_client.post("/api/integrations/unifi/test").json()
+    assert j["ok"] is False and "connection refused" in j["message"]
+    api_client.post("/api/integrations/unifi/credentials", json={})
+
+
+def test_api_push_requires_enabled(api_client):
+    api_client.post("/api/integrations/unifi", json={"enabled": False})
+    r = api_client.post("/api/integrations/unifi/push")
+    assert r.status_code == 400
+    api_client.post("/api/integrations/unifi", json={"enabled": True})
+
+
+def test_api_push_records_outcome(api_client, monkeypatch):
+    from threatfeedme import pusher_unifi as pu, core
+    api_client.post("/api/integrations/unifi/credentials",
+                    json={"username": "svc", "password": "pw"})
+    monkeypatch.setattr(pu.UniFiPusher, "login", lambda self: None)
+    monkeypatch.setattr(pu.UniFiPusher, "collect", lambda self, db: ["1.1.1.1"])
+    monkeypatch.setattr(pu.UniFiPusher, "sync",
+                        lambda self, values: {"entries": 1, "groups": 1, "created": 1,
+                                              "updated": 0, "unchanged": 0, "emptied": 0})
+    r = api_client.post("/api/integrations/unifi/push")
+    assert r.status_code == 200 and r.json()["summary"]["entries"] == 1
+    # Outcome is persisted for the panel's status line.
+    j = api_client.get("/api/integrations/unifi").json()
+    assert j["last_push"]["summary"]["entries"] == 1
+    assert j["last_push"]["error"] is None
+    api_client.post("/api/integrations/unifi/credentials", json={})

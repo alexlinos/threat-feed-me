@@ -246,9 +246,58 @@
             <p class=muted>TLD data loads when you open this section.</p>
         </div>
     </details>
+
+    {# UniFi push integration: UDMs can't poll a URL, so the app pushes the
+       tier into firewall groups after every refresh. Everything managed
+       here — settings in a DB row, credentials write-only into the
+       data-volume .env (feed-API-key mechanics), Test = read-only. #}
+    <details class=howto id=unifi-panel>
+        <summary><b>UniFi integration</b>: push IP tiers into UDM firewall groups</summary>
+        <p class="hint" style="margin-top:8px">UniFi gateways can't poll a blocklist URL, so
+           threat-feed-me pushes instead: after every refresh it maintains firewall groups named
+           <code>threatfeedme-&lt;tier&gt;-1..N</code> on the gateway. Reference them once in a
+           block rule (Firewall &amp; Security); membership updates itself. Use a
+           <b>dedicated local-only UniFi admin</b> restricted to the Network app.
+           For domains, point a Pi-hole/AdGuard at the domain feed URLs above instead.</p>
+        <div class="wl-form" style="margin-top:8px">
+            <label class="switch" title="When enabled, every refresh pushes the tier to the gateway">
+                <input type="checkbox" id="unifi-enabled"><span></span></label>
+            <input class="ip" id="unifi-host" type="text" placeholder="https://192.168.1.1" style="width:200px" title="Gateway address (the UDM's LAN IP)">
+            <select id="unifi-tier" title="Which cumulative tier to push (medium recommended; never point a home gateway at Everything)">
+                <option value="high">High tier</option>
+                <option value="medium" selected>Medium tier</option>
+                <option value="low">Everything (low)</option>
+            </select>
+            <button type="button" onclick="unifiSave()">Save</button>
+            <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>
+            <button type="button" class="mini-btn" onclick="unifiTest(this)">Test connection</button>
+            <button type="button" class="mini-btn" onclick="unifiPush(this)">Push now</button>
+        </div>
+        <p class="hint" id="unifi-status">—</p>
+    </details>
 {% endblock %}
 
 {% block modals %}
+<div class="modal-overlay" id="unifi-creds-modal">
+    <div class="modal">
+        <h3>UniFi credentials</h3>
+        <p class="muted">A dedicated <b>local-only</b> UniFi admin (Admins &amp; Users →
+           restrict to local access). Stored write-only in the server's data-volume
+           <code>.env</code> — never displayed again. Leave both empty to clear.</p>
+        <div class="field">
+            <label>Username</label>
+            <input id="unifi-cred-user" type="text" autocomplete="off" placeholder="svc-threatfeedme">
+        </div>
+        <div class="field">
+            <label>Password</label>
+            <input id="unifi-cred-pass" type="password" autocomplete="new-password">
+        </div>
+        <div class="actions">
+            <button class="cancel" onclick="closeUnifiCredsModal()">Cancel</button>
+            <button class="btn" onclick="saveUnifiCreds()">Save</button>
+        </div>
+    </div>
+</div>
 <div class="modal-overlay" id="fp-modal">
     <div class="modal">
         <h3>False positives: <span id="fp-modal-feed"></span></h3>

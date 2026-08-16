@@ -504,3 +504,112 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!box) return;
     box.addEventListener('toggle', () => { if (box.open) loadTldsOnce(); });
 });
+
+// ---- UniFi push integration panel ----
+// Settings load lazily on first expand; credentials go through a dedicated
+// modal (password-type input, write-only POST — never echoed back).
+let unifiLoaded = false;
+
+function unifiRenderStatus(s) {
+    const el = document.getElementById('unifi-status');
+    if (!el) return;
+    let parts = [];
+    parts.push(s.credentials_configured ? 'Credentials ✓' : 'Credentials not set');
+    const btn = document.getElementById('unifi-creds-btn');
+    if (btn) btn.textContent = s.credentials_configured ? 'Credentials ✓' : 'Set credentials';
+    if (s.last_push) {
+        const at = s.last_push.at ? new Date(s.last_push.at).toLocaleString() : '?';
+        if (s.last_push.error) parts.push('Last push FAILED ' + at + ': ' + s.last_push.error);
+        else if (s.last_push.summary) parts.push('Last push ' + at + ': ' +
+            s.last_push.summary.entries.toLocaleString() + ' entries in ' +
+            s.last_push.summary.groups + ' group(s)');
+    } else {
+        parts.push('No push yet');
+    }
+    el.textContent = parts.join(' · ');
+}
+
+async function loadUnifiOnce() {
+    if (unifiLoaded) return;
+    unifiLoaded = true;
+    try {
+        const s = await (await apiFetch('/api/integrations/unifi')).json();
+        document.getElementById('unifi-enabled').checked = !!s.enabled;
+        document.getElementById('unifi-host').value = s.host || '';
+        document.getElementById('unifi-tier').value = s.tier || 'medium';
+        unifiRenderStatus(s);
+    } catch (e) {
+        unifiLoaded = false;
+        const el = document.getElementById('unifi-status');
+        if (el) el.textContent = 'Could not load settings — reopen to retry.';
+    }
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const box = document.getElementById('unifi-panel');
+    if (!box) return;
+    box.addEventListener('toggle', () => { if (box.open) loadUnifiOnce(); });
+});
+
+async function unifiSave() {
+    const body = {
+        enabled: document.getElementById('unifi-enabled').checked,
+        host: document.getElementById('unifi-host').value.trim(),
+        tier: document.getElementById('unifi-tier').value,
+    };
+    const r = await apiFetch('/api/integrations/unifi', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { unifiRenderStatus(j); alert('UniFi settings saved'); }
+    else { alert('Could not save: ' + (j.detail || r.status)); }
+}
+
+function openUnifiCredsModal() {
+    document.getElementById('unifi-cred-user').value = '';
+    document.getElementById('unifi-cred-pass').value = '';
+    document.getElementById('unifi-creds-modal').classList.add('open');
+}
+function closeUnifiCredsModal() {
+    // Clear the fields on close so the password never lingers in the DOM.
+    document.getElementById('unifi-cred-user').value = '';
+    document.getElementById('unifi-cred-pass').value = '';
+    document.getElementById('unifi-creds-modal').classList.remove('open');
+}
+async function saveUnifiCreds() {
+    const body = {
+        username: document.getElementById('unifi-cred-user').value.trim(),
+        password: document.getElementById('unifi-cred-pass').value,
+    };
+    const r = await apiFetch('/api/integrations/unifi/credentials', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+        closeUnifiCredsModal();
+        unifiLoaded = false; loadUnifiOnce();
+        alert(j.credentials_configured ? 'Credentials saved' : 'Credentials cleared');
+    } else { alert('Could not save credentials: ' + (j.detail || r.status)); }
+}
+
+async function unifiTest(btn) {
+    const el = document.getElementById('unifi-status');
+    btn.disabled = true; el.textContent = 'Testing connection…';
+    try {
+        const r = await apiFetch('/api/integrations/unifi/test', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? j.message : ('Test failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+
+async function unifiPush(btn) {
+    const el = document.getElementById('unifi-status');
+    btn.disabled = true; el.textContent = 'Pushing… (a large tier can take a minute)';
+    try {
+        const r = await apiFetch('/api/integrations/unifi/push', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) {
+            const s = j.summary;
+            el.textContent = 'Pushed ' + s.entries.toLocaleString() + ' entries into ' + s.groups +
+                ' group(s): ' + s.created + ' created, ' + s.updated + ' updated, ' +
+                s.unchanged + ' unchanged, ' + s.emptied + ' emptied. Now reference the groups in a UDM block rule.';
+        } else { el.textContent = 'Push failed: ' + (j.detail || r.status); }
+    } finally { btn.disabled = false; }
+}
