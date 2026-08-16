@@ -255,9 +255,18 @@
         <summary><b>UniFi integration</b>: push IP tiers into UDM firewall groups</summary>
         <p class="hint" style="margin-top:8px">UniFi gateways can't poll a blocklist URL, so
            threat-feed-me pushes instead: after every refresh it maintains firewall groups named
-           <code>threatfeedme-&lt;tier&gt;-1..N</code> on the gateway. Reference them once in a
-           block rule (Firewall &amp; Security); membership updates itself. Use a
-           <b>dedicated local-only UniFi admin</b> restricted to the Network app.
+           <code>threatfeedme-&lt;tier&gt;-1..N</code> on the gateway. Use a
+           <b>dedicated local-only UniFi admin</b> restricted to the Network app.</p>
+        <p class="hint"><b>The groups block nothing until you create policies referencing them
+           (one-time step, after the first push):</b><br>
+           · Current UniFi Network (zone-based firewall): <i>Settings → Policy Table → Create
+           Policy</i> — <b>External → Internal</b>, action <b>Block</b>, Source = the
+           <code>threatfeedme-*</code> objects; then a second policy <b>Internal → External</b>
+           with Destination = the same objects (catches an infected host beaconing out).
+           Enable logging on both to see hits in System Log / Flows.<br>
+           · Older firmware (classic firewall): <i>Settings → Firewall &amp; Security → Firewall
+           Rules</i> — an <b>Internet In / Drop</b> rule with Source = the groups, and an
+           <b>Internet Out / Drop</b> rule with Destination = the groups.<br>
            For domains, point a Pi-hole/AdGuard at the domain feed URLs above instead.</p>
         <div class="wl-form" style="margin-top:8px">
             {# The bare switch shipped unlabeled and an operator saved with it
@@ -269,9 +278,9 @@
                 <span class="switch"><input type="checkbox" id="unifi-enabled"><span></span></span>
             </label>
             <input class="ip" id="unifi-host" type="text" placeholder="https://192.168.1.1" style="width:200px" title="Gateway address (the UDM's LAN IP)">
-            <select id="unifi-tier" title="Which cumulative tier to push (medium recommended; never point a home gateway at Everything)">
-                <option value="high">High tier</option>
-                <option value="medium" selected>Medium tier</option>
+            <select id="unifi-tier" title="Which cumulative tier to push (high recommended for a home gateway; never Everything)">
+                <option value="high" selected>High tier</option>
+                <option value="medium">Medium tier</option>
                 <option value="low">Everything (low)</option>
             </select>
             <button type="button" onclick="unifiSave()">Save</button>

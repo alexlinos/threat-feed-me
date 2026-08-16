@@ -59,7 +59,7 @@ _VALID_TIERS = ("high", "medium", "low")
 
 
 class UniFiPusher:
-    def __init__(self, host: str, site: str = "default", tier: str = "medium",
+    def __init__(self, host: str, site: str = "default", tier: str = "high",
                  group_prefix: str = "threatfeedme", verify_ssl: bool = False,
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
@@ -69,9 +69,12 @@ class UniFiPusher:
             host = 'https://' + host
         self.host = host
         self.site = site or "default"
-        self.tier = tier if tier in _VALID_TIERS else "medium"
+        # High is the default for a push target: a home gateway wants the
+        # cleanest list, and high fits in one group. Operators opt UP to
+        # medium consciously.
+        self.tier = tier if tier in _VALID_TIERS else "high"
         if tier not in _VALID_TIERS:
-            logger.warning("[unifi] unknown tier %r; using medium", tier)
+            logger.warning("[unifi] unknown tier %r; using high", tier)
         self.group_prefix = group_prefix or "threatfeedme"
         self.max_entries = max(1, int(max_entries))
         self.max_per_group = max(1, int(max_per_group))
@@ -97,7 +100,7 @@ class UniFiPusher:
         return cls(
             host=cfg['host'],
             site=cfg.get('site', 'default'),
-            tier=cfg.get('tier', 'medium'),
+            tier=cfg.get('tier', 'high'),
             group_prefix=cfg.get('group_prefix', 'threatfeedme'),
             verify_ssl=bool(cfg.get('verify_ssl', False)),
             max_entries=cfg.get('max_entries', DEFAULT_MAX_ENTRIES),

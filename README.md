@@ -267,15 +267,23 @@ managed from the dashboard's **UniFi integration** panel:
 1. On the UDM, create a **dedicated local admin** restricted to the Network
    app (Admins & Users → Add Admin → *Restrict to local access only*).
 2. In the dashboard panel: enter the gateway address (e.g.
-   `https://192.168.1.1`), pick the tier (**medium** recommended), click
-   **Set credentials** (stored write-only in the data volume's `.env`,
-   never displayed again), then **Test connection** — it logs in and reads
-   the gateway's groups without changing anything.
-3. Toggle the integration on, **Save**, and **Push now** (or wait for the
-   next refresh).
-4. After the first push, add a firewall rule on the UDM (Firewall & Security):
-   *Block* traffic where source (WAN-in) or destination (LAN-out) matches the
-   `threatfeedme-medium-*` groups. Membership updates itself every refresh.
+   `https://192.168.1.1`), pick the tier (**high** recommended for a home
+   gateway), click **Set credentials** (stored write-only in the data
+   volume's `.env`, never displayed again), then **Test connection** — it
+   logs in and reads the gateway's groups without changing anything.
+3. Toggle **Enabled** on and click **Save & push now** (afterwards, every
+   refresh re-pushes automatically).
+4. **The groups block nothing until you create policies referencing them**
+   (one-time step). On current UniFi Network (zone-based firewall):
+   *Settings → Policy Table → Create Policy* — **External → Internal**,
+   action **Block**, Source = the `threatfeedme-*` objects, plus a second
+   policy **Internal → External** with Destination = the same objects (the
+   egress side catches an infected host beaconing out to a C2). Enable
+   logging on both to see hits in the System Log / Flows. On older
+   firmware it's *Settings → Firewall & Security → Firewall Rules*:
+   an *Internet In / Drop* rule (Source = groups) and an *Internet Out /
+   Drop* rule (Destination = groups). Membership updates itself every
+   refresh either way.
 
 Prefer files? The same settings live under `integrations.unifi` in
 `config.yaml` (the dashboard's values take precedence), credentials as

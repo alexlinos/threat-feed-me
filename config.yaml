@@ -378,9 +378,10 @@ integrations:
     enabled: false
     # host: https://192.168.1.1
     site: default
-    # Which cumulative tier to push. medium (default) is ~2-4 groups;
-    # NEVER point this at low/"everything" on a home gateway.
-    tier: medium
+    # Which cumulative tier to push. high (default) is the cleanest list
+    # and fits in one group; medium is ~2-4 groups. NEVER point this at
+    # low/"everything" on a home gateway.
+    tier: high
     group_prefix: threatfeedme
     # UDM certs are self-signed; enable only if yours has a real cert.
     verify_ssl: false

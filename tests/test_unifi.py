@@ -83,7 +83,7 @@ def test_from_config_builds_and_normalizes_host():
         {"integrations": {"unifi": {"enabled": True, "host": "192.168.1.1", "tier": "bogus"}}})
     assert p is not None
     assert p.host == "https://192.168.1.1"
-    assert p.tier == "medium"  # unknown tier falls back
+    assert p.tier == "high"  # unknown tier falls back to the default
 
 
 def test_login_requires_env_credentials(monkeypatch):
@@ -234,7 +234,7 @@ def test_api_status_defaults_and_no_credential_echo(api_client, monkeypatch):
     monkeypatch.delenv(ENV_USER, raising=False)
     monkeypatch.delenv(ENV_PASSWORD, raising=False)
     j = api_client.get("/api/integrations/unifi").json()
-    assert j["enabled"] is False and j["tier"] == "medium"
+    assert j["enabled"] is False and j["tier"] == "high"
     assert j["credentials_configured"] is False
     # The status payload must never carry credential VALUES under any key.
     assert "password" not in str(j).lower()

@@ -536,7 +536,7 @@ async function loadUnifiOnce() {
         const s = await (await apiFetch('/api/integrations/unifi')).json();
         document.getElementById('unifi-enabled').checked = !!s.enabled;
         document.getElementById('unifi-host').value = s.host || '';
-        document.getElementById('unifi-tier').value = s.tier || 'medium';
+        document.getElementById('unifi-tier').value = s.tier || 'high';
         unifiRenderStatus(s);
     } catch (e) {
         unifiLoaded = false;

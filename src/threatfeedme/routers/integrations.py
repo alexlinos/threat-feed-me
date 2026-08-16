@@ -42,7 +42,7 @@ def _status() -> dict:
         "enabled": bool(block.get("enabled")),
         "host": block.get("host") or "",
         "site": block.get("site", "default"),
-        "tier": block.get("tier", "medium"),
+        "tier": block.get("tier", "high"),
         "group_prefix": block.get("group_prefix", "threatfeedme"),
         # Presence only — the values are write-only by design.
         "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD)),
