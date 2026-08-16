@@ -275,8 +275,13 @@
            <b>Internet Out / Drop</b> rule with Destination = the groups.<br>
            Groups cap at ~10k entries, so the tier is chunked: High is one group (one policy pair),
            Medium a few, Everything 10+ — and classic firmware needs a rule per group, so prefer
-           High or Medium here. For domains, point a Pi-hole/AdGuard at the domain feed URLs
-           above instead.</p>
+           High or Medium here.<br>
+           <b>Domains</b> can be pushed too (optional): create a <b>Content Filtering profile named
+           <code>threatfeedme</code></b> once in the UniFi UI (CyberSecure → Content Filtering; pick
+           which networks it applies to there), then set a Domains tier above — the profile's block
+           list is maintained on every push through UniFi's (undocumented) v2 API. Prefer Domains:
+           High or Medium; alternatively a Pi-hole/AdGuard polling the domain feed URLs above does
+           the same job with a documented interface.</p>
         <div class="wl-form" style="margin-top:8px">
             {# The bare switch shipped unlabeled and an operator saved with it
                untouched, then hit "enable the integration first" on Push —
@@ -287,10 +292,15 @@
                 <span class="switch"><input type="checkbox" id="unifi-enabled"><span></span></span>
             </label>
             <input class="ip" id="unifi-host" type="text" placeholder="https://192.168.1.1" style="width:200px" title="Gateway address (the UDM's LAN IP)">
-            <select id="unifi-tier" title="Which cumulative tier to push (high recommended for a home gateway; never Everything)">
-                <option value="high" selected>High tier</option>
-                <option value="medium">Medium tier</option>
-                <option value="low">Everything (low)</option>
+            <select id="unifi-tier" title="Which cumulative IP tier to push into the firewall groups (high recommended for a home gateway; never Everything)">
+                <option value="high" selected>IP: High tier</option>
+                <option value="medium">IP: Medium tier</option>
+                <option value="low">IP: Everything (low)</option>
+            </select>
+            <select id="unifi-domain-tier" title="Optionally also push a DOMAIN tier into a Content Filtering profile you create once in the UniFi UI (undocumented v2 API)">
+                <option value="" selected>Domains: off</option>
+                <option value="high">Domains: High tier</option>
+                <option value="medium">Domains: Medium tier</option>
             </select>
             <button type="button" onclick="unifiSave()">Save</button>
             <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>

@@ -43,6 +43,10 @@ def _status() -> dict:
         "host": block.get("host") or "",
         "site": block.get("site", "default"),
         "tier": block.get("tier", "high"),
+        # "" = domain push off; else the domain tier pushed into the
+        # operator-created Content Filtering profile.
+        "domain_tier": block.get("domain_tier", ""),
+        "content_profile": block.get("content_profile", "threatfeedme"),
         "group_prefix": block.get("group_prefix", "threatfeedme"),
         # Presence only — the values are write-only by design.
         "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD)),
@@ -61,6 +65,9 @@ class UniFiSettingsRequest(BaseModel):
     host: Optional[str] = None
     site: Optional[str] = None
     tier: Optional[str] = None
+    # "" turns the domain arm off (the default).
+    domain_tier: Optional[str] = None
+    content_profile: Optional[str] = None
 
 
 @router.post("/api/integrations/unifi")
@@ -68,6 +75,9 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
     """Update the runtime settings (merged over previously saved values)."""
     if request.tier is not None and request.tier not in _VALID_TIERS:
         raise HTTPException(status_code=400, detail="tier must be high, medium, or low")
+    if request.domain_tier is not None and request.domain_tier not in ("",) + _VALID_TIERS:
+        raise HTTPException(status_code=400,
+                            detail="domain_tier must be high, medium, low, or empty (off)")
     if request.host is not None:
         host = request.host.strip()
         if host and not _HOST_RE.match(host):
@@ -80,7 +90,7 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
             stored = json.loads(raw) or {}
     except Exception:
         stored = {}
-    for field in ("enabled", "host", "site", "tier"):
+    for field in ("enabled", "host", "site", "tier", "domain_tier", "content_profile"):
         value = getattr(request, field)
         if value is not None:
             stored[field] = value.strip() if isinstance(value, str) else value

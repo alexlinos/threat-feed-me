@@ -63,6 +63,7 @@ class UniFiPusher:
                  group_prefix: str = "threatfeedme", verify_ssl: bool = False,
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
+                 domain_tier: str = "", content_profile: str = "threatfeedme",
                  timeout: int = 20, session=None):
         host = (host or "").strip().rstrip('/')
         if host and not host.lower().startswith(('http://', 'https://')):
@@ -75,6 +76,13 @@ class UniFiPusher:
         self.tier = tier if tier in _VALID_TIERS else "high"
         if tier not in _VALID_TIERS:
             logger.warning("[unifi] unknown tier %r; using high", tier)
+        # Domain arm (optional, OFF by default): maintains the block_list of
+        # a Content Filtering profile via the undocumented v2 API. Empty
+        # string = don't push domains.
+        self.domain_tier = domain_tier if domain_tier in _VALID_TIERS else ""
+        if domain_tier and domain_tier not in _VALID_TIERS:
+            logger.warning("[unifi] unknown domain_tier %r; domain push off", domain_tier)
+        self.content_profile = (content_profile or "threatfeedme").strip()
         self.group_prefix = group_prefix or "threatfeedme"
         self.max_entries = max(1, int(max_entries))
         self.max_per_group = max(1, int(max_per_group))
@@ -105,6 +113,8 @@ class UniFiPusher:
             verify_ssl=bool(cfg.get('verify_ssl', False)),
             max_entries=cfg.get('max_entries', DEFAULT_MAX_ENTRIES),
             max_per_group=cfg.get('max_per_group', DEFAULT_MAX_PER_GROUP),
+            domain_tier=cfg.get('domain_tier', ''),
+            content_profile=cfg.get('content_profile', 'threatfeedme'),
         )
 
     @classmethod
@@ -145,8 +155,7 @@ class UniFiPusher:
         # Network-app calls must echo it.
         self._csrf = r.headers.get('x-csrf-token') or r.headers.get('X-CSRF-Token')
 
-    def _api(self, method: str, path: str, **kwargs) -> List[Dict]:
-        url = f"{self.host}/proxy/network/api/s/{self.site}{path}"
+    def _request(self, method: str, url: str, **kwargs):
         headers = {'X-CSRF-Token': self._csrf} if self._csrf else {}
         r = self.session.request(method, url, headers=headers,
                                  timeout=self.timeout, **kwargs)
@@ -155,10 +164,25 @@ class UniFiPusher:
         if rotated:
             self._csrf = rotated
         r.raise_for_status()
+        return r
+
+    def _api(self, method: str, path: str, **kwargs) -> List[Dict]:
+        """Legacy Network API (/api/s/{site}/...): {'meta':…, 'data':[...]}."""
+        r = self._request(method, f"{self.host}/proxy/network/api/s/{self.site}{path}", **kwargs)
         try:
             return (r.json() or {}).get('data', [])
         except ValueError:
             return []
+
+    def _api_v2(self, method: str, path: str, **kwargs):
+        """v2 Network API (/v2/api/site/{site}/...): bare JSON, usually an
+        array. Used for Content Filtering (the domain arm) — undocumented
+        but community-established."""
+        r = self._request(method, f"{self.host}/proxy/network/v2/api/site/{self.site}{path}", **kwargs)
+        try:
+            return r.json()
+        except ValueError:
+            return None
 
     # ---------------- Collection & sync ----------------
 
@@ -188,6 +212,48 @@ class UniFiPusher:
                 self.tier, len(values), self.max_entries)
             values = values[:self.max_entries]
         return values
+
+    def collect_domains(self, db) -> List[str]:
+        """The domain tier's values, whitelist-applied, confidence-ordered,
+        capped like the IP arm (a content-filter list is compiled on the
+        gateway; unbounded lists are how UDMs get slow)."""
+        tier_enum = ConfidenceTier(self.domain_tier)
+        wl_map = db.get_whitelist_map()
+        values: List[str] = []
+        for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind='domain'):
+            if not is_included(ind, wl_map, tier=tier_enum):
+                continue
+            values.append(ind.ip)
+        if len(values) > self.max_entries:
+            logger.warning(
+                "[unifi] %s domain tier has %d entries; pushing the strongest %d "
+                "(max_entries) - consider a higher tier, or raise the cap",
+                self.domain_tier, len(values), self.max_entries)
+            values = values[:self.max_entries]
+        return values
+
+    def sync_domains(self, values: List[str]) -> Dict:
+        """Replace the block_list of the operator-created Content Filtering
+        profile named `content_profile`. The profile itself (and which
+        networks/clients it applies to) is created ONCE in the UniFi UI —
+        that's a policy decision that stays with the operator; we only own
+        its list contents."""
+        profiles = self._api_v2('GET', '/content-filtering') or []
+        profile = next((p for p in profiles
+                        if (p.get('name') or '').strip().lower() == self.content_profile.lower()),
+                       None)
+        if profile is None:
+            raise RuntimeError(
+                f"No Content Filtering profile named '{self.content_profile}' on the "
+                "gateway - create it once in the UniFi UI (Content Filtering / "
+                "CyberSecure), assign your networks, then push again")
+        if sorted(profile.get('block_list') or []) == sorted(values):
+            return {"domains": len(values), "profile": profile.get('name'),
+                    "updated": False}
+        body = dict(profile)
+        body['block_list'] = values
+        self._api_v2('PUT', f"/content-filtering/{profile['_id']}", json=body)
+        return {"domains": len(values), "profile": profile.get('name'), "updated": True}
 
     def _chunk_name(self, index: int) -> str:
         return f"{self.group_prefix}-{self.tier}-{index}"
@@ -303,5 +369,17 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
         "%d created, %d updated, %d unchanged, %d emptied",
         summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
         summary["created"], summary["updated"], summary["unchanged"], summary["emptied"])
+    # Domain arm: optional, and isolated — a content-filter failure (e.g.
+    # the profile doesn't exist yet) must not roll back or hide the IP push
+    # that just succeeded. Its error is carried in the summary instead.
+    if pusher.domain_tier:
+        try:
+            summary["domains"] = pusher.sync_domains(pusher.collect_domains(db))
+            logger.info("[unifi] domain push: %d domains into profile '%s' (%s)",
+                        summary["domains"]["domains"], summary["domains"]["profile"],
+                        "updated" if summary["domains"]["updated"] else "unchanged")
+        except Exception as e:
+            summary["domain_error"] = str(e)
+            logger.error("[unifi] domain push failed (IP push succeeded): %s", e)
     record_push_outcome(db, summary=summary)
     return summary

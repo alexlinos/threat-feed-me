@@ -520,9 +520,16 @@ function unifiRenderStatus(s) {
     if (s.last_push) {
         const at = s.last_push.at ? new Date(s.last_push.at).toLocaleString() : '?';
         if (s.last_push.error) parts.push('Last push FAILED ' + at + ': ' + s.last_push.error);
-        else if (s.last_push.summary) parts.push('Last push ' + at + ': ' +
-            s.last_push.summary.entries.toLocaleString() + ' entries in ' +
-            s.last_push.summary.groups + ' group(s)');
+        else if (s.last_push.summary) {
+            const sum = s.last_push.summary;
+            let msg = 'Last push ' + at + ': ' + sum.entries.toLocaleString() +
+                ' IPs in ' + sum.groups + ' group(s)';
+            if (sum.domains) msg += ' · ' + sum.domains.domains.toLocaleString() +
+                ' domains → profile "' + sum.domains.profile + '"' +
+                (sum.domains.updated ? '' : ' (unchanged)');
+            if (sum.domain_error) msg += ' · DOMAIN PUSH FAILED: ' + sum.domain_error;
+            parts.push(msg);
+        }
     } else {
         parts.push('No push yet');
     }
@@ -537,6 +544,7 @@ async function loadUnifiOnce() {
         document.getElementById('unifi-enabled').checked = !!s.enabled;
         document.getElementById('unifi-host').value = s.host || '';
         document.getElementById('unifi-tier').value = s.tier || 'high';
+        document.getElementById('unifi-domain-tier').value = s.domain_tier || '';
         unifiRenderStatus(s);
     } catch (e) {
         unifiLoaded = false;
@@ -555,6 +563,7 @@ async function unifiSave(quiet) {
         enabled: document.getElementById('unifi-enabled').checked,
         host: document.getElementById('unifi-host').value.trim(),
         tier: document.getElementById('unifi-tier').value,
+        domain_tier: document.getElementById('unifi-domain-tier').value,
     };
     const r = await apiFetch('/api/integrations/unifi', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});

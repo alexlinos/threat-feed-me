@@ -29,12 +29,20 @@ class FakeResponse:
         return {"meta": {"rc": "ok"}, "data": self._data}
 
 
-class FakeSession:
-    """Session stub speaking just enough UniFi OS API."""
+class FakeV2Response(FakeResponse):
+    """v2 endpoints return bare JSON (usually an array), not {meta, data}."""
 
-    def __init__(self, groups=None):
+    def json(self):
+        return self._data
+
+
+class FakeSession:
+    """Session stub speaking just enough UniFi OS API (legacy + v2)."""
+
+    def __init__(self, groups=None, profiles=None):
         self.verify = True
         self.groups = {g["_id"]: dict(g) for g in (groups or [])}
+        self.profiles = {p["_id"]: dict(p) for p in (profiles or [])}
         self.calls = []          # (method, url, json)
         self._next_id = 100
 
@@ -48,6 +56,14 @@ class FakeSession:
         if method in ("POST", "PUT"):
             # Mutations must carry the CSRF token from login.
             assert headers and headers.get("X-CSRF-Token"), "missing CSRF token"
+        if "/v2/api/site/" in url:
+            if method == "GET" and url.endswith("/content-filtering"):
+                return FakeV2Response(list(self.profiles.values()))
+            if method == "PUT" and "/content-filtering/" in url:
+                pid = url.rsplit("/", 1)[1]
+                self.profiles[pid].update(json)
+                return FakeV2Response(self.profiles[pid])
+            raise AssertionError(f"unexpected v2 call {method} {url}")
         if method == "GET" and url.endswith("/rest/firewallgroup"):
             return FakeResponse(list(self.groups.values()))
         if method == "POST" and url.endswith("/rest/firewallgroup"):
@@ -248,6 +264,69 @@ def test_sync_empty_corpus_pushes_one_empty_group():
     assert summary["groups"] == 1 and summary["entries"] == 0
     (g,) = s.groups.values()
     assert g["name"] == "tfm-medium-1" and g["group_members"] == []
+
+
+# ---------------- domain arm (Content Filtering profile) ----------------
+
+def test_collect_domains_is_domain_only_and_whitelisted(tmp_path):
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("203.0.113.1", "f1", {})                        # wrong kind
+    db.add_indicator("evil-a.example.io", "f1", {}, kind="domain")
+    db.add_indicator("evil-b.example.io", "f1", {}, kind="domain")
+    db.add_to_whitelist("evil-b.example.io", "fp", "t")
+    for v, tier in (("203.0.113.1", "high"), ("evil-a.example.io", "high"),
+                    ("evil-b.example.io", "high")):
+        db.set_indicator_score(v, 0.5, tier)
+    p = _pusher(FakeSession(), domain_tier="high")
+    assert p.collect_domains(db) == ["evil-a.example.io"]
+
+
+def test_sync_domains_updates_named_profile_only():
+    s = FakeSession(profiles=[
+        {"_id": "cf1", "name": "threatfeedme", "block_list": ["old.example.io"],
+         "allow_list": [], "enabled": True},
+        {"_id": "cf2", "name": "kids", "block_list": ["games.example.io"]},
+    ])
+    p = _pusher(s, domain_tier="high", content_profile="threatfeedme")
+    p.login()
+    r = p.sync_domains(["evil-a.example.io", "evil-b.example.io"])
+    assert r == {"domains": 2, "profile": "threatfeedme", "updated": True}
+    assert s.profiles["cf1"]["block_list"] == ["evil-a.example.io", "evil-b.example.io"]
+    assert s.profiles["cf2"]["block_list"] == ["games.example.io"]  # untouched
+    # Identical content on the next push: no PUT.
+    calls_before = len(s.calls)
+    r = p.sync_domains(["evil-b.example.io", "evil-a.example.io"])  # order-insensitive
+    assert r["updated"] is False
+    assert not any(c[0] == "PUT" for c in s.calls[calls_before:])
+
+
+def test_sync_domains_missing_profile_raises_actionable_error():
+    p = _pusher(FakeSession(profiles=[]), domain_tier="high")
+    p.login()
+    with pytest.raises(RuntimeError, match="create it once in the UniFi UI"):
+        p.sync_domains(["evil.example.io"])
+
+
+def test_push_domain_arm_failure_never_hides_ip_success(tmp_path, monkeypatch):
+    """The IP push succeeding is the headline; a missing content profile is
+    reported alongside it, not raised over it."""
+    from threatfeedme.database import Database
+    from threatfeedme import pusher_unifi as pu
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("203.0.113.9", "f1", {})
+    db.set_indicator_score("203.0.113.9", 0.9, "high")
+    monkeypatch.setenv(ENV_USER, "svc")
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    session = FakeSession(profiles=[])  # no threatfeedme profile
+    monkeypatch.setattr(pu.UniFiPusher, "from_config",
+                        classmethod(lambda cls, config, db=None: _pusher(
+                            session, tier="high", domain_tier="high")))
+    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
+        "enabled": True, "host": "192.168.1.1"}}})
+    assert summary["entries"] == 1                       # IP push landed
+    assert "create it once in the UniFi UI" in summary["domain_error"]
+    assert "domains" not in summary
 
 
 # ---------------- dashboard API (settings, credentials, test, push) ----------------
