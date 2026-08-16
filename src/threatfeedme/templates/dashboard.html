@@ -52,6 +52,12 @@
             <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>
             <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> (IPs) / <i>DNS Lists and Feeds</i> (domains).</li>
             <li><b>Check Point</b> (R81+ SmartConsole): Security Policies → Threat Prevention → Custom Policy Tools → Indicators → New → <i>External IOC Feed</i>, paste the URL.</li>
+            <li><b>UniFi (UDM / UDM Pro / SE):</b> can't poll a URL — use the <i>UniFi integration</i>
+                panel at the bottom of this page instead: it pushes the tier into firewall groups on the
+                gateway after every refresh. Device limitation to know: UniFi caps group size (~10k
+                entries), so <b>High fits one group and one policy</b>, Medium takes a few, and
+                Low/Everything spans 10+ groups — <b>each needing its own rule</b> on classic firmware.
+                Push High or Medium.</li>
             <li><b>pfSense (pfBlockerNG):</b> Firewall → pfBlockerNG → IPv4 for IP URLs; DNSBL → DNSBL Groups for domain URLs.</li>
             <li><b>OPNsense:</b> Firewall → Aliases → URL Table (IPs); domain lists fit Unbound DNS block lists.</li>
             <li><b>Pi-hole / AdGuard Home:</b> add a domain URL as a blocklist (Adlists / DNS blocklists).</li>
@@ -267,7 +273,10 @@
            · Older firmware (classic firewall): <i>Settings → Firewall &amp; Security → Firewall
            Rules</i> — an <b>Internet In / Drop</b> rule with Source = the groups, and an
            <b>Internet Out / Drop</b> rule with Destination = the groups.<br>
-           For domains, point a Pi-hole/AdGuard at the domain feed URLs above instead.</p>
+           Groups cap at ~10k entries, so the tier is chunked: High is one group (one policy pair),
+           Medium a few, Everything 10+ — and classic firmware needs a rule per group, so prefer
+           High or Medium here. For domains, point a Pi-hole/AdGuard at the domain feed URLs
+           above instead.</p>
         <div class="wl-form" style="margin-top:8px">
             {# The bare switch shipped unlabeled and an operator saved with it
                untouched, then hit "enable the integration first" on Push —
