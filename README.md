@@ -245,9 +245,9 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
-  [push integration](#unifi-udm--udm-pro--udm-se) instead
-  (`integrations.unifi` in config.yaml): it maintains firewall groups on the
-  gateway after every refresh.
+  [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP
+  and Domain network lists on the gateway after every refresh, managed from
+  the dashboard.
 - **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block)
 - **SonicWall** (SonicOS 7): Object → Match Objects → Dynamic External Object (HTTPS URL)
 - **Palo Alto:** Objects → External Dynamic Lists → *IP List*
@@ -259,18 +259,21 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 ### UniFi (UDM / UDM Pro / UDM SE)
 
 UniFi OS has no external-blocklist subscription, so threat-feed-me **pushes**
-instead of serving: after every refresh it maintains firewall groups named
-`threatfeedme-<tier>-1..N` on the gateway through the local Network API
-(chunked, because UniFi groups cap out around ~10k members). Everything is
-managed from the dashboard's **UniFi integration** panel:
+instead of serving: after every refresh (and within seconds of any whitelist
+change) it maintains network lists on the gateway through the local API —
+**IP lists** `threatfeedme-<tier>-1..N` and, optionally, **Domain-type
+lists** `threatfeedme-dom-<tier>-1..N` (no CyberSecure required; chunked,
+because UniFi lists cap out around ~10k members). Everything is managed from
+the dashboard's **UniFi integration** panel:
 
 1. On the UDM, create a **dedicated local admin** restricted to the Network
    app (Admins & Users → Add Admin → *Restrict to local access only*).
 2. In the dashboard panel: enter the gateway address (e.g.
-   `https://192.168.1.1`), pick the tier (**high** recommended for a home
-   gateway), click **Set credentials** (stored write-only in the data
-   volume's `.env`, never displayed again), then **Test connection** — it
-   logs in and reads the gateway's groups without changing anything.
+   `https://192.168.1.1`), pick the IP tier (**high** recommended for a
+   home gateway) and optionally a Domains tier, click **Set credentials**
+   (stored write-only in the data volume's `.env`, never displayed again),
+   then **Test connection** — it logs in and reads the gateway's lists
+   without changing anything.
 3. Toggle **Enabled** on and click **Save & push now** (afterwards, every
    refresh re-pushes automatically).
 4. **The lists block nothing until you create policies referencing them**
@@ -294,12 +297,13 @@ Prefer files? The same settings live under `integrations.unifi` in
 `UNIFI_USER` / `UNIFI_PASSWORD` env vars, and
 `python -m threatfeedme.main --push-unifi` does a one-shot push.
 
-Groups shrink to empty rather than being deleted when the set contracts (a
-group referenced by a rule can't be deleted, and an empty group matches
-nothing). IPv6 indicators are skipped (UniFi address groups are v4-only).
-For the **domain** side on a UniFi network, run Pi-hole or AdGuard Home and
-point it at `/feeds/domains/medium.txt` — UniFi's ad-block has no custom list
-URL support.
+Lists shrink to empty rather than being deleted when the set contracts (a
+list referenced by a policy can't be deleted, and an empty list matches
+nothing). IPv6 indicators are skipped (UniFi address lists are v4-only).
+Domain policies use Destination type *Domain → List*. Prefer keeping DNS
+filtering off-gateway? A Pi-hole or AdGuard Home polling
+`/feeds/domains/medium.txt` works as well — that path uses the plain
+feed URLs instead of the push.
 
 ### Custom lists
 

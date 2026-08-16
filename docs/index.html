@@ -287,9 +287,10 @@
   <section id="firewalls">
     <div class="wrap">
       <h2><span class="hash">&gt;</span>Wire it into your firewall</h2>
-      <p class="sub">Paste a feed URL into your firewall's external threat-feed / block-list setting. The dashboard shows the exact URLs and per-vendor steps.</p>
+      <p class="sub">Paste a feed URL into your firewall's external threat-feed / block-list setting — or, for UniFi gateways that can't poll URLs, let the built-in push integration maintain the lists on the gateway for you. The dashboard shows the exact URLs and per-vendor steps.</p>
 
       <div class="fw-grid">
+        <div class="fw"><span class="name">UniFi (UDM / UDM Pro / SE)</span><span class="path">Can't poll URLs — built-in push integration maintains IP + Domain network lists on the gateway</span></div>
         <div class="fw"><span class="name">FortiGate</span><span class="path">Security Fabric → External Connectors → IP Address / Domain Name Threat Feed</span></div>
         <div class="fw"><span class="name">Sophos Firewall (SFOS 21.0+)</span><span class="path">Active threat response → Third-party threat feeds → Add</span></div>
         <div class="fw"><span class="name">SonicWall (SonicOS 7)</span><span class="path">Object → Match Objects → Dynamic External Object</span></div>
