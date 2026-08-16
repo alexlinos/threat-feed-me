@@ -79,6 +79,14 @@ def test_from_config_disabled_or_hostless_is_none():
         {"integrations": {"unifi": {"enabled": False, "host": "10.0.0.1"}}}) is None
 
 
+def test_host_http_coerced_to_https():
+    """UniFi OS is HTTPS-only; an http:// host redirects and the login POST
+    degrades to a GET -> 401 with perfectly good credentials."""
+    assert _pusher(FakeSession(), host="http://192.168.1.1").host == "https://192.168.1.1"
+    assert _pusher(FakeSession(), host="192.168.1.1").host == "https://192.168.1.1"
+    assert _pusher(FakeSession(), host="https://192.168.1.1/").host == "https://192.168.1.1"
+
+
 def test_from_config_builds_and_normalizes_host():
     p = UniFiPusher.from_config(
         {"integrations": {"unifi": {"enabled": True, "host": "192.168.1.1", "tier": "bogus"}}})

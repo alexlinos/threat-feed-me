@@ -76,7 +76,14 @@ class UniFiPusher:
                  domain_tier: str = "",
                  timeout: int = 20, session=None):
         host = (host or "").strip().rstrip('/')
-        if host and not host.lower().startswith(('http://', 'https://')):
+        if host.lower().startswith('http://'):
+            # UniFi OS serves its API on HTTPS only; port 80 merely redirects,
+            # and requests converts the redirected login POST into a GET,
+            # which the gateway answers 401 regardless of credentials —
+            # observed in the field as an unexplainable auth failure.
+            host = 'https://' + host[7:]
+            logger.info("[unifi] host coerced to https (UniFi OS API is HTTPS-only)")
+        elif host and not host.lower().startswith('https://'):
             host = 'https://' + host
         self.host = host
         self.site = site or "default"
