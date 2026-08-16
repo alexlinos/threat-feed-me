@@ -271,6 +271,18 @@ def record_push_outcome(db, summary: Optional[Dict] = None, error: str = None) -
         pass  # status bookkeeping must never break a push/refresh
 
 
+def push_ready(db, config: Dict) -> bool:
+    """Cheap pre-flight: integration enabled, host set, and BOTH credential
+    variables non-empty. High-frequency callers (the whitelist-triggered
+    background export worker) gate on this so unconfigured deployments —
+    the overwhelming majority — skip the push without a login attempt or a
+    line of error noise."""
+    block = effective_block(db, config)
+    return (bool(block.get('enabled')) and bool(block.get('host'))
+            and bool(os.environ.get(ENV_USER))
+            and bool(os.environ.get(ENV_PASSWORD)))
+
+
 def push_to_unifi(db, config: Dict) -> Optional[Dict]:
     """Push the configured tier into UniFi firewall groups. Returns the sync
     summary, or None when the integration is disabled. Raises on failure —

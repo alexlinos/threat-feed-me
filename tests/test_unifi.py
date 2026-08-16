@@ -11,7 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from threatfeedme.pusher_unifi import UniFiPusher, push_to_unifi, ENV_USER, ENV_PASSWORD
+from threatfeedme.pusher_unifi import (UniFiPusher, push_ready, push_to_unifi,
+                                       ENV_USER, ENV_PASSWORD)
 
 
 class FakeResponse:
@@ -98,6 +99,50 @@ def test_push_disabled_returns_none(tmp_path):
     from threatfeedme.database import Database
     db = Database(str(tmp_path / "t.db"))
     assert push_to_unifi(db, {}) is None
+
+
+def test_push_ready_requires_all_variables(tmp_path, monkeypatch):
+    """The if-gate for high-frequency callers: enabled AND host AND both
+    credential vars non-empty — anything missing means skip, silently."""
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    enabled_cfg = {"integrations": {"unifi": {"enabled": True, "host": "192.168.1.1"}}}
+    monkeypatch.delenv(ENV_USER, raising=False)
+    monkeypatch.delenv(ENV_PASSWORD, raising=False)
+    assert push_ready(db, {}) is False                       # nothing configured
+    assert push_ready(db, enabled_cfg) is False              # no credentials
+    monkeypatch.setenv(ENV_USER, "svc")
+    assert push_ready(db, enabled_cfg) is False              # password missing
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    assert push_ready(db, enabled_cfg) is True               # all set
+    assert push_ready(db, {"integrations": {"unifi": {"enabled": False,
+                                                      "host": "192.168.1.1"}}}) is False
+    monkeypatch.setenv(ENV_PASSWORD, "")                     # set-but-EMPTY is unset
+    assert push_ready(db, enabled_cfg) is False
+
+
+def test_whitelist_export_worker_pushes_when_ready(tmp_path, monkeypatch):
+    """A whitelist change rides the background export worker to the gateway:
+    push fires when the integration is fully configured, never otherwise."""
+    import threading
+    from threatfeedme.database import Database
+    from threatfeedme import pipeline, pusher_unifi
+    db = Database(str(tmp_path / "t.db"))
+    cfg = {"output": {"base_dir": str(tmp_path / "out"), "formats": ["text"]},
+           "integrations": {"unifi": {"enabled": True, "host": "192.168.1.1"}}}
+    pushed = threading.Event()
+    monkeypatch.setattr(pusher_unifi, "push_to_unifi",
+                        lambda db_, cfg_: pushed.set())
+    # Not ready (no creds): the worker must NOT push.
+    monkeypatch.delenv(ENV_USER, raising=False)
+    monkeypatch.delenv(ENV_PASSWORD, raising=False)
+    pipeline.export_tiers_async(db, cfg)
+    assert not pushed.wait(timeout=2)
+    # Ready: the same worker pushes.
+    monkeypatch.setenv(ENV_USER, "svc")
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    pipeline.export_tiers_async(db, cfg)
+    assert pushed.wait(timeout=5), "configured integration did not push on export"
 
 
 # ---------------- collection ----------------

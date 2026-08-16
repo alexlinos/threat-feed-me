@@ -151,6 +151,18 @@ def export_tiers_async(db: Database, config: Dict) -> None:
                     export_tiers(db, config)
                 except Exception:
                     logger.exception("background tier export failed")
+                # A whitelist change must reach a configured UniFi gateway
+                # too — "this block is hurting us, stop NOW" can't wait for
+                # the next refresh cycle. Gated on push_ready (enabled +
+                # host + credentials all non-empty) so deployments without
+                # UniFi skip this entirely; diff-aware, so a no-op push is
+                # one login and one read. Same coalescing as the exports.
+                try:
+                    from threatfeedme.pusher_unifi import push_ready, push_to_unifi
+                    if push_ready(db, config):
+                        push_to_unifi(db, config)
+                except Exception:
+                    logger.exception("[unifi] push after whitelist/export change failed")
         finally:
             with _export_state_lock:
                 _export_running = False
@@ -234,9 +246,12 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     # Push integrations (UniFi has no poll-a-URL feature, so we push instead).
     # Guarded: an unreachable gateway must never break the refresh — the
     # served block lists are already updated at this point either way.
+    # push_ready gates on the integration variables being set and non-empty,
+    # so unconfigured deployments skip the attempt silently.
     try:
-        from threatfeedme.pusher_unifi import push_to_unifi
-        push_to_unifi(db, config)
+        from threatfeedme.pusher_unifi import push_ready, push_to_unifi
+        if push_ready(db, config):
+            push_to_unifi(db, config)
     except Exception:
         logger.exception("[unifi] push failed (refresh itself succeeded)")
     return fetched
