@@ -273,17 +273,21 @@ managed from the dashboard's **UniFi integration** panel:
    logs in and reads the gateway's groups without changing anything.
 3. Toggle **Enabled** on and click **Save & push now** (afterwards, every
    refresh re-pushes automatically).
-4. **The groups block nothing until you create policies referencing them**
+4. **The lists block nothing until you create policies referencing them**
    (one-time step). On current UniFi Network (zone-based firewall):
    *Settings → Policy Table → Create Policy* — **External → Internal**,
-   action **Block**, Source = the `threatfeedme-*` objects, plus a second
-   policy **Internal → External** with Destination = the same objects (the
-   egress side catches an infected host beaconing out to a C2). Enable
-   logging on both to see hits in the System Log / Flows. On older
-   firmware it's *Settings → Firewall & Security → Firewall Rules*:
-   an *Internet In / Drop* rule (Source = groups) and an *Internet Out /
-   Drop* rule (Destination = groups). Membership updates itself every
-   refresh either way.
+   action **Block**, Source = a `threatfeedme-*` list, plus a second policy
+   **Internet/Internal → External** with Destination = the same list (the
+   egress side catches an infected host beaconing out to a C2). Older
+   firmware: *Settings → Firewall & Security → Firewall Rules*, same pair.
+   **A policy can reference exactly ONE list** (every firmware), which is
+   why list counts are fixed per tier — High = 1 list, Medium = 4,
+   Everything = 10, unused ones pre-created empty — so the policy set you
+   build once stays complete as the corpus grows. Enable logging on the
+   policies to see hits in the System Log / Flows. Membership updates
+   itself every refresh. (UI quirk: the Policy Table's Destination column
+   shows "–" for domain-list policies; open the policy — the reference is
+   saved and enforced.)
 
 Prefer files? The same settings live under `integrations.unifi` in
 `config.yaml` (the dashboard's values take precedence), credentials as

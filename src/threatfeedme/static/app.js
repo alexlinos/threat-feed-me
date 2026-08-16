@@ -555,20 +555,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const box = document.getElementById('unifi-panel');
     if (!box) return;
     box.addEventListener('toggle', () => { if (box.open) loadUnifiOnce(); });
-    // Live warning: any tier beyond High shards into multiple lists, and
-    // every list must be referenced by the block policy (one rule per list
-    // on classic firmware). Users should choose that knowingly.
+    // Live warning: UniFi policies reference exactly ONE list each (every
+    // firmware — the zone-based editor's List selector is single-select),
+    // so a tier beyond High means one policy PER LIST, per direction. List
+    // counts are fixed (High=1, Medium=4, Everything=10; empty lists are
+    // pre-created) so the policy set you build once never goes stale.
     const warn = () => {
         const el = document.getElementById('unifi-tier-warning');
         const ip = document.getElementById('unifi-tier').value;
         const dom = document.getElementById('unifi-domain-tier').value;
         const msgs = [];
-        if (ip === 'medium') msgs.push('IP Medium spans several lists (~3-4)');
-        if (ip === 'low') msgs.push('IP Everything spans 10+ lists');
-        if (dom === 'medium') msgs.push('Domain Medium spans several lists (up to 10 at the cap)');
+        if (ip === 'medium') msgs.push('IP Medium = 4 lists');
+        if (ip === 'low') msgs.push('IP Everything = 10 lists');
+        if (dom === 'medium') msgs.push('Domain Medium = 4 lists');
         if (msgs.length) {
             el.textContent = '⚠ ' + msgs.join(' · ') +
-                ' — each list must be added to your block policy (or gets its own rule on classic firmware). High fits in one list.';
+                ' — UniFi allows ONE list per policy, so that means one policy per list (per direction). ' +
+                'All lists are created up front (some empty at first) so the policies you build now stay complete as the corpus grows. High = 1 list.';
             el.style.display = '';
         } else { el.style.display = 'none'; }
     };

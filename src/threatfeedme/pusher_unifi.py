@@ -57,6 +57,16 @@ DEFAULT_MAX_PER_GROUP = 5000
 DEFAULT_MAX_ENTRIES = 50000
 _VALID_TIERS = ("high", "medium", "low")
 
+# FIXED list count per tier, both arms. Every UniFi firmware allows exactly
+# ONE list per policy (live-verified in the zone-based editor: the List
+# selector is single-select), so the operator builds one policy per list —
+# and a dynamically GROWING chunk count would mint a list no policy
+# references, silently unblocked. Fixed counts mean the policy set is built
+# once and stays complete: unused trailing lists sit empty until the corpus
+# grows into them. Implied per-tier entry cap = count x max_per_group,
+# strongest-kept truncation beyond it.
+TIER_LIST_COUNTS = {"high": 1, "medium": 4, "low": 10}
+
 
 class UniFiPusher:
     def __init__(self, host: str, site: str = "default", tier: str = "high",
@@ -225,7 +235,7 @@ class UniFiPusher:
         return values
 
     def sync(self, values: List[str], label: str = None,
-             group_type: str = "address-group") -> Dict:
+             group_type: str = "address-group", list_count: int = None) -> Dict:
         """Reconcile the chunk groups named {prefix}-{label}-1..N (of one
         group_type) with `values`. Creates missing groups, updates changed
         ones, leaves identical ones alone, and EMPTIES stale groups (a group
@@ -237,10 +247,25 @@ class UniFiPusher:
         the Domain-type Network List on current firmware, same API). Stale
         detection is scoped to the arm's OWN group_type, so the IP pass can
         never empty the domain lists and vice versa, while still covering
-        both shrinkage and tier switches within an arm."""
+        both shrinkage and tier switches within an arm.
+
+        `list_count` fixes the number of lists (padding with empty ones):
+        UniFi policies reference exactly one list each, so the count must
+        never grow past what the operator built policies for. Values beyond
+        list_count x max_per_group are dropped strongest-kept, loudly."""
         label = label or self.tier
+        if list_count:
+            cap = list_count * self.max_per_group
+            if len(values) > cap:
+                logger.warning(
+                    "[unifi] %s exceeds its %d fixed list(s) x %d cap (%d entries); "
+                    "pushing the strongest %d",
+                    label, list_count, self.max_per_group, len(values), cap)
+                values = values[:cap]
         chunks = [values[i:i + self.max_per_group]
                   for i in range(0, len(values), self.max_per_group)] or [[]]
+        if list_count and len(chunks) < list_count:
+            chunks += [[] for _ in range(list_count - len(chunks))]
         groups = {g.get('name'): g for g in self._api('GET', '/rest/firewallgroup')}
 
         created = updated = unchanged = emptied = 0
@@ -332,7 +357,7 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
     try:
         pusher.login()
         values = pusher.collect(db)
-        summary = pusher.sync(values)
+        summary = pusher.sync(values, list_count=TIER_LIST_COUNTS[pusher.tier])
     except Exception as e:
         record_push_outcome(db, error=str(e))
         raise
@@ -349,7 +374,8 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
             summary["domains"] = pusher.sync(
                 pusher.collect_domains(db),
                 label=f"dom-{pusher.domain_tier}",
-                group_type="domain-group")
+                group_type="domain-group",
+                list_count=TIER_LIST_COUNTS[pusher.domain_tier])
             d = summary["domains"]
             logger.info(
                 "[unifi] domain push: %d domains into %d list(s) [%s-dom-%s-*]: "

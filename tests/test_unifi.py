@@ -240,6 +240,25 @@ def test_sync_switching_tier_empties_other_tiers_groups():
     assert s.groups["L2"]["group_members"] == []
 
 
+def test_sync_fixed_list_count_pads_with_empty_lists():
+    """UniFi policies reference exactly ONE list each, so the list count
+    must never grow past what the operator built policies for: fixed count,
+    unused lists pre-created empty, overflow truncated strongest-kept."""
+    s = FakeSession()
+    p = _pusher(s, max_per_group=2)
+    p.login()
+    summary = p.sync(["1.1.1.1", "2.2.2.2", "3.3.3.3"], list_count=4)
+    assert summary["groups"] == 4 and summary["created"] == 4
+    by_name = {g["name"]: g["group_members"] for g in s.groups.values()}
+    assert by_name == {"tfm-medium-1": ["1.1.1.1", "2.2.2.2"],
+                       "tfm-medium-2": ["3.3.3.3"],
+                       "tfm-medium-3": [], "tfm-medium-4": []}
+    # Overflow beyond count x per_group truncates, never mints list 5.
+    summary = p.sync([f"10.0.0.{i}" for i in range(1, 12)], list_count=4)
+    assert summary["groups"] == 4
+    assert sum(len(g["group_members"]) for g in s.groups.values()) == 8
+
+
 def test_sync_empty_corpus_pushes_one_empty_group():
     s = FakeSession()
     p = _pusher(s)
@@ -413,8 +432,8 @@ def test_api_push_records_outcome(api_client, monkeypatch):
     monkeypatch.setattr(pu.UniFiPusher, "login", lambda self: None)
     monkeypatch.setattr(pu.UniFiPusher, "collect", lambda self, db: ["1.1.1.1"])
     monkeypatch.setattr(pu.UniFiPusher, "sync",
-                        lambda self, values: {"entries": 1, "groups": 1, "created": 1,
-                                              "updated": 0, "unchanged": 0, "emptied": 0})
+                        lambda self, values, **kw: {"entries": 1, "groups": 1, "created": 1,
+                                                    "updated": 0, "unchanged": 0, "emptied": 0})
     r = api_client.post("/api/integrations/unifi/push")
     assert r.status_code == 200 and r.json()["summary"]["entries"] == 1
     # Outcome is persisted for the panel's status line.
