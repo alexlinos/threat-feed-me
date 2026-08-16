@@ -72,9 +72,9 @@ which stopped being true the moment they were committed. What remains open:
 ## HoneyDB feeds (v1.10.0, live-verified on prod)
 
 Both feeds shipped, disabled by default: `honeydb_bad_hosts` (community,
-rolling 24h window) and `honeydb_mydata` (only Alex's own sensors, since his
-honeypot contributes to honeydb.io). Implementation notes for whoever
-touches this next:
+rolling 24h window) and `honeydb_mydata` (only sensors the configured
+HoneyDB account operates — relevant for deployments that contribute
+sensors to honeydb.io). Implementation notes for whoever touches this next:
 
 - `honeydb` scraper in feed_ingestor.py builds BOTH auth headers
   (`X-HoneyDb-ApiId` + `X-HoneyDb-ApiKey`) from `HONEYDB_API_ID` +
@@ -87,14 +87,14 @@ touches this next:
   field). Only vars declared in auth_env are writable. Key ✓ badge requires
   ALL vars present.
 - Live-verified 2026-08-11 on prod: bad_hosts pulls ~14.5k indicators at
-  54% unique (highest-novelty feed in the roster); mydata pulls Alex's own
-  sensor sightings (0% unique by design, since his sensors feed the community
-  list, and overlap discounting prices that correlation). The `remote_host`
-  JSON key guess was correct.
+  54% unique (highest-novelty feed in the roster); mydata pulls the
+  account's own sensor sightings (0% unique by design — own sensors feed
+  the community list too, and overlap discounting prices that
+  correlation). The `remote_host` JSON key guess was correct.
 
 ## Domain intel: v2.0 design (approved direction, build not started)
 
-Alex chose domains (not full URLs: path-level intel is email-proxy
+Direction chosen: domains (not full URLs: path-level intel is email-proxy
 territory; DNS-layer blocking is what firewalls consume). The votes engine
 transfers unchanged; this is a data-model + serving expansion. Sources
 live-verified 2026-08-13.
@@ -142,7 +142,7 @@ live-verified 2026-08-13.
   runs for domain feeds. Never sniff domains out of IP feeds (comments and
   URLs in feed headers would pollute the corpus).
 
-### UI decisions ratified 2026-08-14 (mockups reviewed by Alex)
+### UI decisions ratified 2026-08-14 (mockups reviewed by the maintainer)
 
 - **D2 revised, feed URLs**: the card section becomes a FEED MATRIX: rows =
   tiers (High/Medium/Everything), columns = kind (IP feeds / Domain feeds),
@@ -170,7 +170,7 @@ live-verified 2026-08-13.
   Optional small top-5 donut beside the bars only if visual variety is
   wanted; bars carry the data. Endpoint: /api/domains/tlds.
 
-### Ratified (Alex, 2026-08-15) ← replaces "Still to ratify"
+### Ratified (maintainer, 2026-08-15) ← replaces "Still to ratify"
 
 1. Domain feeds default-enabled: urlhaus_hostfile + openphish_community +
    hagezi_threat_intel ON (keyless = the product promise); joewein_dom_bl
@@ -179,10 +179,11 @@ live-verified 2026-08-13.
 3. TLD panel: plain ranked bars (recommended, no top-5 donut; bars carry the
    data, matches geo-panel precedent).
 
-Roster stays open for curation: Alex ratifies new sources one at a time;
-keep blocklist-source research additive rather than fixing a walled list.
+Roster stays open for curation: the maintainer ratifies new sources one at
+a time; keep blocklist-source research additive rather than fixing a
+walled list.
 
-### Ratified (Alex, 2026-08-15, "lets try it") — domain roster expansion
+### Ratified (maintainer, 2026-08-15) — domain roster expansion
 
 Community-grounded (Firebog ticked tier, live-probed keyless):
 
@@ -207,7 +208,7 @@ domains/medium or high, not Everything — noted in the dashboard how-to.
 
 ### UniFi push integration (built 2026-08-15, NOT yet live-verified)
 
-Alex's home gateway is a UDM SE; UniFi cannot poll a blocklist URL (open
+UniFi gateways (UDM/UDM Pro/UDM SE) cannot poll a blocklist URL (open
 feature request for years), so `pusher_unifi.py` PUSHES the configured tier
 into firewall groups `{prefix}-{tier}-1..N` via the gateway's local Network
 API after every refresh (hooked in pipeline.run_refresh, guarded so a push
@@ -219,8 +220,8 @@ chunks EMPTIED not deleted (in-use groups refuse deletion), IPv4 only
 strongest-kept truncation. Unit-tested against a faked UniFi API (278
 green) but NOT verified against real UniFi OS — the login/group API shapes
 are from community integrations, and UniFi changes them between releases.
-**Release gate: Alex live-verifies against his UDM SE first; then cut
-v2.1.0.** Domains can't be pushed (UniFi ad-block has no list-URL support);
+**Release gate: live verification against a real UniFi gateway first; then
+cut v2.1.0.** Domains can't be pushed (UniFi ad-block has no list-URL support);
 README points UniFi users at Pi-hole/AdGuard for the domain side.
 
 ### v2.0.0 build state (2026-08-15, shipped)
