@@ -206,23 +206,35 @@ inside hagezi TIF + phishing_army). FortiGate operators: external-resource
 caps (~131k entries on mid-range) mean the DNS filter should point at
 domains/medium or high, not Everything — noted in the dashboard how-to.
 
-### UniFi push integration (built 2026-08-15, NOT yet live-verified)
+### UniFi push integration (v2.1.0, LIVE-VERIFIED on a real UDM SE 2026-08-15)
 
 UniFi gateways (UDM/UDM Pro/UDM SE) cannot poll a blocklist URL (open
-feature request for years), so `pusher_unifi.py` PUSHES the configured tier
-into firewall groups `{prefix}-{tier}-1..N` via the gateway's local Network
-API after every refresh (hooked in pipeline.run_refresh, guarded so a push
-failure never breaks a refresh; one-shot: `--push-unifi`). Key mechanics:
-login via /api/auth/login with UNIFI_USER/UNIFI_PASSWORD env (CSRF token
-echoed + rotated), groups chunked at 5k (UniFi caps ~10k/group), stale
-chunks EMPTIED not deleted (in-use groups refuse deletion), IPv4 only
-(address-group type), default tier medium, hard max_entries cap with
-strongest-kept truncation. Unit-tested against a faked UniFi API (278
-green) but NOT verified against real UniFi OS — the login/group API shapes
-are from community integrations, and UniFi changes them between releases.
-**Release gate: live verification against a real UniFi gateway first; then
-cut v2.1.0.** Domains can't be pushed (UniFi ad-block has no list-URL support);
-README points UniFi users at Pi-hole/AdGuard for the domain side.
+feature request for years), so `pusher_unifi.py` PUSHES via the gateway's
+local Network API after every refresh (hooked in pipeline.run_refresh AND
+the whitelist-triggered background export worker behind push_ready, all
+guarded so a push failure never breaks anything; one-shot: `--push-unifi`).
+Two arms, both live-verified against real UniFi OS:
+
+- IP arm: firewall groups `{prefix}-{tier}-1..N` (address-group), chunked
+  at 5k (UniFi caps ~10k/group). Verified: 3,082 high-tier IPs, one group.
+- Domain arm (optional, off by default): Domain-type network lists
+  `{prefix}-dom-{tier}-1..N` (group_type domain-group) through the SAME
+  /rest/firewallgroup API — works on base firmware, NO CyberSecure needed.
+  Verified: 41 high-tier domains created first try. (A content-filtering
+  v2-API version existed for a few hours; replaced — CyberSecure-gated and
+  undocumented.)
+
+Shared mechanics: login via /api/auth/login with UNIFI_USER/UNIFI_PASSWORD
+env (write-only via the dashboard panel, feed-API-key mechanics; CSRF token
+echoed + rotated), stale groups EMPTIED not deleted (in-use groups refuse
+deletion) with stale detection scoped per group_type (the arms share the
+name prefix and must not clean each other), default tier high (fits one
+group/one policy — the panel warns on dropdown change that other tiers
+shard into multiple lists needing multiple policy references), hard
+max_entries cap with strongest-kept truncation, IPv4 only on the IP arm.
+The operator creates the Block policies in UniFi referencing the lists;
+the pusher never touches policies. Managed from the dashboard's collapsed
+"UniFi integration" panel (Test connection = read-only login+list).
 
 ### v2.0.0 build state (2026-08-15, shipped)
 
