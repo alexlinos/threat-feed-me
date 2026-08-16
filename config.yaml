@@ -382,11 +382,11 @@ integrations:
     # and fits in one group; medium is ~2-4 groups. NEVER point this at
     # low/"everything" on a home gateway.
     tier: high
-    # Optionally ALSO push a domain tier into a Content Filtering profile
-    # (create a profile with this name once in the UniFi UI and assign your
-    # networks there; uses UniFi's undocumented v2 API). Empty = off.
+    # Optionally ALSO push a domain tier into Domain-type network lists
+    # ({group_prefix}-dom-{tier}-1..N) — same firewall-group API as the IP
+    # arm, no CyberSecure required; reference the lists in a Block policy
+    # like the IP ones. Empty = off.
     domain_tier: ""
-    content_profile: threatfeedme
     group_prefix: threatfeedme
     # UDM certs are self-signed; enable only if yours has a real cert.
     verify_ssl: false

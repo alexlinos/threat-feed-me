@@ -524,9 +524,8 @@ function unifiRenderStatus(s) {
             const sum = s.last_push.summary;
             let msg = 'Last push ' + at + ': ' + sum.entries.toLocaleString() +
                 ' IPs in ' + sum.groups + ' group(s)';
-            if (sum.domains) msg += ' · ' + sum.domains.domains.toLocaleString() +
-                ' domains → profile "' + sum.domains.profile + '"' +
-                (sum.domains.updated ? '' : ' (unchanged)');
+            if (sum.domains) msg += ' · ' + sum.domains.entries.toLocaleString() +
+                ' domains in ' + sum.domains.groups + ' list(s)';
             if (sum.domain_error) msg += ' · DOMAIN PUSH FAILED: ' + sum.domain_error;
             parts.push(msg);
         }
@@ -556,6 +555,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const box = document.getElementById('unifi-panel');
     if (!box) return;
     box.addEventListener('toggle', () => { if (box.open) loadUnifiOnce(); });
+    // Live warning: any tier beyond High shards into multiple lists, and
+    // every list must be referenced by the block policy (one rule per list
+    // on classic firmware). Users should choose that knowingly.
+    const warn = () => {
+        const el = document.getElementById('unifi-tier-warning');
+        const ip = document.getElementById('unifi-tier').value;
+        const dom = document.getElementById('unifi-domain-tier').value;
+        const msgs = [];
+        if (ip === 'medium') msgs.push('IP Medium spans several lists (~3-4)');
+        if (ip === 'low') msgs.push('IP Everything spans 10+ lists');
+        if (dom === 'medium') msgs.push('Domain Medium spans several lists (up to 10 at the cap)');
+        if (msgs.length) {
+            el.textContent = '⚠ ' + msgs.join(' · ') +
+                ' — each list must be added to your block policy (or gets its own rule on classic firmware). High fits in one list.';
+            el.style.display = '';
+        } else { el.style.display = 'none'; }
+    };
+    document.getElementById('unifi-tier').addEventListener('change', warn);
+    document.getElementById('unifi-domain-tier').addEventListener('change', warn);
+    box.addEventListener('toggle', () => { if (box.open) setTimeout(warn, 800); });
 });
 
 async function unifiSave(quiet) {

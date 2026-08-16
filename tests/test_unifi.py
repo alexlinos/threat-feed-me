@@ -29,20 +29,12 @@ class FakeResponse:
         return {"meta": {"rc": "ok"}, "data": self._data}
 
 
-class FakeV2Response(FakeResponse):
-    """v2 endpoints return bare JSON (usually an array), not {meta, data}."""
-
-    def json(self):
-        return self._data
-
-
 class FakeSession:
-    """Session stub speaking just enough UniFi OS API (legacy + v2)."""
+    """Session stub speaking just enough UniFi OS API."""
 
-    def __init__(self, groups=None, profiles=None):
+    def __init__(self, groups=None):
         self.verify = True
         self.groups = {g["_id"]: dict(g) for g in (groups or [])}
-        self.profiles = {p["_id"]: dict(p) for p in (profiles or [])}
         self.calls = []          # (method, url, json)
         self._next_id = 100
 
@@ -56,14 +48,6 @@ class FakeSession:
         if method in ("POST", "PUT"):
             # Mutations must carry the CSRF token from login.
             assert headers and headers.get("X-CSRF-Token"), "missing CSRF token"
-        if "/v2/api/site/" in url:
-            if method == "GET" and url.endswith("/content-filtering"):
-                return FakeV2Response(list(self.profiles.values()))
-            if method == "PUT" and "/content-filtering/" in url:
-                pid = url.rsplit("/", 1)[1]
-                self.profiles[pid].update(json)
-                return FakeV2Response(self.profiles[pid])
-            raise AssertionError(f"unexpected v2 call {method} {url}")
         if method == "GET" and url.endswith("/rest/firewallgroup"):
             return FakeResponse(list(self.groups.values()))
         if method == "POST" and url.endswith("/rest/firewallgroup"):
@@ -282,51 +266,51 @@ def test_collect_domains_is_domain_only_and_whitelisted(tmp_path):
     assert p.collect_domains(db) == ["evil-a.example.io"]
 
 
-def test_sync_domains_updates_named_profile_only():
-    s = FakeSession(profiles=[
-        {"_id": "cf1", "name": "threatfeedme", "block_list": ["old.example.io"],
-         "allow_list": [], "enabled": True},
-        {"_id": "cf2", "name": "kids", "block_list": ["games.example.io"]},
+def test_domain_sync_creates_domain_groups_isolated_from_ip_groups():
+    """Both arms share sync() but scope stale detection to their own
+    group_type — the IP pass must never empty the domain lists (they share
+    the name prefix) and vice versa."""
+    s = FakeSession(groups=[
+        {"_id": "d1", "name": "tfm-dom-high-1", "group_type": "domain-group",
+         "group_members": ["old.example.io"]},
     ])
-    p = _pusher(s, domain_tier="high", content_profile="threatfeedme")
+    p = _pusher(s, tier="high", domain_tier="high", max_per_group=2)
     p.login()
-    r = p.sync_domains(["evil-a.example.io", "evil-b.example.io"])
-    assert r == {"domains": 2, "profile": "threatfeedme", "updated": True}
-    assert s.profiles["cf1"]["block_list"] == ["evil-a.example.io", "evil-b.example.io"]
-    assert s.profiles["cf2"]["block_list"] == ["games.example.io"]  # untouched
-    # Identical content on the next push: no PUT.
-    calls_before = len(s.calls)
-    r = p.sync_domains(["evil-b.example.io", "evil-a.example.io"])  # order-insensitive
-    assert r["updated"] is False
-    assert not any(c[0] == "PUT" for c in s.calls[calls_before:])
+    # IP sync runs first and must not touch the (stale-looking) domain list.
+    p.sync(["1.1.1.1"])
+    assert s.groups["d1"]["group_members"] == ["old.example.io"]
+    # Domain sync updates its own list and leaves the IP group alone.
+    r = p.sync(["evil-a.example.io", "evil-b.example.io", "evil-c.example.io"],
+               label="dom-high", group_type="domain-group")
+    assert r["entries"] == 3 and r["groups"] == 2
+    assert r["updated"] == 1 and r["created"] == 1
+    by_name = {g["name"]: g for g in s.groups.values()}
+    assert by_name["tfm-dom-high-1"]["group_members"] == ["evil-a.example.io", "evil-b.example.io"]
+    assert by_name["tfm-dom-high-2"]["group_type"] == "domain-group"
+    assert by_name["tfm-high-1"]["group_members"] == ["1.1.1.1"]
 
 
-def test_sync_domains_missing_profile_raises_actionable_error():
-    p = _pusher(FakeSession(profiles=[]), domain_tier="high")
-    p.login()
-    with pytest.raises(RuntimeError, match="create it once in the UniFi UI"):
-        p.sync_domains(["evil.example.io"])
-
-
-def test_push_domain_arm_failure_never_hides_ip_success(tmp_path, monkeypatch):
-    """The IP push succeeding is the headline; a missing content profile is
-    reported alongside it, not raised over it."""
+def test_push_includes_domain_summary(tmp_path, monkeypatch):
     from threatfeedme.database import Database
     from threatfeedme import pusher_unifi as pu
     db = Database(str(tmp_path / "t.db"))
     db.add_indicator("203.0.113.9", "f1", {})
+    db.add_indicator("evil.example.io", "f1", {}, kind="domain")
     db.set_indicator_score("203.0.113.9", 0.9, "high")
+    db.set_indicator_score("evil.example.io", 0.9, "high")
     monkeypatch.setenv(ENV_USER, "svc")
     monkeypatch.setenv(ENV_PASSWORD, "pw")
-    session = FakeSession(profiles=[])  # no threatfeedme profile
+    session = FakeSession()
     monkeypatch.setattr(pu.UniFiPusher, "from_config",
                         classmethod(lambda cls, config, db=None: _pusher(
                             session, tier="high", domain_tier="high")))
     summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
         "enabled": True, "host": "192.168.1.1"}}})
-    assert summary["entries"] == 1                       # IP push landed
-    assert "create it once in the UniFi UI" in summary["domain_error"]
-    assert "domains" not in summary
+    assert summary["entries"] == 1                       # IP arm
+    assert summary["domains"]["entries"] == 1            # domain arm
+    assert "domain_error" not in summary
+    names = {g["name"]: g["group_type"] for g in session.groups.values()}
+    assert names == {"tfm-high-1": "address-group", "tfm-dom-high-1": "domain-group"}
 
 
 # ---------------- dashboard API (settings, credentials, test, push) ----------------

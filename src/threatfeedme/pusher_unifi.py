@@ -63,7 +63,7 @@ class UniFiPusher:
                  group_prefix: str = "threatfeedme", verify_ssl: bool = False,
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
-                 domain_tier: str = "", content_profile: str = "threatfeedme",
+                 domain_tier: str = "",
                  timeout: int = 20, session=None):
         host = (host or "").strip().rstrip('/')
         if host and not host.lower().startswith(('http://', 'https://')):
@@ -76,13 +76,15 @@ class UniFiPusher:
         self.tier = tier if tier in _VALID_TIERS else "high"
         if tier not in _VALID_TIERS:
             logger.warning("[unifi] unknown tier %r; using high", tier)
-        # Domain arm (optional, OFF by default): maintains the block_list of
-        # a Content Filtering profile via the undocumented v2 API. Empty
-        # string = don't push domains.
+        # Domain arm (optional, OFF by default): maintains Domain-type
+        # network lists ({prefix}-dom-{tier}-1..N) through the SAME
+        # firewall-group API as the IP arm — group_type 'domain-group'.
+        # Available on base firmware (no CyberSecure), and consumed the same
+        # way as the IP lists: the operator creates a policy referencing
+        # them. Empty string = don't push domains.
         self.domain_tier = domain_tier if domain_tier in _VALID_TIERS else ""
         if domain_tier and domain_tier not in _VALID_TIERS:
             logger.warning("[unifi] unknown domain_tier %r; domain push off", domain_tier)
-        self.content_profile = (content_profile or "threatfeedme").strip()
         self.group_prefix = group_prefix or "threatfeedme"
         self.max_entries = max(1, int(max_entries))
         self.max_per_group = max(1, int(max_per_group))
@@ -114,7 +116,6 @@ class UniFiPusher:
             max_entries=cfg.get('max_entries', DEFAULT_MAX_ENTRIES),
             max_per_group=cfg.get('max_per_group', DEFAULT_MAX_PER_GROUP),
             domain_tier=cfg.get('domain_tier', ''),
-            content_profile=cfg.get('content_profile', 'threatfeedme'),
         )
 
     @classmethod
@@ -174,15 +175,6 @@ class UniFiPusher:
         except ValueError:
             return []
 
-    def _api_v2(self, method: str, path: str, **kwargs):
-        """v2 Network API (/v2/api/site/{site}/...): bare JSON, usually an
-        array. Used for Content Filtering (the domain arm) — undocumented
-        but community-established."""
-        r = self._request(method, f"{self.host}/proxy/network/v2/api/site/{self.site}{path}", **kwargs)
-        try:
-            return r.json()
-        except ValueError:
-            return None
 
     # ---------------- Collection & sync ----------------
 
@@ -232,49 +224,34 @@ class UniFiPusher:
             values = values[:self.max_entries]
         return values
 
-    def sync_domains(self, values: List[str]) -> Dict:
-        """Replace the block_list of the operator-created Content Filtering
-        profile named `content_profile`. The profile itself (and which
-        networks/clients it applies to) is created ONCE in the UniFi UI —
-        that's a policy decision that stays with the operator; we only own
-        its list contents."""
-        profiles = self._api_v2('GET', '/content-filtering') or []
-        profile = next((p for p in profiles
-                        if (p.get('name') or '').strip().lower() == self.content_profile.lower()),
-                       None)
-        if profile is None:
-            raise RuntimeError(
-                f"No Content Filtering profile named '{self.content_profile}' on the "
-                "gateway - create it once in the UniFi UI (Content Filtering / "
-                "CyberSecure), assign your networks, then push again")
-        if sorted(profile.get('block_list') or []) == sorted(values):
-            return {"domains": len(values), "profile": profile.get('name'),
-                    "updated": False}
-        body = dict(profile)
-        body['block_list'] = values
-        self._api_v2('PUT', f"/content-filtering/{profile['_id']}", json=body)
-        return {"domains": len(values), "profile": profile.get('name'), "updated": True}
+    def sync(self, values: List[str], label: str = None,
+             group_type: str = "address-group") -> Dict:
+        """Reconcile the chunk groups named {prefix}-{label}-1..N (of one
+        group_type) with `values`. Creates missing groups, updates changed
+        ones, leaves identical ones alone, and EMPTIES stale groups (a group
+        referenced by a rule/policy can't be deleted; an empty group matches
+        nothing).
 
-    def _chunk_name(self, index: int) -> str:
-        return f"{self.group_prefix}-{self.tier}-{index}"
-
-    def sync(self, values: List[str]) -> Dict:
-        """Reconcile the chunk groups with `values`. Creates missing groups,
-        updates changed ones, leaves identical ones alone, and EMPTIES stale
-        trailing chunks (a group referenced by a rule can't be deleted; an
-        empty group matches nothing)."""
+        Both arms share this: the IP arm labels groups {prefix}-{tier}
+        (address-group), the domain arm {prefix}-dom-{tier} (domain-group —
+        the Domain-type Network List on current firmware, same API). Stale
+        detection is scoped to the arm's OWN group_type, so the IP pass can
+        never empty the domain lists and vice versa, while still covering
+        both shrinkage and tier switches within an arm."""
+        label = label or self.tier
         chunks = [values[i:i + self.max_per_group]
                   for i in range(0, len(values), self.max_per_group)] or [[]]
         groups = {g.get('name'): g for g in self._api('GET', '/rest/firewallgroup')}
 
         created = updated = unchanged = emptied = 0
+        current = {f"{self.group_prefix}-{label}-{i}" for i in range(1, len(chunks) + 1)}
         for idx, chunk in enumerate(chunks, 1):
-            name = self._chunk_name(idx)
+            name = f"{self.group_prefix}-{label}-{idx}"
             existing = groups.get(name)
             if existing is None:
                 self._api('POST', '/rest/firewallgroup', json={
                     "name": name,
-                    "group_type": "address-group",
+                    "group_type": group_type,
                     "group_members": chunk,
                 })
                 created += 1
@@ -286,15 +263,10 @@ class UniFiPusher:
             else:
                 unchanged += 1
 
-        # Any OTHER group under our prefix that still has members is stale:
-        # trailing chunks from a previously-larger set, AND the whole group
-        # set of a previously-selected tier (switching medium->high must not
-        # leave threatfeedme-medium-* silently blocking the old list).
-        # Empty, never delete: a group referenced by a rule refuses deletion,
-        # and an empty group matches nothing.
-        current = {self._chunk_name(i) for i in range(1, len(chunks) + 1)}
         marker = f"{self.group_prefix}-"
         for name, g in groups.items():
+            if g.get('group_type') != group_type:
+                continue  # the other arm's groups are not ours to touch
             if not (name or "").startswith(marker) or name in current:
                 continue
             if g.get('group_members') or []:
@@ -369,15 +341,21 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
         "%d created, %d updated, %d unchanged, %d emptied",
         summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
         summary["created"], summary["updated"], summary["unchanged"], summary["emptied"])
-    # Domain arm: optional, and isolated — a content-filter failure (e.g.
-    # the profile doesn't exist yet) must not roll back or hide the IP push
-    # that just succeeded. Its error is carried in the summary instead.
+    # Domain arm: optional, and isolated — a domain-list failure must not
+    # roll back or hide the IP push that just succeeded. Its error is
+    # carried in the summary instead.
     if pusher.domain_tier:
         try:
-            summary["domains"] = pusher.sync_domains(pusher.collect_domains(db))
-            logger.info("[unifi] domain push: %d domains into profile '%s' (%s)",
-                        summary["domains"]["domains"], summary["domains"]["profile"],
-                        "updated" if summary["domains"]["updated"] else "unchanged")
+            summary["domains"] = pusher.sync(
+                pusher.collect_domains(db),
+                label=f"dom-{pusher.domain_tier}",
+                group_type="domain-group")
+            d = summary["domains"]
+            logger.info(
+                "[unifi] domain push: %d domains into %d list(s) [%s-dom-%s-*]: "
+                "%d created, %d updated, %d unchanged, %d emptied",
+                d["entries"], d["groups"], pusher.group_prefix, pusher.domain_tier,
+                d["created"], d["updated"], d["unchanged"], d["emptied"])
         except Exception as e:
             summary["domain_error"] = str(e)
             logger.error("[unifi] domain push failed (IP push succeeded): %s", e)

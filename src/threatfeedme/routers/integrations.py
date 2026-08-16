@@ -43,10 +43,9 @@ def _status() -> dict:
         "host": block.get("host") or "",
         "site": block.get("site", "default"),
         "tier": block.get("tier", "high"),
-        # "" = domain push off; else the domain tier pushed into the
-        # operator-created Content Filtering profile.
+        # "" = domain push off; else the domain tier pushed into
+        # Domain-type network lists ({prefix}-dom-{tier}-1..N).
         "domain_tier": block.get("domain_tier", ""),
-        "content_profile": block.get("content_profile", "threatfeedme"),
         "group_prefix": block.get("group_prefix", "threatfeedme"),
         # Presence only — the values are write-only by design.
         "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD)),
@@ -67,7 +66,6 @@ class UniFiSettingsRequest(BaseModel):
     tier: Optional[str] = None
     # "" turns the domain arm off (the default).
     domain_tier: Optional[str] = None
-    content_profile: Optional[str] = None
 
 
 @router.post("/api/integrations/unifi")
@@ -90,7 +88,7 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
             stored = json.loads(raw) or {}
     except Exception:
         stored = {}
-    for field in ("enabled", "host", "site", "tier", "domain_tier", "content_profile"):
+    for field in ("enabled", "host", "site", "tier", "domain_tier"):
         value = getattr(request, field)
         if value is not None:
             stored[field] = value.strip() if isinstance(value, str) else value
