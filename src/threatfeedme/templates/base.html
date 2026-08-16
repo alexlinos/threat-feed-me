@@ -6,7 +6,12 @@
     <meta name="color-scheme" content="dark">
     <title>{% block title %}Threat Feed Me!{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/app.css">
+    {# ?v= cache-buster: StaticFiles sends no Cache-Control, so browsers use
+       heuristic freshness and happily keep serving a stale app.js after an
+       upgrade — new server-rendered HTML calling JS functions that don't
+       exist in the cached file. Click does nothing, no error a user would
+       see. Versioning the URL invalidates on every release. #}
+    <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
 </head>
 <body>
 <div class="container">
@@ -22,6 +27,6 @@
     <footer>Generated {{ generated_at }} · Threat Feed Me! v{{ app_version }}</footer>
 </div>
 {% block modals %}{% endblock %}
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{ app_version }}"></script>
 </body>
 </html>
