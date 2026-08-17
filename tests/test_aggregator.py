@@ -2356,3 +2356,58 @@ def test_honeydb_rejects_non_list_response(db, monkeypatch):
                         lambda url, headers: _FakeHoneyDBResponse('{"status": "error"}'))
     with pytest.raises(RuntimeError, match="response shape"):
         ing.fetch_feed(_honeydb_feed())
+
+
+# ------------------------------------------------------ 429 retry policy ----
+
+class _CodeResponse:
+    def __init__(self, code, headers=None):
+        self.status_code = code
+        self.headers = headers or {}
+        self.closed = False
+    def close(self):
+        self.closed = True
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"{self.status_code}")
+
+
+def test_429_is_retried_honoring_retry_after(db, monkeypatch):
+    """GitHub raw rate-limits per source IP and a refresh burst trips it
+    (live-observed: hagezi 429'd hourly on prod). 429 is 'try again later',
+    not a permanent client error — retry it, honoring Retry-After."""
+    import threatfeedme.feed_ingestor as fi
+    sleeps = []
+    monkeypatch.setattr(fi, "_sleep", lambda s: sleeps.append(s))
+    responses = [_CodeResponse(429, {"Retry-After": "7"}), _CodeResponse(200)]
+    ing = FeedIngestor(db)
+    monkeypatch.setattr(ing, "_get_following_redirects",
+                        lambda url, headers: responses.pop(0))
+    r = ing._get_with_retries("https://example.com/feed.txt", {})
+    assert r.status_code == 200
+    assert sleeps == [7]          # Retry-After honored, not the default backoff
+
+
+def test_429_retry_after_is_capped_and_final_attempt_raises(db, monkeypatch):
+    import threatfeedme.feed_ingestor as fi
+    sleeps = []
+    monkeypatch.setattr(fi, "_sleep", lambda s: sleeps.append(s))
+    responses = [_CodeResponse(429, {"Retry-After": "99999"}),
+                 _CodeResponse(429), _CodeResponse(429)]
+    ing = FeedIngestor(db)
+    monkeypatch.setattr(ing, "_get_following_redirects",
+                        lambda url, headers: responses.pop(0))
+    with pytest.raises(requests.exceptions.HTTPError):
+        ing._get_with_retries("https://example.com/feed.txt", {})
+    # hostile Retry-After capped; missing header falls back to backoff
+    assert sleeps[0] == fi._RETRY_AFTER_CAP
+    assert len(sleeps) == 2       # no sleep after the final failing attempt
+
+
+def test_other_4xx_still_fails_immediately(db, monkeypatch):
+    import threatfeedme.feed_ingestor as fi
+    monkeypatch.setattr(fi, "_sleep", lambda s: pytest.fail("must not retry 404"))
+    ing = FeedIngestor(db)
+    monkeypatch.setattr(ing, "_get_following_redirects",
+                        lambda url, headers: _CodeResponse(404))
+    assert ing._get_with_retries("https://example.com/x.txt", {}).status_code == 404

@@ -268,3 +268,19 @@ Things that CHANGED vs. the design above, for whoever reads it later:
   0.0.0.0/0 are accepted in the whitelist (no-PSL is ratified D4; the
   whitelist is the operator's own gun). Rescore peak memory ~200 MB at
   280k rows: acceptable, revisit if the corpus grows.
+
+## v2.2.0: ops pulse row + 429 retry
+
+- Stat cards returned as the "ops pulse" row: feeds-healthy (amber + names
+  the first problem feed), last-refresh age (amber when overdue 2x
+  interval), new-in-24h split by kind, overrides (zero state reads "pure
+  feed consensus"), UniFi push status (renders ONLY when push is
+  configured). Deliberately carries no corpus sizes: the matrix owns those,
+  which is why the original tiles were retired.
+- 429 is now retried honoring Retry-After (capped at 120s;
+  _RETRY_AFTER_CAP). GitHub raw rate-limits per source IP and refresh
+  bursts across several raw.githubusercontent feeds tripped it hourly on
+  prod (hagezi). Other 4xx still fail immediately.
+- Dashboard how-to now covers WHERE the FortiGate domain connector gets
+  used (DNS Filter profile, Threat Feeds category group) and the External
+  IP Block Lists bonus: Alex had to ask, nobody else should.

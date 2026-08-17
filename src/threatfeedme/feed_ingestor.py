@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 # _sleep is a module attribute so tests can stub out the real backoff delays.
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (2, 4)
+# Cap honored Retry-After values so a hostile server can't pin the
+# refresh thread for hours with one header.
+_RETRY_AFTER_CAP = 120
 _sleep = time.sleep
 
 # Redirects are followed manually (not by requests) so that every hop — not
@@ -334,27 +337,44 @@ class FeedIngestor:
     def _get_with_retries(self, url: str, headers: Dict[str, str]) -> requests.Response:
         """GET with up to _MAX_ATTEMPTS attempts on transient failures.
 
-        Only 5xx responses, timeouts, and connection errors are retried;
-        client errors (4xx) fail immediately since repeating them cannot
-        succeed and just hammers the feed operator. The final attempt's
-        failure propagates unchanged so callers' error handling stays the
-        same."""
+        5xx responses, timeouts, connection errors, and 429 are retried;
+        other client errors (4xx) fail immediately since repeating them
+        cannot succeed and just hammers the feed operator. 429 is the one
+        client error that is explicitly "try again later" — GitHub raw
+        rate-limits per source IP, and a refresh burst across several
+        raw.githubusercontent-hosted feeds trips it (live-observed on prod:
+        hagezi 429'd hourly while the same URL fetched fine elsewhere). Its
+        Retry-After header is honored, capped so a hostile server can't
+        pin the refresh thread. The final attempt's failure propagates
+        unchanged so callers' error handling stays the same."""
         for attempt in range(1, _MAX_ATTEMPTS + 1):
+            retry_after = None
             try:
                 response = self._get_following_redirects(url, headers)
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 if attempt == _MAX_ATTEMPTS:
                     raise
             else:
-                if response.status_code < 500:
+                if response.status_code == 429:
+                    if attempt == _MAX_ATTEMPTS:
+                        response.raise_for_status()
+                    try:
+                        retry_after = min(int(response.headers.get('Retry-After', '')),
+                                          _RETRY_AFTER_CAP)
+                    except (ValueError, TypeError):
+                        retry_after = None
+                    response.close()
+                elif response.status_code < 500:
                     return response
-                if attempt == _MAX_ATTEMPTS:
+                elif attempt == _MAX_ATTEMPTS:
                     response.raise_for_status()
-                # Release the discarded 5xx response's pooled connection
-                # before retrying.
-                response.close()
+                else:
+                    # Release the discarded 5xx response's pooled connection
+                    # before retrying.
+                    response.close()
 
-            delay = _BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS)) - 1]
+            delay = retry_after if retry_after is not None else \
+                _BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS)) - 1]
             logger.warning(
                 f"Transient failure fetching {url} "
                 f"(attempt {attempt}/{_MAX_ATTEMPTS}); retrying in {delay}s"

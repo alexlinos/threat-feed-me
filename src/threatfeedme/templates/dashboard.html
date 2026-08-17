@@ -2,6 +2,39 @@
 {% block subtitle %}Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.{% endblock %}
 
 {% block content %}
+    {# Ops pulse row: health / freshness / velocity / overrides / push. No
+       corpus sizes here — the matrix owns those (the old tiles died for
+       duplicating them). UniFi card renders only when push is configured. #}
+    <div class="stats pulse">
+        <div class="stat{% if pulse.first_problem %} warn{% endif %}">
+            <div class="n">{{ pulse.feeds_healthy }}<small> / {{ pulse.feeds_total }}</small></div>
+            <div class="l">Feeds healthy</div>
+            <div class="sub">{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% else %}all feeds reporting{% endif %}</div>
+        </div>
+        <div class="stat{% if pulse.refresh_overdue %} warn{% endif %}">
+            <div class="n">{% if pulse.refresh_age_min is not none %}{{ pulse.refresh_age_min }}m<small> ago</small>{% else %}—{% endif %}</div>
+            <div class="l">Last refresh</div>
+            <div class="sub">{% if pulse.refresh_overdue %}overdue{% elif pulse.refresh_next_min is not none %}next in ~{{ pulse.refresh_next_min }}m{% else %}first fetch pending{% endif %}</div>
+        </div>
+        <div class="stat">
+            <div class="n">+{{ '{:,}'.format(pulse.new24_ip + pulse.new24_domain) }}</div>
+            <div class="l">New in 24h</div>
+            <div class="sub"><span class="k-ip">{{ '{:,}'.format(pulse.new24_ip) }} IPs</span> · <span class="k-dom">{{ '{:,}'.format(pulse.new24_domain) }} domains</span></div>
+        </div>
+        <div class="stat">
+            <div class="n">{{ pulse.whitelist_count }}{% if pulse.fp_total %}<small> · {{ pulse.fp_total }} FP</small>{% endif %}</div>
+            <div class="l">Overrides</div>
+            <div class="sub">{% if pulse.whitelist_count or pulse.fp_total %}human judgment applied{% else %}pure feed consensus{% endif %}</div>
+        </div>
+        {% if pulse.unifi %}
+        <div class="stat{% if pulse.unifi.ok is sameas false %} warn{% endif %}">
+            <div class="n">{% if pulse.unifi.ok %}✓{% elif pulse.unifi.ok is sameas false %}✗{% else %}—{% endif %}{% if pulse.unifi.age_min is not none %}<small> {{ pulse.unifi.age_min }}m ago</small>{% endif %}</div>
+            <div class="l">UniFi push</div>
+            <div class="sub">{{ pulse.unifi.tier }} tier</div>
+        </div>
+        {% endif %}
+    </div>
+
     <h2>Firewall feed URLs</h2>
     {# FEED MATRIX (D2 revised): rows = tiers, columns = kinds. The stat-tile
        row is retired — each cell carries its URL and the count it serves
@@ -46,7 +79,7 @@
     <details class="howto">
         <summary><b>How to use these</b>: per-firewall instructions</summary>
         <ul>
-            <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL.</li>
+            <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL. IP connectors are used as address objects in firewall policies. Domain connectors are used in <b>DNS Filter profiles</b>: Security Profiles → DNS Filter → the connector appears in the category table under the <i>Threat Feeds</i> group (top or bottom of the list depending on firmware) → set it to <i>Redirect to Block Portal</i>, then apply the profile to the policy carrying client DNS. Bonus: adding the IP connector under the same profile's <i>External IP Block Lists</i> also blocks lookups whose answers resolve to blocked IPs.</li>
             <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL.</li>
             <li><b>SonicWall</b> (SonicOS 7): Object → Match Objects → Dynamic External Object → protocol <i>HTTPS</i>, paste the URL; use the created address group in a rule.</li>
             <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>

@@ -45,6 +45,12 @@ h2::before { content:"// "; color:var(--accent-hi); }
 .stat { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
          padding:12px 18px; min-width:130px; }
 .stat .n { font-family:var(--mono); font-size:1.45em; font-weight:600; color:var(--accent-hi); }
+.stat.warn { border-color:rgba(251,191,36,.45); }
+.stat.warn .n { color:var(--amber); }
+.stat .sub { color:var(--dim); font-size:.72em; margin-top:2px; font-family:var(--mono); }
+.stat .n small { font-size:.6em; color:var(--muted); font-weight:400; }
+.pulse .k-ip { color:var(--accent-hi); }
+.pulse .k-dom { color:var(--purple, #c084fc); }
 .stat .l { color:var(--muted); font-size:.72em; text-transform:uppercase; letter-spacing:.08em; margin-top:2px; }
 
 .feed-card { background:var(--card); border:1px solid var(--line);

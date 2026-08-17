@@ -1,4 +1,5 @@
 """The HTML dashboard page plus stats, settings, backup, and rescore endpoints."""
+import json
 import os
 from datetime import datetime, timezone
 
@@ -12,7 +13,8 @@ from threatfeedme.exporter import is_included
 from threatfeedme.feed_helpers import TIER_FEEDS, _feed_base
 from threatfeedme.models import (ALL_FEEDS, ConfidenceTier, CUMULATIVE_TIERS,
                                  FeedType, WHITELIST_REASONS)
-from threatfeedme.scheduler import REFRESH_INTERVAL_KEY, _refresh_interval_minutes, _run_backup
+from threatfeedme.scheduler import (REFRESH_INTERVAL_KEY, _refresh_interval_minutes,
+                                    _refresh_state, _run_backup)
 from threatfeedme.pipeline import RETENTION_MAX_AGE_KEY, retention_max_age_days
 from threatfeedme.schemas import SettingsRequest
 from threatfeedme.scorer import fp_penalty_factor, FP_DEGRADED_FACTOR
@@ -234,8 +236,65 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "entry_count": total_inds[kind],
         })
 
+    # ---- Ops pulse row ----
+    # Five glanceable answers: anything broken / data fresh / what arrived /
+    # what am I overriding / did it reach the gateway. Deliberately carries
+    # NO corpus sizes — the matrix below owns those (the old stat tiles died
+    # for duplicating them).
+    enabled_tele = [r for r in telemetry["rows"] if r["enabled"]]
+    problem_rows = [r for r in enabled_tele if r["health"]["state"] in ("error", "stale")]
+    interval_min = _refresh_interval_minutes()
+    refresh_age_min = refresh_next_min = None
+    refresh_overdue = False
+    last_fin = _refresh_state.get("last_finished")
+    if last_fin:
+        try:
+            fin = datetime.fromisoformat(last_fin)
+            if fin.tzinfo is None:
+                fin = fin.replace(tzinfo=timezone.utc)
+            refresh_age_min = max(0, int((datetime.now(timezone.utc) - fin).total_seconds() // 60))
+            refresh_next_min = max(0, interval_min - refresh_age_min)
+            refresh_overdue = refresh_age_min > 2 * interval_min
+        except (ValueError, TypeError):
+            pass
+    fp_total = sum(fp_counts.values())
+    unifi_pulse = None
+    from threatfeedme import pusher_unifi
+    if pusher_unifi.push_ready(core.db, core.config):
+        push_age_min = push_ok = None
+        try:
+            raw = core.db.get_setting(pusher_unifi.LAST_PUSH_KEY)
+            if raw:
+                outcome = json.loads(raw)
+                push_ok = not outcome.get("error")
+                at = datetime.fromisoformat(outcome["at"])
+                if at.tzinfo is None:
+                    at = at.replace(tzinfo=timezone.utc)
+                push_age_min = max(0, int((datetime.now(timezone.utc) - at).total_seconds() // 60))
+        except (ValueError, TypeError, KeyError):
+            pass
+        unifi_pulse = {
+            "ok": push_ok,
+            "age_min": push_age_min,
+            "tier": pusher_unifi.effective_block(core.db, core.config).get("tier", "high"),
+        }
+    pulse = {
+        "feeds_total": len(enabled_tele),
+        "feeds_healthy": len(enabled_tele) - len(problem_rows),
+        "first_problem": problem_rows[0]["name"] if problem_rows else None,
+        "refresh_age_min": refresh_age_min,
+        "refresh_next_min": refresh_next_min,
+        "refresh_overdue": refresh_overdue,
+        "new24_ip": sum((r["new"] or 0) for r in enabled_tele if r["kind"] == "ip"),
+        "new24_domain": sum((r["new"] or 0) for r in enabled_tele if r["kind"] == "domain"),
+        "whitelist_count": len(core.db.get_whitelist()),
+        "fp_total": fp_total,
+        "unifi": unifi_pulse,
+    }
+
     return core.templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
+        "pulse": pulse,
         "telemetry": telemetry,
         "feed_base": feed_base,
         "matrix_rows": matrix_rows,

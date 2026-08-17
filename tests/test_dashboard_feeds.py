@@ -749,6 +749,19 @@ def test_multivar_api_key_set_status_and_gate(client, monkeypatch):
             os.environ.pop(v, None)
 
 
+def test_ops_pulse_row(client):
+    """The pulse row answers health/freshness/velocity/overrides at a glance
+    and must NOT duplicate matrix sizes. UniFi card renders only when the
+    push integration is configured (it isn't, in this fixture)."""
+    body = client.get("/").text
+    for label in ("Feeds healthy", "Last refresh", "New in 24h", "Overrides"):
+        assert label in body
+    assert "UniFi push" not in body           # hidden unless configured
+    # fixture has one whitelist entry -> the zero-state line must NOT show
+    assert "human judgment applied" in body
+    assert "pure feed consensus" not in body
+
+
 # ==================== CSRF protection tests ====================
 
 
