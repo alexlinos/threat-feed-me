@@ -166,7 +166,9 @@ async function startRefresh(name, initiator) {
     // it's clear something is happening even when scrolled down the page.
     refreshBtn = btn;
     refreshBtnHtml = btn.innerHTML;
-    btn.innerHTML = 'Refreshing<span class="loading-dots"><i></i><i></i><i></i></span>';
+    // The brand eats while it works: chomper + prey replaces the plain
+    // marching dots (chomper inherits the button's dark text color).
+    btn.innerHTML = 'Feeding<span class="feeding"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span></span>';
     btn.classList.add('refreshing');
     btn.disabled = true;
     if (globalBtn !== btn) globalBtn.disabled = true;  // block the toolbar button too

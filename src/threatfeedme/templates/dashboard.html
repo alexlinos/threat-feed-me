@@ -57,7 +57,7 @@
             <div class="mx-cell-head">
                 <span class="kind-chip kind-{{ kind }}">{{ 'IP' if kind == 'ip' else 'Domain' }}</span>
                 <span class="feed-count" title="{{ '{:,}'.format(cell.count) }} entries served by this URL right now">
-                    {% if cell.processing %}<span class="processing">Processing…</span>
+                    {% if cell.processing %}<span class="feeding" title="First fetch for this feed kind is running"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span>Feeding…</span>
                     {% else %}<span class="count-full">{{ '{:,}'.format(cell.count) }}</span><span class="count-compact">{{ cell.compact }}</span> entries{% endif %}
                 </span>
             </div>
