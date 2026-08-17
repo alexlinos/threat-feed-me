@@ -174,7 +174,15 @@ async function startRefresh(name, initiator) {
     if (globalBtn !== btn) globalBtn.disabled = true;  // block the toolbar button too
     const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
     const r = await apiFetch(url, {method:'POST'});
-    if (r.status === 409) { status.textContent = 'A refresh is already running…'; }
+    if (r.status === 409) {
+        // Rejected, not queued: another refresh (often the container's
+        // startup fetch of every feed) holds the lock. Restore the button
+        // immediately — leaving it "Feeding" would claim THIS refresh is
+        // running — and keep polling so the page reloads when the other
+        // refresh finishes and the operator can retry.
+        endRefreshUi();
+        status.textContent = 'Another refresh is already running (this one was not queued) — retry when it finishes.';
+    }
     else { status.textContent = 'Refreshing' + (name ? ' ' + name : ' all feeds') + '… this can take a minute.'; }
     pollRefresh();
 }

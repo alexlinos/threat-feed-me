@@ -90,12 +90,13 @@ h2::before { content:"// "; color:var(--accent-hi); }
 .feeding .prey i:nth-child(2) { animation-delay:.5s; }
 .feeding .prey i:nth-child(3) { animation-delay:1s; }
 @keyframes prey-march { from { left:30px; opacity:1; } 92% { opacity:1; } to { left:-2px; opacity:0; } }
-.btn .feeding { color:inherit; font-size:1em; gap:5px; margin-left:8px; }
+.btn .feeding, .mini-btn .feeding { color:inherit; font-size:1em; gap:5px; margin-left:8px; }
+.mini-btn .feeding .chomp { width:11px; height:10px; }
+.mini-btn .feeding .chomp i, .mini-btn .feeding .chomp b { width:11px; height:5px; }
 @media (prefers-reduced-motion: reduce) {
   .feeding .chomp i, .feeding .chomp b, .feeding .prey i { animation:none; }
   .feeding .prey { display:none; }
   .feeding { animation:pulse 1.8s ease-in-out infinite; }
-}
 }
 .rec { background:rgba(16,185,129,.12); color:var(--accent-hi); font-size:.68em; font-weight:600;
         border:1px solid rgba(16,185,129,.35); padding:2px 8px; border-radius:3px;
