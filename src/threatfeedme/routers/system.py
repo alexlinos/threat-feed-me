@@ -77,6 +77,82 @@ def _compact(n: int) -> str:
     return f"{n:,}"
 
 
+_OUTPUTS_CONTAINING = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
+                                if t in members)
+                       for t in ConfidenceTier}
+
+
+def _served_counts(db, wl_map):
+    """(served, total_inds) per kind for the feed matrix.
+
+    Fast path: whitelists are rare and small, the corpus is not — so count
+    the corpus in SQL (one aggregation) and apply whitelist exclusions as
+    per-entry corrections against indexed single-row lookups. Walking 600k+
+    rows through Python is_included checks took ~10s per dashboard view on
+    prod once the domain corpus landed.
+
+    CIDR whitelist rules can exclude unbounded rows, so their presence
+    falls back to the exact full walk. Both paths must agree — there is a
+    parity test."""
+    # CIDR and wildcard-domain rules can each exclude unbounded rows —
+    # either forces the exact walk.
+    if getattr(wl_map, "cidr_rules", None) or getattr(wl_map, "wildcard_rules", None):
+        return _served_counts_walk(db, wl_map)
+
+    raw = db.get_tier_kind_counts()
+    served = {k: {t.value: 0 for t in ConfidenceTier} for k in ("ip", "domain")}
+    served["ip"]["all"] = served["domain"]["all"] = 0
+    total_inds = {"ip": 0, "domain": 0}
+    for (kind, tier), n in raw.items():
+        kind = kind if kind in served else "ip"
+        total_inds[kind] += n
+        served[kind]["all"] += n
+        try:
+            tier_enum = ConfidenceTier(tier)
+        except ValueError:
+            continue
+        for out in _OUTPUTS_CONTAINING[tier_enum]:
+            served[kind][out.value] += n
+
+    # Corrections: each whitelisted value is at most one indicator row
+    # (indexed lookup). Recompute its true inclusion and subtract what the
+    # raw counts credited.
+    seen = set()
+    for entry in db.get_whitelist():
+        ip = entry.ip
+        if ip in seen or "/" in ip:
+            continue
+        seen.add(ip)
+        ind = db.get_indicator(ip)
+        if ind is None:
+            continue
+        kind = ind.kind if ind.kind in served else "ip"
+        if not is_included(ind, wl_map):
+            served[kind]["all"] -= 1
+        for out in _OUTPUTS_CONTAINING[ind.tier]:
+            if not is_included(ind, wl_map, tier=out):
+                served[kind][out.value] -= 1
+    return served, total_inds
+
+
+def _served_counts_walk(db, wl_map):
+    """Exact full walk (the original path); kept for CIDR whitelist rules
+    and as the parity oracle for the fast path."""
+    served = {k: {t.value: 0 for t in ConfidenceTier} for k in ("ip", "domain")}
+    served["ip"]["all"] = served["domain"]["all"] = 0
+    total_inds = {"ip": 0, "domain": 0}
+    for i in db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
+        kind = i.kind if i.kind in served else "ip"
+        total_inds[kind] += 1
+        if not is_included(i, wl_map):
+            continue
+        served[kind]["all"] += 1
+        for out in _OUTPUTS_CONTAINING[i.tier]:
+            if is_included(i, wl_map, tier=out):
+                served[kind][out.value] += 1
+    return served, total_inds
+
+
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, _=Depends(require_auth)):
     """Main dashboard page.
@@ -103,21 +179,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # CUMULATIVE_TIERS; tier-scoped whitelist exclusions apply per output.
     # Streamed, not materialized: a full-table model list on every dashboard
     # view was one of the allocations that OOMed 2 GB deployments.
-    outputs_containing = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
-                                   if t in members)
-                          for t in ConfidenceTier}
-    served = {k: {t.value: 0 for t in ConfidenceTier} for k in ("ip", "domain")}
-    served["ip"]["all"] = served["domain"]["all"] = 0
-    total_inds = {"ip": 0, "domain": 0}
-    for i in core.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
-        kind = i.kind if i.kind in served else "ip"
-        total_inds[kind] += 1
-        if not is_included(i, wl_map):
-            continue
-        served[kind]["all"] += 1
-        for out in outputs_containing[i.tier]:
-            if is_included(i, wl_map, tier=out):
-                served[kind][out.value] += 1
+    served, total_inds = _served_counts(core.db, wl_map)
 
     # ---- Feed matrix (the hero of the page; D2 revised) ----
     # Rows = tiers, columns = kinds; each cell is a URL + the count it serves.

@@ -762,6 +762,38 @@ def test_ops_pulse_row(client):
     assert "pure feed consensus" not in body
 
 
+def test_matrix_count_fast_path_matches_walk(client):
+    """The dashboard's SQL fast path and the exact full walk must agree for
+    every non-CIDR/non-wildcard whitelist shape (global, tier-scoped,
+    feed-scoped, and missing-row entries)."""
+    from threatfeedme import dashboard
+    from threatfeedme.routers.system import _served_counts, _served_counts_walk
+    db = dashboard.db
+    db.add_indicator("198.18.40.1", "spamhaus_drop", {})
+    db.add_indicator("198.18.40.2", "spamhaus_drop", {})
+    db.add_indicator("198.18.40.2", "custom_honeypot", {})
+    client.post("/api/whitelist", json={"ip": "198.18.40.1", "feed_name": "*",
+                                        "reason_code": "other", "reason": "t"})
+    client.post("/api/whitelist", json={"ip": "198.18.40.2", "feed_name": "tier:high",
+                                        "reason_code": "other", "reason": "t"})
+    client.post("/api/whitelist", json={"ip": "203.0.113.250", "feed_name": "*",
+                                        "reason_code": "other", "reason": "no such row"})
+    try:
+        wl_map = db.get_whitelist_map()
+        # The shared fixture accumulates CIDR rules from other tests; strip
+        # range rules so BOTH paths see the same exact-only rule set and the
+        # fast path activates (its precondition).
+        wl_map.cidr_rules = []
+        wl_map.wildcard_rules = []
+        fast = _served_counts(db, wl_map)
+        walk = _served_counts_walk(db, wl_map)
+        assert fast == walk
+    finally:
+        for ip, feed in (("198.18.40.1", "*"), ("198.18.40.2", "tier:high"),
+                         ("203.0.113.250", "*")):
+            client.delete(f"/api/whitelist?ip={ip}&feed={feed}")
+
+
 # ==================== CSRF protection tests ====================
 
 

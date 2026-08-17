@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "threat-feed-me"
-version = "2.2.1"
+version = "2.2.2"
 description = "Threat Feed Me!: a threat feed aggregator with a firewall-facing dashboard."
 readme = "README.md"
 license = { text = "MIT" }

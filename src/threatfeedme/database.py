@@ -315,6 +315,10 @@ class Database:
                     pass
 
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_ip ON indicators(ip)")
+            # The indicators page orders by score with LIMIT/OFFSET; without
+            # this index every page request re-sorts the whole table (multi-
+            # second at 600k+ rows, live-observed struggling on prod).
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_score ON indicators(confidence_score DESC, ip)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
@@ -938,6 +942,18 @@ class Database:
                 (since,),
             )
             return {r['source_name']: r['n'] for r in cur.fetchall()}
+
+    def get_tier_kind_counts(self) -> Dict:
+        """{(kind, tier): count} in one SQL aggregation. The dashboard's
+        matrix-count fast path: counting 600k+ rows in C instead of walking
+        them through Python whitelist checks (which took ~10s per page view
+        on prod once the domain corpus landed)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(kind, 'ip') AS k, tier, COUNT(*) AS n "
+                "FROM indicators GROUP BY k, tier"
+            )
+            return {(r['k'], r['tier']): r['n'] for r in cur.fetchall()}
 
     def get_feed_overlap(self) -> List[Dict[str, Any]]:
         """Pairwise overlap: how many indicators each pair of feeds both

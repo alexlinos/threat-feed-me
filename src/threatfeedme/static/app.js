@@ -209,9 +209,22 @@ async function restoreDefaults() {
 let indOffset = 0, indTotal = 0;
 const IND_LIMIT = 50;
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+let indAbort = null;
 async function loadIndicators() {
+    // Abort the in-flight request when a newer one starts: at large corpus
+    // sizes each query is real server work, and a fast typer otherwise
+    // stacks them up server-side while the UI shows stale results.
+    if (indAbort) indAbort.abort();
+    indAbort = new AbortController();
     const q = document.getElementById('ind-q').value.trim();
-    const r = await fetch('/api/indicators?limit=' + IND_LIMIT + '&offset=' + indOffset + (q ? '&q=' + encodeURIComponent(q) : ''));
+    let r;
+    try {
+        r = await fetch('/api/indicators?limit=' + IND_LIMIT + '&offset=' + indOffset + (q ? '&q=' + encodeURIComponent(q) : ''),
+                        {signal: indAbort.signal});
+    } catch (e) {
+        if (e.name === 'AbortError') return;  // superseded by a newer search
+        throw e;
+    }
     const j = await r.json();
     indTotal = j.total;
     const body = document.getElementById('ind-body');
