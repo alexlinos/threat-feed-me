@@ -170,6 +170,7 @@ async function startRefresh(name, initiator) {
     // marching dots (chomper inherits the button's dark text color).
     btn.innerHTML = 'Feeding<span class="feeding"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span></span>';
     btn.classList.add('refreshing');
+    setBrandState('running');
     btn.disabled = true;
     if (globalBtn !== btn) globalBtn.disabled = true;  // block the toolbar button too
     const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
@@ -196,14 +197,41 @@ function endRefreshUi() {
         refreshBtn = null;
     }
 }
+// Names of feeds that errored in a refresh result map ({feed: {status,...}}).
+function failedFeeds(lastResult) {
+    return Object.entries(lastResult || {})
+        .filter(([, v]) => v && v.status === 'error')
+        .map(([name]) => name);
+}
+// Header mascot state: '' = idle (still), 'running' = feeding, 'error' = attention.
+function setBrandState(state) {
+    const logo = document.querySelector('.logo-mark');
+    if (!logo) return;
+    logo.classList.toggle('brand-running', state === 'running');
+    logo.classList.toggle('brand-error', state === 'error');
+}
 async function pollRefresh() {
     const status = document.getElementById('refresh-status');
     const r = await fetch('/api/refresh/status');
     const j = await r.json();
-    if (j.running) { setTimeout(pollRefresh, 2000); return; }
+    if (j.running) { setBrandState('running'); setTimeout(pollRefresh, 2000); return; }
     endRefreshUi();
-    status.textContent = j.last_error ? ('Last refresh error: ' + j.last_error) : 'Refresh complete.';
-    if (!j.last_error) setTimeout(() => reloadPage(), 800);
+    if (j.last_error) {
+        status.textContent = 'Last refresh error: ' + j.last_error;
+        setBrandState('error');
+        return;
+    }
+    // A refresh completes even when individual feeds error (one flaky feed must
+    // not fail the whole cycle) — name them instead of a bare "complete".
+    const failed = failedFeeds(j.last_result);
+    status.textContent = failed.length
+        ? ('Refresh complete — ' + failed.length + ' feed' + (failed.length > 1 ? 's' : '') +
+           ' errored: ' + failed.join(', '))
+        : 'Refresh complete.';
+    setBrandState(failed.length ? 'error' : '');
+    // Reload either way so the table (health badges, "needs attention" flags)
+    // reflects the run; linger longer when there's an error to read.
+    setTimeout(() => reloadPage(), failed.length ? 4000 : 800);
 }
 async function restoreDefaults() {
     if (!confirm('Re-add the curated default feeds that are currently missing?')) return;
@@ -395,8 +423,11 @@ function updateRefreshPulse() {
             n.innerHTML = '<span class="feeding"><span class="chomp"><i></i><b></b></span></span>';
             sub.textContent = 'refresh running now';
             card.classList.remove('warn');
+            setBrandState('running');
             return;
         }
+        // Idle: mascot reflects whether the last completed run had a feed error.
+        setBrandState(failedFeeds(j.last_result).length ? 'error' : '');
         if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
         const ageMin = Math.max(0, Math.floor((Date.now() - Date.parse(j.last_finished)) / 60000));
         const interval = parseInt(card.dataset.intervalMin, 10) || 60;

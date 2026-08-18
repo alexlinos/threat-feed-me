@@ -159,9 +159,9 @@
                 {{ '{:,}'.format(g.entry_count) }} distinct indicators</span>
             </td></tr>
             {% for row in feed_rows if row.kind == g.kind %}
-            <tr{% if not row.enabled %} class="row-off"{% endif %}>
+            <tr class="{% if not row.enabled %}row-off{% endif %}{% if row.problem %} row-problem{% endif %}">
                 <td>
-                    <b>{{ row.name }}</b>
+                    <b>{{ row.name }}</b>{% if row.problem %} <span class="reorder-flag" title="Sorted to the top of its group because this feed needs attention (see the last error)">↑ needs attention</span>{% endif %}
                     <div class="feed-url" title="{{ row.url }}">{{ row.url }}</div>
                     <div class="muted">{{ row.feed_type }} · {{ row.source_kind }} · w={{ row.weight }}</div>
                 </td>

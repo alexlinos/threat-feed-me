@@ -26,8 +26,17 @@ body { font-family: "Inter Tight", Inter, system-ui, "Segoe UI", Roboto, Arial, 
 h1 { font-size:1.7em; font-weight:700; letter-spacing:.02em; margin:0 0 4px;
      display:flex; align-items:center; gap:12px; }
 .logo-mark { width:30px; height:30px; flex:none; }
-.logo-mark .prey { animation:pulse 2.4s ease-in-out infinite; }
+/* Brand mascot conveys refresh state (class set by app.js on .logo-mark):
+   idle = still, running = the prey pulses ("feeding"), error = amber + faster.
+   Idle is deliberately motionless so perpetual motion doesn't read as "stuck". */
+.logo-mark.brand-running .prey { animation:pulse 1.6s ease-in-out infinite; }
+.logo-mark.brand-error .prey { fill:var(--amber); animation:pulse 1s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+/* A feed floated to the top of its group because it needs attention (mirrors
+   the sort key in system.py). The chip makes the reason for the reorder visible. */
+tr.row-problem td { box-shadow: inset 3px 0 0 var(--amber); }
+.reorder-flag { display:inline-block; margin-left:6px; padding:0 6px; border-radius:8px;
+    font-size:11px; font-weight:600; color:var(--amber); border:1px solid var(--amber); white-space:nowrap; }
 h2 { margin:44px 0 12px; font-size:.85em; font-weight:600; text-transform:uppercase;
      letter-spacing:.16em; color:var(--ink); }
 h2::before { content:"// "; color:var(--accent-hi); }
