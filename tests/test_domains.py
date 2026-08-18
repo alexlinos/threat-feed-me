@@ -32,6 +32,17 @@ def test_normalize_rejects_ips_and_cidrs_and_junk():
     assert normalize_domain("a..b.com") is None
 
 
+def test_normalize_rejects_leading_trailing_hyphen_labels():
+    # RFC 952/1123: every label must start and end with an alphanumeric.
+    # A leading/trailing hyphen on a non-first label must never slip past
+    # IDNA/UTS46 and land in the corpus as a "domain".
+    assert normalize_domain("example.-com") is None        # TLD starts with '-'
+    assert normalize_domain("evil.-example.com") is None    # label starts with '-'
+    assert normalize_domain("sub-.example.com") is None     # label ends with '-'
+    assert normalize_domain("example-.com") is None
+    assert normalize_domain("evil.example.com") == "evil.example.com"
+
+
 def test_normalize_idna_encodes_unicode_to_punycode():
     # Unicode and punycode spellings must collapse to the same stored value.
     uni = normalize_domain("bücher.example.com")

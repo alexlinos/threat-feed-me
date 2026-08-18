@@ -75,16 +75,25 @@ class UniFiPusher:
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
                  domain_tier: str = "",
                  timeout: int = 20, session=None):
-        host = (host or "").strip().rstrip('/')
+        host = (host or "").strip()
+        # Strip any scheme, then drop anything after the first '/' — a path
+        # on an http host would otherwise survive into the coerced URL and
+        # yield wrong API endpoints (/mangle/proxy/network/api/s/...). UniFi
+        # API calls are host-rooted, so a path is never legitimate here.
         if host.lower().startswith('http://'):
+            host = host[7:]
+        elif host.lower().startswith('https://'):
+            host = host[8:]
+        host = host.split('/', 1)[0].rstrip('/')
+        if host:
             # UniFi OS serves its API on HTTPS only; port 80 merely redirects,
             # and requests converts the redirected login POST into a GET,
             # which the gateway answers 401 regardless of credentials —
             # observed in the field as an unexplainable auth failure.
-            host = 'https://' + host[7:]
-            logger.info("[unifi] host coerced to https (UniFi OS API is HTTPS-only)")
-        elif host and not host.lower().startswith('https://'):
             host = 'https://' + host
+            logger.info("[unifi] host coerced to https (UniFi OS API is HTTPS-only)")
+        else:
+            host = ''
         self.host = host
         self.site = site or "default"
         # High is the default for a push target: a home gateway wants the
@@ -232,7 +241,11 @@ class UniFiPusher:
         for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind='domain'):
             if not is_included(ind, wl_map, tier=tier_enum):
                 continue
-            values.append(ind.ip)
+            # Mirror the IP arm: firewall_value handles metadata-based value
+            # transforms (CIDR for IPs today, future wildcard/normalization
+            # for domains). Using ind.ip directly here would bypass any such
+            # transform and push raw DB values.
+            values.append(firewall_value(ind))
         if len(values) > self.max_entries:
             logger.warning(
                 "[unifi] %s domain tier has %d entries; pushing the strongest %d "

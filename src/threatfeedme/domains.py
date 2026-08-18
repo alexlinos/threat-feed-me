@@ -21,7 +21,11 @@ import idna as _idna
 # A plausible DNS name: LDH labels, at least one dot. Deliberately ASCII-only;
 # unicode names are IDNA-encoded to punycode BEFORE this check so both
 # spellings of the same domain dedupe to one indicator.
-_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9-]+)+$')
+# RFC 952/1123: every label must start and end with an alphanumeric. The
+# first label is checked by the head group; the trailing-label group mirrors
+# that rule so a leading/trailing-hyphen TLD (example.-com, .co-uk) never
+# slips past IDNA/UTS46 and lands in the corpus as a "domain".
+_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$')
 
 # Special-use TLDs that can never be a real-world threat indicator: blocking
 # them is either meaningless (they don't resolve in public DNS) or harmful
