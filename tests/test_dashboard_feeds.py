@@ -794,6 +794,16 @@ def test_matrix_count_fast_path_matches_walk(client):
             client.delete(f"/api/whitelist?ip={ip}&feed={feed}")
 
 
+def test_refresh_pulse_card_is_live_updatable(client):
+    """The Last-refresh card carries stable ids + the interval so client JS
+    can keep it honest while the page sits open (a tab opened during
+    container startup once showed 'first fetch pending' for a day)."""
+    body = client.get("/").text
+    assert 'id="pulse-refresh"' in body
+    assert 'id="pulse-refresh-n"' in body
+    assert 'data-interval-min=' in body
+
+
 # ==================== CSRF protection tests ====================
 
 

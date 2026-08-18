@@ -380,6 +380,41 @@ async function confirmWlModal() {
     else { alert('Could not whitelist: ' + (j.message || j.detail || r.status)); }
 }
 
+// The pulse row is server-rendered, but SOC dashboards sit open for days —
+// a "Last refresh" card frozen at page-load time reads as broken (and once
+// showed "first fetch pending" for a full day on a tab opened during
+// container startup). Poll the cheap status endpoint and rewrite just this
+// card; the heavier cards refresh on natural page loads.
+function updateRefreshPulse() {
+    const card = document.getElementById('pulse-refresh');
+    if (!card) return;
+    fetch('/api/refresh/status').then(r => r.json()).then(j => {
+        const n = document.getElementById('pulse-refresh-n');
+        const sub = document.getElementById('pulse-refresh-sub');
+        if (j.running) {
+            n.innerHTML = '<span class="feeding"><span class="chomp"><i></i><b></b></span></span>';
+            sub.textContent = 'refresh running now';
+            card.classList.remove('warn');
+            return;
+        }
+        if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
+        const ageMin = Math.max(0, Math.floor((Date.now() - Date.parse(j.last_finished)) / 60000));
+        const interval = parseInt(card.dataset.intervalMin, 10) || 60;
+        n.innerHTML = ageMin + 'm<small> ago</small>';
+        const overdue = ageMin > 2 * interval;
+        card.classList.toggle('warn', overdue);
+        sub.textContent = overdue ? 'overdue' : 'next in ~' + Math.max(0, interval - ageMin) + 'm';
+    }).catch(() => {});  // transient failure: keep last shown values
+}
+document.addEventListener('DOMContentLoaded', () => {
+    if (!document.getElementById('pulse-refresh')) return;
+    updateRefreshPulse();
+    setInterval(updateRefreshPulse, 30000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) updateRefreshPulse();
+    });
+});
+
 // Blocked-IP country heatmap: lazy, on-demand. The dashboard route never
 // computes geo data — this fetches /api/geo/countries only the first time
 // the user expands the collapsed <details id=geo-heatmap>, then caches.
