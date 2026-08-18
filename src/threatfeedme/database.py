@@ -1317,9 +1317,15 @@ class Database:
         if keep is None or keep <= 0:
             return
         try:
+            # Sort by the timestamped NAME, not mtime: the names are
+            # zero-padded UTC (threat_feeds-YYYYMMDDTHHMMSSZ.db), so lexical
+            # order is chronological, and it stays correct even when several
+            # backups share an mtime (fast successive writes) or a file's
+            # mtime is bumped by a copy/restore — either of which made the
+            # mtime sort keep the wrong files.
             files = sorted(
-                [f for f in os.listdir(dest_dir) if f.startswith('threat_feeds-') and f.endswith('.db')],
-                key=lambda f: os.path.getmtime(os.path.join(dest_dir, f)),
+                f for f in os.listdir(dest_dir)
+                if f.startswith('threat_feeds-') and f.endswith('.db')
             )
         except OSError:
             return
