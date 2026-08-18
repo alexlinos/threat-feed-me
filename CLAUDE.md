@@ -284,3 +284,20 @@ Things that CHANGED vs. the design above, for whoever reads it later:
 - Dashboard how-to now covers WHERE the FortiGate domain connector gets
   used (DNS Filter profile, Threat Feeds category group) and the External
   IP Block Lists bonus: Alex had to ask, nobody else should.
+
+## Considered and parked: LOLRMM policy blocker (2026-08-18)
+
+Working theory was a default-deny RMM domain feed from lolrmm.io (317
+tools, keyless JSON, verified live): sanction the RMMs the org uses,
+serve everything else's domains at a dedicated policy URL for DNS
+blocking. Parked because Alex's deployment (and any FortiGate with an
+App Control license) does this better at L7 — application signatures
+catch RMM protocols regardless of domain/port.
+
+Design notes that survive if revived: this is POLICY not intel — it must
+never enter the indicators corpus or the votes engine (corroboration is
+meaningless for legitimate tools, FP semantics invert). Separate serving
+URL, catalog-with-sanction-toggle UX, Monitor-before-Block guidance,
+regex artifacts reduce to static suffixes. Revive triggers: demand from
+pfSense/OPNsense/UniFi users (no App Control there), or long-tail RMM
+abuse evidence (unsignatured tools are why LOLRMM exists).
