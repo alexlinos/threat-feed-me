@@ -305,7 +305,42 @@ Things that CHANGED vs. the design above, for whoever reads it later:
   clock correction could produce a lexicographically-later but actually
   older backup that survived the prune.
 
-## Considered and parked: LOLRMM policy blocker (2026-08-18)
+## Predictor-scoring layer (v2.4 design; infrastructure live, model parked)
+
+Direction: predict which indicators are about to leave (churn) and which
+will come back, so a scoring layer can discount transient noise. The probe
+showed there is no aged-out population to train on yet (oldest ~5 days,
+gt_30d = 0), so the model is deliberately parked behind `predictor.enabled:
+false`. Build the infrastructure first; the model is the last thing, not
+the first — no churn labels exist until the log has run some weeks, and
+shipping the predictor before then is just an overfit guess.
+
+The gate is the two enabling pieces, both shipped:
+
+- **`retention_days: 14`** bounds indicator eviction. `purge_stale_indicators`
+  drops entries older than the window, and whitelisted IPs (exact, CIDR, or
+  wildcard-scoped via the WhitelistMatcher) are never purged — whitelist is
+  operator intent, not feed state. The refresh path passes
+  `db.get_whitelist_map()` so a whitelisted IP never ages out.
+- **`sightings` churn log** is the leave/return ground truth. Per source per
+  refresh tick, `append_sightings(source, present_map, tick)` snapshots that
+  source's current indicator set in ONE batch (executemany on the
+  UNIQUE(source_name, ip, tick) key) — the same batching discipline as the
+  feed bulk-write path, so a refresh tick never wedges the log. A source
+  that errored/skipped the tick is left out; its prior rows make the leave
+  observable (ip present at tick N, no row at N+1). `run_refresh` wires this
+  per successfully-refreshed source each tick.
+
+Training signal (leave then return within window) only exists once the log
+has accumulated measurable churn — weeks out. The prediction remains
+vehicle-specific: per-kind natural breaks (tier_breaks / tier_breaks_domains)
+carry over from the domain work; a LightGBM recurrence model runs dark until
+the backtest on real accumulated churn passes. Open infra debt: the
+sightings ring-window prune (vs. unbounded growth) and indicator eviction
+both roll on retention; the backup-prune by timestamped filename (54a524d)
+already avoids the mtime NTP edge.
+
+## Considered and parked: LOLRAMP policy blocker (2026-08-18)
 
 Working theory was a default-deny RMM domain feed from lolrmm.io (317
 tools, keyless JSON, verified live): sanction the RMMs the org uses,
