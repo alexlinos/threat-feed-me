@@ -107,6 +107,14 @@ h2::before { content:"// "; color:var(--accent-hi); }
   .feeding .prey { display:none; }
   .feeding { animation:pulse 1.8s ease-in-out infinite; }
 }
+/* "nom nom nom" under the chomper while a refresh runs. Base content is the
+   full phrase, so a browser that won't animate `content` still reads right;
+   the keyframes just make it chew up to the phrase and repeat. */
+.nomming::after { content:"nom nom nom"; animation:nomnom 1.4s steps(1,end) infinite; }
+@keyframes nomnom { 0%{content:"nom";} 33%{content:"nom nom";} 66%,100%{content:"nom nom nom";} }
+@media (prefers-reduced-motion: reduce) {
+  .nomming::after { animation:none; content:"nom nom nom"; }
+}
 .rec { background:rgba(16,185,129,.12); color:var(--accent-hi); font-size:.68em; font-weight:600;
         border:1px solid rgba(16,185,129,.35); padding:2px 8px; border-radius:3px;
         text-transform:uppercase; letter-spacing:.08em; }

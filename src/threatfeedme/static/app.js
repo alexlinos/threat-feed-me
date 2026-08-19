@@ -421,7 +421,7 @@ function updateRefreshPulse() {
         const sub = document.getElementById('pulse-refresh-sub');
         if (j.running) {
             n.innerHTML = '<span class="feeding"><span class="chomp"><i></i><b></b></span></span>';
-            sub.textContent = 'refresh running now';
+            sub.innerHTML = '<span class="nomming"></span>';
             card.classList.remove('warn');
             setBrandState('running');
             return;
