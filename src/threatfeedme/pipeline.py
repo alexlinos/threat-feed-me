@@ -214,6 +214,12 @@ def get_export_stats(db: Database) -> Dict:
 RETENTION_MAX_AGE_KEY = "retention_max_age_days"
 DEFAULT_RETENTION_DAYS = 7  # fallback if neither the DB setting nor config sets it
 
+# Settings key holding the corpus fingerprint (db.corpus_change_key) as of the
+# last rescore, so run_refresh can skip the full recompute when nothing that
+# affects scores/tiers has changed. Stored in the DB so it is per-deployment
+# and survives restarts.
+_RESCORE_KEY = "last_scored_corpus_key"
+
 
 def retention_max_age_days(db: Database, config: Dict) -> int:
     """Effective retention window in days.
@@ -268,6 +274,19 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
         # out — whitelist is operator intent, not feed state.
         purged = db.purge_stale_indicators(max_age_days, db.get_whitelist_map())
         logger.info(f"[retention] purged {purged} stale indicators (> {max_age_days}d)")
+    # Gate the expensive full-corpus rescore + export + push on an actual
+    # change to scoring inputs since the LAST rescore. A fast feed coming due
+    # (openphish 15m, dshield 30m) otherwise drags a ~90s recompute of the
+    # whole corpus every time, even when it refetched byte-identical content.
+    # The key is compared against the value stored at the last rescore rather
+    # than this refresh's start, so a change made between refreshes (e.g. an FP
+    # flag, which only re-exports) still forces the rescore it needs.
+    # Tradeoff: pure age-decay drift between real changes isn't reapplied until
+    # the next change; the roster changes often enough to keep this current.
+    key = ",".join(str(n) for n in db.corpus_change_key())
+    if key == db.get_setting(_RESCORE_KEY):
+        logger.info("[refresh] no scoring-relevant change; skipped rescore/export/push")
+        return fetched
     recalculate(db, config)
     export_tiers(db, config)
     # Push integrations (UniFi has no poll-a-URL feature, so we push instead).
@@ -281,4 +300,5 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
             push_to_unifi(db, config)
     except Exception:
         logger.exception("[unifi] push failed (refresh itself succeeded)")
+    db.set_setting(_RESCORE_KEY, key)
     return fetched

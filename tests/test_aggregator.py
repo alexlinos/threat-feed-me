@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from threatfeedme.database import Database
 from threatfeedme.exporter import firewall_value, is_included
 from threatfeedme.pipeline import _export_tier
+from threatfeedme import pipeline
 from threatfeedme.feed_ingestor import FeedIngestor
 from threatfeedme.models import (ConfidenceTier, FeedSource, FeedType, ThreatIndicator, ALL_FEEDS,
                     REASON_FALSE_POSITIVE, REASON_RISK_ACCEPTED)
@@ -1087,6 +1088,46 @@ def test_detect_leaves_return_outside_window_excluded(db):
     r = db.detect_leaves("S", 30)
     assert "B" not in r["returned"]        # return is outside the 30d window
     assert r["left"] == []                  # B present at latest snapshot
+
+
+def test_corpus_change_key_moves_on_add_and_fp(db):
+    k0 = db.corpus_change_key()
+    db.add_indicator("203.0.113.90", "cins_army", {})
+    k1 = db.corpus_change_key()
+    assert k1 != k0                         # indicator + source attribution added
+    db.record_false_positive("203.0.113.90", ["cins_army"])
+    k2 = db.corpus_change_key()
+    assert k2 != k1                         # feed_feedback row added
+
+
+def test_run_refresh_skips_rescore_when_unchanged(db, monkeypatch):
+    # A no-op refresh (nothing changed since the last rescore) must not run the
+    # full recalculate/export.
+    monkeypatch.setattr(pipeline, "fetch_feeds", lambda *a, **k: {})
+    monkeypatch.setattr(pipeline, "export_tiers", lambda *a, **k: {})
+    calls = []
+    monkeypatch.setattr(pipeline, "recalculate", lambda *a, **k: calls.append(1) or 0)
+    db.add_indicator("203.0.113.91", "spamhaus_drop", {})
+    pipeline.run_refresh(db, CONFIG)        # change vs stored(None) -> rescore
+    pipeline.run_refresh(db, CONFIG)        # nothing changed -> skip
+    assert calls == [1]
+
+
+def test_run_refresh_rescores_after_fp_between_refreshes(db, monkeypatch):
+    # An FP flagged BETWEEN refreshes (it only re-exports in the app) must still
+    # force the next refresh to rescore — the whole reason the key is compared
+    # against the last-rescore value, not this refresh's start.
+    monkeypatch.setattr(pipeline, "fetch_feeds", lambda *a, **k: {})
+    monkeypatch.setattr(pipeline, "export_tiers", lambda *a, **k: {})
+    calls = []
+    monkeypatch.setattr(pipeline, "recalculate", lambda *a, **k: calls.append(1) or 0)
+    db.add_indicator("203.0.113.92", "cins_army", {})
+    pipeline.run_refresh(db, CONFIG)        # rescore #1
+    pipeline.run_refresh(db, CONFIG)        # skip (unchanged)
+    assert len(calls) == 1
+    db.record_false_positive("203.0.113.92", ["cins_army"])
+    pipeline.run_refresh(db, CONFIG)        # feed_feedback changed -> rescore #2
+    assert len(calls) == 2
 
 
 def test_purge_keeps_old_manual_indicator(db):

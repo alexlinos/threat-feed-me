@@ -513,6 +513,25 @@ class Database:
             cur.execute("DELETE FROM sightings WHERE tick < ?", (cutoff,))
             return cur.rowcount
 
+    def corpus_change_key(self) -> Tuple[int, int, int]:
+        """Cheap fingerprint of everything that affects scores/tiers: indicator
+        rows, source attributions, and false-positive feedback rows. It moves
+        exactly when a rescore is warranted — an indicator added or purged, an
+        ip gaining a source, or an FP flag/clear (which changes a feed's
+        effective weight). Deliberately excludes last_seen, which bumps on
+        every no-op re-report and would defeat the point.
+
+        run_refresh compares this against the value STORED at the last rescore
+        (not this refresh's start), so a change made BETWEEN refreshes — e.g. an
+        FP flag, which only triggers a background re-export — still forces the
+        rescore it needs. Feed weight/enable edits rescore synchronously on
+        their own path, so they need not appear here."""
+        with self._cursor() as cur:
+            n_ind = cur.execute("SELECT COUNT(*) FROM indicators").fetchone()[0]
+            n_src = cur.execute("SELECT COUNT(*) FROM indicator_sources").fetchone()[0]
+            n_fb = cur.execute("SELECT COUNT(*) FROM feed_feedback").fetchone()[0]
+        return (n_ind, n_src, n_fb)
+
     def get_source_ips(self, source_name: str) -> Set[str]:
         """Current set of IPs a feed source contributes (indicator_sources
         joined to indicators). The refresh uses this to snapshot that
