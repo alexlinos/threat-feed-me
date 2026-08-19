@@ -1039,6 +1039,56 @@ def test_prune_sightings_disabled_when_zero(db):
     assert db.prune_sightings(0) == 0
 
 
+def test_detect_leaves_left_and_returned(db):
+    # A present throughout; B left-then-returned; C left. left=[C], returned=[B],
+    # and A (continuously present) must be in neither.
+    now = datetime.now(timezone.utc)
+    t1 = (now - timedelta(days=3)).isoformat()
+    t2 = (now - timedelta(days=2)).isoformat()
+    t3 = (now - timedelta(days=1)).isoformat()
+    db.append_sightings("S", {"A": True, "B": True, "C": True}, t1)
+    db.append_sightings("S", {"A": True, "C": True}, t2)          # B absent
+    db.append_sightings("S", {"A": True, "B": True}, t3)          # B back, C absent
+    r = db.detect_leaves("S", 30)
+    assert sorted(r["left"]) == ["C"]
+    assert sorted(r["returned"]) == ["B"]
+    assert "A" not in r["left"] and "A" not in r["returned"]
+
+
+def test_detect_leaves_single_snapshot_has_no_churn(db):
+    t1 = datetime.now(timezone.utc).isoformat()
+    db.append_sightings("S", {"A": True, "B": True}, t1)
+    r = db.detect_leaves("S", 30)
+    assert r["left"] == [] and r["returned"] == []
+
+
+def test_detect_leaves_first_appearance_is_not_a_return(db):
+    # An ip newly seen (absent earlier only because it hadn't appeared yet) is
+    # not a return, and being in the latest snapshot it hasn't left.
+    now = datetime.now(timezone.utc)
+    t1 = (now - timedelta(days=3)).isoformat()
+    t2 = (now - timedelta(days=2)).isoformat()
+    db.append_sightings("S", {"A": True}, t1)
+    db.append_sightings("S", {"A": True, "X": True}, t2)
+    r = db.detect_leaves("S", 30)
+    assert "X" not in r["returned"]
+    assert "X" not in r["left"]
+
+
+def test_detect_leaves_return_outside_window_excluded(db):
+    # B leaves and returns, but the return is older than the window.
+    now = datetime.now(timezone.utc)
+    t1 = (now - timedelta(days=60)).isoformat()
+    t2 = (now - timedelta(days=55)).isoformat()
+    t3 = (now - timedelta(days=50)).isoformat()
+    db.append_sightings("S", {"A": True, "B": True}, t1)
+    db.append_sightings("S", {"A": True}, t2)                     # B absent
+    db.append_sightings("S", {"A": True, "B": True}, t3)          # B back, but 50d ago
+    r = db.detect_leaves("S", 30)
+    assert "B" not in r["returned"]        # return is outside the 30d window
+    assert r["left"] == []                  # B present at latest snapshot
+
+
 def test_purge_keeps_old_manual_indicator(db):
     # An operator-curated manual entry must survive retention even when stale.
     db.add_indicator("203.0.113.70", "manual", {})

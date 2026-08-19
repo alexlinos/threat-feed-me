@@ -445,44 +445,59 @@ class Database:
             return len(rows)
 
     def detect_leaves(self, source_name: str, window_days: int) -> Dict[str, List[str]]:
-        """IPs that LEFT the source between consecutive clean snapshots.
+        """Churn labels from a source's own consecutive clean snapshots.
 
-        An ip is a leave if it has a present row in the source's log and no
-        row at a later snapshot tick for that same source. Absence is only
-        inferred between clean snapshots, because partial refreshes never
-        write rows (append_sightings snapshot_ok gate), so a partial fetch
-        cannot manufacture a fake leave.
+        A "snapshot" is one tick where the source wrote rows; because the
+        snapshot_ok gate means partial/errored fetches write nothing, an ip's
+        ABSENCE at a snapshot tick (a snapshot exists, but no row for that ip)
+        reliably means it was not in the source's list then — never a partial
+        fetch artifact. All comparisons are within THIS source's ticks, never
+        global ticks, so another feed's refresh cadence cannot pollute the
+        signal.
 
-        Returns {"left": [...], "returned": [...]}: `left` = ips present at
-        some snapshot but absent at the source's latest snapshot; `returned`
-        = ips that left then came back within `window_days` (present at a
-        tick after an earlier leave, within the retention window) — the
-        leave-then-return label the predictor trains on.
+        Returns {"left": [...], "returned": [...]}:
+        - `left`   = present at some snapshot but ABSENT at the source's
+                     latest snapshot.
+        - `returned` = present -> absent-at-an-intervening-snapshot -> present,
+                     with the return tick within `window_days`. This is the
+                     leave-then-return label the predictor trains on; an ip
+                     seen for the first time (no prior presence) is NOT a
+                     return, and a continuously-present ip is neither.
         """
-        left: List[str] = []
-        returned: List[str] = []
         with self._cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT ip FROM sightings s1 "
-                "WHERE s1.source_name = ? AND s1.present = 1 "
-                "AND NOT EXISTS (SELECT 1 FROM sightings s2 "
-                "  WHERE s2.source_name = ? AND s2.ip = s1.ip "
-                "  AND s2.tick > s1.tick)",
-                (source_name, source_name),
+                "SELECT tick, ip FROM sightings "
+                "WHERE source_name = ? AND present = 1 ORDER BY tick",
+                (source_name,),
             )
-            left = [r["ip"] for r in cur.fetchall()]
-            cutoff = (datetime.now(timezone.utc)
-                      - timedelta(days=window_days)).isoformat()
-            cur.execute(
-                "SELECT DISTINCT ip FROM sightings s "
-                "WHERE s.source_name = ? AND s.present = 1 AND s.tick >= ? "
-                "AND EXISTS (SELECT 1 FROM sightings p "
-                "  WHERE p.source_name = ? AND p.ip = s.ip AND p.present = 1 "
-                "  AND p.tick < s.tick)",
-                (source_name, cutoff, source_name),
-            )
-            returned = [r["ip"] for r in cur.fetchall()]
-        return {"left": left, "returned": returned}
+            rows = cur.fetchall()
+        if not rows:
+            return {"left": [], "returned": []}
+
+        present_by_tick: Dict[str, Set[str]] = {}
+        for r in rows:
+            present_by_tick.setdefault(r["tick"], set()).add(r["ip"])
+        ticks = sorted(present_by_tick)          # this source's snapshot ticks
+        latest_set = present_by_tick[ticks[-1]]
+        ever: Set[str] = set().union(*present_by_tick.values())
+
+        # left: appeared at some point, gone from the latest snapshot.
+        left = sorted(ever - latest_set)
+
+        # returned: for each ip, a present tick, then a later snapshot where it
+        # was absent, then a present tick again within the window.
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        returned = []
+        for ip in ever:
+            present_ticks = [t for t in ticks if ip in present_by_tick[t]]
+            for earlier, later in zip(present_ticks, present_ticks[1:]):
+                # any snapshot strictly between two present ticks is one where
+                # the ip was absent (it's a snapshot tick without this ip).
+                gap = any(earlier < t < later for t in ticks)
+                if gap and later >= cutoff:
+                    returned.append(ip)
+                    break
+        return {"left": left, "returned": sorted(returned)}
 
     def prune_sightings(self, keep_days: int) -> int:
         """Ring-window prune of the churn log: drop sightings older than
