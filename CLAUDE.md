@@ -285,6 +285,26 @@ Things that CHANGED vs. the design above, for whoever reads it later:
   used (DNS Filter profile, Threat Feeds category group) and the External
   IP Block Lists bonus: Alex had to ask, nobody else should.
 
+## v2.3.x (RFC domain labels, honest refresh state; 299 tests)
+
+- **v2.3.0** tightened the domain-label regex to RFC 952/1123 (no
+  underscore-tolerant octets sneaking into UniFi DNS lists), aligned the
+  UniFi domain arm so it emits the same `firewall_value` the IP arm uses
+  (a FortiGate/UDM hostname that isn't a valid label surfaces as a
+  degraded/error row instead of silently importing), and strips path
+  components from coerced hosts so a URL fed to a host feeder loses its
+  `/path`.
+- **v2.3.1** made the dashboard's Last-refresh card honest: it reports the
+  real refresh outcome (rejected / errored / succeeded) instead of the
+  optimistically green state that the old layout could show while a feed
+  had just failed. Per-feed refresh errors now surface in the feed rows
+  (a rejected refresh says so), and feeds that the operator reordered are
+  flagged rather than silently re-sorted.
+- Backup pruning (54a524d) now keys on the timestamped filename, not
+  `os.path.getmtime()` — closes the review-checklist item where an NTP
+  clock correction could produce a lexicographically-later but actually
+  older backup that survived the prune.
+
 ## Considered and parked: LOLRMM policy blocker (2026-08-18)
 
 Working theory was a default-deny RMM domain feed from lolrmm.io (317
