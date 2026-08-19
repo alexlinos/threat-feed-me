@@ -318,10 +318,13 @@ shipping the predictor before then is just an overfit guess.
 The gate is the two enabling pieces, both shipped:
 
 - **`retention_days: 14`** bounds indicator eviction. `purge_stale_indicators`
-  drops entries older than the window, and whitelisted IPs (exact, CIDR, or
-  wildcard-scoped via the WhitelistMatcher) are never purged — whitelist is
-  operator intent, not feed state. The refresh path passes
-  `db.get_whitelist_map()` so a whitelisted IP never ages out.
+  drops entries older than the window, and whitelisted IPs (exact and
+  feed-scoped whitelist entries) are never purged — whitelist is operator
+  intent, not feed state. NOTE: CIDR/wildcard whitelist entries are not
+  expanded at purge, so an indicator merely *covered* by a whitelisted CIDR
+  can still be purged; serve-time filtering still excludes it — this governs
+  row retention only. The refresh path passes `db.get_whitelist_map()` so a
+  whitelisted IP never ages out.
 - **`sightings` churn log** is the leave/return ground truth. Per source per
   refresh tick, `append_sightings(source, present_map, tick)` snapshots that
   source's current indicator set in ONE batch (executemany on the

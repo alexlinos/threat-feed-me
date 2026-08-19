@@ -416,7 +416,7 @@ class Database:
             conn.close()
 
     def append_sightings(self, source_name: str, present_map: Dict[str, bool],
-                         tick: str) -> int:
+                         tick: str, snapshot_ok: bool = True) -> int:
         """Record per-source per-tick presence for churn tracking.
 
         Appends the whole source's per-tick set in ONE batch (executemany on
@@ -424,8 +424,15 @@ class Database:
         wedge the log — the same reason the feed bulk-write path batches.
         Re-inserting the same tick replaces the prior row (present flips to
         absent on a leave tick). Returns rows appended.
+
+        `snapshot_ok` is the clean-snapshot gate (#2): only a COMPLETE fetch
+        counts as a valid snapshot. When False (an error, not-modified, or
+        partial/truncated body), nothing is written — the source's prior
+        clean rows stay, so a partial refresh can never manufacture a fake
+        mass-leave. Leave detection only compares consecutive clean
+        snapshots of the same source, so churn labels are trustworthy.
         """
-        if not present_map:
+        if not present_map or not snapshot_ok:
             return 0
         rows = [(source_name, ip, tick, 1 if present else 0)
                 for ip, present in present_map.items()]
@@ -436,6 +443,46 @@ class Database:
                 rows,
             )
             return len(rows)
+
+    def detect_leaves(self, source_name: str, window_days: int) -> Dict[str, List[str]]:
+        """IPs that LEFT the source between consecutive clean snapshots.
+
+        An ip is a leave if it has a present row in the source's log and no
+        row at a later snapshot tick for that same source. Absence is only
+        inferred between clean snapshots, because partial refreshes never
+        write rows (append_sightings snapshot_ok gate), so a partial fetch
+        cannot manufacture a fake leave.
+
+        Returns {"left": [...], "returned": [...]}: `left` = ips present at
+        some snapshot but absent at the source's latest snapshot; `returned`
+        = ips that left then came back within `window_days` (present at a
+        tick after an earlier leave, within the retention window) — the
+        leave-then-return label the predictor trains on.
+        """
+        left: List[str] = []
+        returned: List[str] = []
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT ip FROM sightings s1 "
+                "WHERE s1.source_name = ? AND s1.present = 1 "
+                "AND NOT EXISTS (SELECT 1 FROM sightings s2 "
+                "  WHERE s2.source_name = ? AND s2.ip = s1.ip "
+                "  AND s2.tick > s1.tick)",
+                (source_name, source_name),
+            )
+            left = [r["ip"] for r in cur.fetchall()]
+            cutoff = (datetime.now(timezone.utc)
+                      - timedelta(days=window_days)).isoformat()
+            cur.execute(
+                "SELECT DISTINCT ip FROM sightings s "
+                "WHERE s.source_name = ? AND s.present = 1 AND s.tick >= ? "
+                "AND EXISTS (SELECT 1 FROM sightings p "
+                "  WHERE p.source_name = ? AND p.ip = s.ip AND p.present = 1 "
+                "  AND p.tick < s.tick)",
+                (source_name, cutoff, source_name),
+            )
+            returned = [r["ip"] for r in cur.fetchall()]
+        return {"left": left, "returned": returned}
 
     def prune_sightings(self, keep_days: int) -> int:
         """Ring-window prune of the churn log: drop sightings older than

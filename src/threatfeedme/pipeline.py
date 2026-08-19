@@ -250,7 +250,13 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
             continue
         ips = db.get_source_ips(name)
         if ips:
-            db.append_sightings(name, {ip: True for ip in ips}, tick)
+            # snapshot_ok gate (#2): a "success" refresh is a clean,
+            # complete snapshot (error/not-modified/partial already skip via
+            # the status check above), so leave detection only ever compares
+            # consecutive complete snapshots — a partial fetch can't flip a
+            # present row to a fake leave.
+            db.append_sightings(name, {ip: True for ip in ips}, tick,
+                                snapshot_ok=True)
     max_age_days = retention_max_age_days(db, config)
     # Ring-prune the churn log so sightings can't grow without bound (one row
     # per source per ip per tick). Keep well beyond the indicator retention
