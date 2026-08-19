@@ -340,6 +340,22 @@ sightings ring-window prune (vs. unbounded growth) and indicator eviction
 both roll on retention; the backup-prune by timestamped filename (54a524d)
 already avoids the mtime NTP edge.
 
+## soc-grfna01 prod host: DNS resolver (2026-08-18)
+
+The prod box has ONE working upstream resolver (`172.31.10.1`);
+`192.0.231.200` is unreachable from the `172.31.10.x` subnet (every query
+times out from the box, though it answers from other vantage points, e.g. a
+workstation). With no resolver redundancy, a single dropped UDP:53 query
+surfaced as a hard "could not resolve feed host" and flapped random feeds —
+seen on `alienVault_otx` and `talos_snort` (different hosts, same DNS error,
+so it's the resolver, not the feed). Mitigated with
+`dns_opt: ["attempts:3","timeout:2"]` in the box's
+`docker-compose.override.yml` (alongside the 1g mem cap), so a dropped lookup
+retries the working resolver before failing. This override is box-local, not
+in the repo. The generic fetch path already treats `gaierror` as a retryable
+`ConnectionError`; scraper paths (Talos) lean on this libc-level retry. Real
+fix if it recurs: a genuinely reachable secondary resolver on the subnet.
+
 ## Considered and parked: LOLRAMP policy blocker (2026-08-18)
 
 Working theory was a default-deny RMM domain feed from lolrmm.io (317
