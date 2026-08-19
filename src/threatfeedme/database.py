@@ -213,7 +213,19 @@ class Database:
                 )
             """)
 
-            # Legacy whitelist migration
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sightings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_name TEXT NOT NULL,
+                    ip TEXT NOT NULL,
+                    tick TEXT NOT NULL,
+                    present INTEGER NOT NULL,
+                    UNIQUE(source_name, ip, tick)
+                )
+            """)
+
+
+                        # Legacy whitelist migration
             existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
             if existing_cols and 'feed_name' not in existing_cols:
                 try:
@@ -400,6 +412,28 @@ class Database:
             return len(rows)
         finally:
             conn.close()
+
+    def append_sightings(self, source_name: str, present_map: Dict[str, bool],
+                         tick: str) -> int:
+        """Record per-source per-tick presence for churn tracking.
+
+        Appends the whole source's per-tick set in ONE batch (executemany on
+        the UNIQUE(source_name, ip, tick) key) so a refresh tick doesn't
+        wedge the log — the same reason the feed bulk-write path batches.
+        Re-inserting the same tick replaces the prior row (present flips to
+        absent on a leave tick). Returns rows appended.
+        """
+        if not present_map:
+            return 0
+        rows = [(source_name, ip, tick, 1 if present else 0)
+                for ip, present in present_map.items()]
+        with self._cursor() as cur:
+            cur.executemany(
+                "INSERT OR REPLACE INTO sightings "
+                "(source_name, ip, tick, present) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+            return len(rows)
 
     def get_indicators_by_kind(self, kind: str = "ip") -> List[ThreatIndicator]:
         """All indicators of a specific kind (used by the kind-filtered
@@ -669,23 +703,40 @@ class Database:
             cur.execute("DELETE FROM indicators WHERE ip = ?", (ip,))
             return cur.rowcount > 0
 
-    def purge_stale_indicators(self, max_age_days: int) -> int:
+    def purge_stale_indicators(self, max_age_days: int,
+                                whitelist_map: Optional["WhitelistMatcher"] = None) -> int:
         """Delete indicators whose last_seen is older than max_age_days.
 
         Manually-curated entries (any indicator with a 'manual' source) are
-        never purged. Returns rows deleted.
+        never purgedcase. Operator-whitelisted IPs (exact or CIDR-covered)
+        are never purged either — whitelist is operator intent, not feed
+        state. Returns rows deleted.
         """
         if max_age_days <= 0:
             return 0
         cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        protected = set()
+        if whitelist_map is not None:
+            protected.update(self.get_whitelisted_ips())
+            for ip in self.get_whitelist():
+                scoped = whitelist_map.scoped_feeds(ip.ip)
+                if scoped:
+                    protected.add(ip.ip)
+        base_sql = (
+            "DELETE FROM indicators "
+            "WHERE last_seen < ? "
+            "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
+            "WHERE source_name = 'manual')"
+        )
+        if protected:
+            sql = base_sql + " AND ip NOT IN ({0})".format(
+                ",".join("?" * len(protected)))
+            params = (cutoff,) + tuple(protected)
+        else:
+            sql = base_sql
+            params = (cutoff,)
         with self._cursor() as cur:
-            cur.execute(
-                "DELETE FROM indicators "
-                "WHERE last_seen < ? "
-                "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
-                "WHERE source_name = 'manual')",
-                (cutoff,),
-            )
+            cur.execute(sql, params)
             return cur.rowcount
 
     def touch_feed_indicators(self, feed_name: str) -> int:

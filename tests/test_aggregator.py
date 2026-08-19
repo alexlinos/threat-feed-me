@@ -1026,6 +1026,34 @@ def test_purge_keeps_manual_even_with_additional_feed_source(db):
     assert db.get_indicator("203.0.113.73") is not None
 
 
+def test_purge_stale_indicators_deletes_beyond_retention_days(db):
+    """An indicator older than max_age_days is purged even with an empty
+    whitelist map (no whitelisted IPs to protect)."""
+    db.add_indicator("203.0.113.77", "spamhaus_drop", {})
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
+    _set_last_seen(db, "203.0.113.77", old_iso)
+    wl_map = db.get_whitelist_map()
+    deleted = db.purge_stale_indicators(14, whitelist_map=wl_map)
+    assert deleted == 1
+    assert db.get_indicator("203.0.113.77") is None
+
+
+def test_purge_stale_indicators_keeps_whitelisted_indicator(db):
+    """A whitelisted indicator must survive retention eviction even when its
+    last_seen is far older than the retention window."""
+    db.add_indicator("203.0.113.77", "spamhaus_drop", {})
+    db.add_to_whitelist("203.0.113.77", "internal host", "admin")
+    db.add_indicator("203.0.113.78", "spamhaus_drop", {})  # NOT whitelisted
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
+    _set_last_seen(db, "203.0.113.77", old_iso)
+    _set_last_seen(db, "203.0.113.78", old_iso)
+    wl_map = db.get_whitelist_map()
+    deleted = db.purge_stale_indicators(14, whitelist_map=wl_map)
+    assert deleted == 1, "only the non-whitelisted indicator should be purged"
+    assert db.get_indicator("203.0.113.77") is not None, "whitelisted IP survives"
+    assert db.get_indicator("203.0.113.78") is None, "non-whitelisted IP is gone"
+
+
 # ------------------------------------------ per-feed scheduler due-check ----
 
 def _set_last_update(db, feed_name, iso):
@@ -2402,6 +2430,41 @@ def test_429_retry_after_is_capped_and_final_attempt_raises(db, monkeypatch):
     # hostile Retry-After capped; missing header falls back to backoff
     assert sleeps[0] == fi._RETRY_AFTER_CAP
     assert len(sleeps) == 2       # no sleep after the final failing attempt
+
+
+# ------------------------------------------------------------ sightings ----
+
+
+def test_sightings_appended_per_tick(db):
+    """Sightings table records per-source per-tick presence in batch."""
+    tick = "2026-08-18T00:00:00Z"
+    present_map = {"203.0.113.77": True, "198.51.100.1": True}
+    count = db.append_sightings("honeydb_mydata", present_map, tick)
+    assert count == 2
+
+    # Verify rows landed
+    with db._cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM sightings WHERE source_name=? AND tick=?",
+            ("honeydb_mydata", tick),
+        )
+        assert cur.fetchone()[0] == 2
+
+    # UNIQUE(source_name, ip, tick): re-insert with same tick replaces
+    db.append_sightings("honeydb_mydata", {"203.0.113.77": True}, tick)
+    with db._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM sightings")
+        assert cur.fetchone()[0] == 2  # still 2
+
+    # Different tick adds new rows
+    tick2 = "2026-08-18T01:00:00Z"
+    db.append_sightings("honeydb_mydata", {"203.0.113.77": True}, tick2)
+    with db._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM sightings")
+        assert cur.fetchone()[0] == 3
+
+    # Empty map is a no-op
+    assert db.append_sightings("honeydb_mydata", {}, tick2) == 0
 
 
 def test_other_4xx_still_fails_immediately(db, monkeypatch):
