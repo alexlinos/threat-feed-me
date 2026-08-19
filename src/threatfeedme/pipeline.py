@@ -252,8 +252,15 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
         if ips:
             db.append_sightings(name, {ip: True for ip in ips}, tick)
     max_age_days = retention_max_age_days(db, config)
+    # Ring-prune the churn log so sightings can't grow without bound (one row
+    # per source per ip per tick). Keep well beyond the indicator retention
+    # window so a leave-then-return WITHIN that window stays observable; floor
+    # at 30d so a disabled/short retention still leaves usable churn history.
+    db.prune_sightings(max(2 * max_age_days, 30) if max_age_days > 0 else 30)
     if max_age_days > 0:
-        purged = db.purge_stale_indicators(max_age_days)
+        # Pass the whitelist map so operator-whitelisted IPs are never aged
+        # out — whitelist is operator intent, not feed state.
+        purged = db.purge_stale_indicators(max_age_days, db.get_whitelist_map())
         logger.info(f"[retention] purged {purged} stale indicators (> {max_age_days}d)")
     recalculate(db, config)
     export_tiers(db, config)

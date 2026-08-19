@@ -224,8 +224,7 @@ class Database:
                 )
             """)
 
-
-                        # Legacy whitelist migration
+            # Legacy whitelist migration
             existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
             if existing_cols and 'feed_name' not in existing_cols:
                 try:
@@ -334,6 +333,9 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
+            # The churn-log ring prune deletes by tick every refresh; index it
+            # so that DELETE is a range scan, not a full table scan.
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
 
             conn.commit()
         finally:
@@ -434,6 +436,20 @@ class Database:
                 rows,
             )
             return len(rows)
+
+    def prune_sightings(self, keep_days: int) -> int:
+        """Ring-window prune of the churn log: drop sightings older than
+        keep_days. Bounds the table's otherwise-unbounded growth (one row per
+        source per ip per tick). tick is an ISO-8601 UTC string, so a lexical
+        '< cutoff' is a chronological compare; idx_sightings_tick makes it an
+        index range delete rather than a full scan each refresh.
+        """
+        if keep_days <= 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM sightings WHERE tick < ?", (cutoff,))
+            return cur.rowcount
 
     def get_source_ips(self, source_name: str) -> Set[str]:
         """Current set of IPs a feed source contributes (indicator_sources
@@ -721,10 +737,13 @@ class Database:
                                 whitelist_map: Optional["WhitelistMatcher"] = None) -> int:
         """Delete indicators whose last_seen is older than max_age_days.
 
-        Manually-curated entries (any indicator with a 'manual' source) are
-        never purgedcase. Operator-whitelisted IPs (exact or CIDR-covered)
-        are never purged either — whitelist is operator intent, not feed
-        state. Returns rows deleted.
+        Never purged: manually-curated entries (any indicator with a 'manual'
+        source), and operator-whitelisted IPs — exact and feed-scoped
+        whitelist entries, matched by value (whitelist is operator intent,
+        not feed state). NOTE: CIDR/wildcard whitelist entries are not
+        expanded here, so an indicator merely *covered* by a whitelisted CIDR
+        can still be purged; serve-time filtering still excludes it — this
+        governs only row retention. Returns rows deleted.
         """
         if max_age_days <= 0:
             return 0

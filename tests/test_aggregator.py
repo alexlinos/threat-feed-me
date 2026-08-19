@@ -992,6 +992,53 @@ def test_purge_stale_indicators_disabled_when_zero(db):
     assert db.get_indicator("203.0.113.62") is not None
 
 
+def test_purge_stale_indicators_keeps_whitelisted(db):
+    # A stale but operator-whitelisted IP must survive purge when the
+    # whitelist map is passed; a stale non-whitelisted one is still purged.
+    db.add_indicator("203.0.113.63", "spamhaus_drop", {})
+    db.add_indicator("203.0.113.64", "spamhaus_drop", {})
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    _set_last_seen(db, "203.0.113.63", old_iso)
+    _set_last_seen(db, "203.0.113.64", old_iso)
+    db.add_to_whitelist("203.0.113.63", "ours", "alex")
+
+    deleted = db.purge_stale_indicators(30, db.get_whitelist_map())
+    assert deleted == 1
+    assert db.get_indicator("203.0.113.63") is not None  # whitelisted: kept
+    assert db.get_indicator("203.0.113.64") is None       # not whitelisted: purged
+
+
+def test_purge_stale_indicators_keeps_feed_scoped_whitelist(db):
+    # A feed-scoped whitelist entry also protects the IP's row from purge.
+    db.add_indicator("203.0.113.65", "spamhaus_drop", {})
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    _set_last_seen(db, "203.0.113.65", old_iso)
+    db.add_to_whitelist("203.0.113.65", "noisy", "alex", feed_name="spamhaus_drop")
+    db.purge_stale_indicators(30, db.get_whitelist_map())
+    assert db.get_indicator("203.0.113.65") is not None
+
+
+def test_prune_sightings_drops_old_keeps_recent(db):
+    # The churn log is ring-pruned so it can't grow without bound.
+    old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    db.append_sightings("spamhaus_drop", {"203.0.113.70": True}, old)
+    db.append_sightings("spamhaus_drop", {"203.0.113.70": True}, recent)
+    assert db.prune_sightings(30) == 1
+    conn = sqlite3.connect(db.db_path)
+    try:
+        ticks = [r[0] for r in conn.execute("SELECT tick FROM sightings").fetchall()]
+    finally:
+        conn.close()
+    assert ticks == [recent]
+
+
+def test_prune_sightings_disabled_when_zero(db):
+    old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    db.append_sightings("spamhaus_drop", {"203.0.113.71": True}, old)
+    assert db.prune_sightings(0) == 0
+
+
 def test_purge_keeps_old_manual_indicator(db):
     # An operator-curated manual entry must survive retention even when stale.
     db.add_indicator("203.0.113.70", "manual", {})
