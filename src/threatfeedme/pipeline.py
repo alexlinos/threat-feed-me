@@ -237,6 +237,20 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     """Full refresh: fetch -> score -> export -> push. Returns per-feed fetch
     results."""
     fetched = fetch_feeds(db, config, only=only)
+    tick = datetime.now(timezone.utc).isoformat()
+    # Churn ground truth: snapshot each successfully-refreshed source's
+    # current indicator set into the sightings log, one batch per source per
+    # tick. A source that errored/skipped this tick is left out — its prior
+    # tick rows make the leave observable without writing False rows (an ip
+    # present at tick N with no row at N+1 is the leave). The Sightings
+    # UNIQUE(source_name, ip, tick) key is why re-inserting the same tick
+    # replaces; leave-then-return is the predictor's training signal.
+    for name, res in fetched.items():
+        if res.get("status") != "success":
+            continue
+        ips = db.get_source_ips(name)
+        if ips:
+            db.append_sightings(name, {ip: True for ip in ips}, tick)
     max_age_days = retention_max_age_days(db, config)
     if max_age_days > 0:
         purged = db.purge_stale_indicators(max_age_days)

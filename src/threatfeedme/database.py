@@ -435,6 +435,20 @@ class Database:
             )
             return len(rows)
 
+    def get_source_ips(self, source_name: str) -> Set[str]:
+        """Current set of IPs a feed source contributes (indicator_sources
+        joined to indicators). The refresh uses this to snapshot that
+        source's presence for the sightings churn log each tick.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT i.ip FROM indicator_sources s "
+                "JOIN indicators i ON i.id = s.indicator_id "
+                "WHERE s.source_name = ?",
+                (source_name,),
+            )
+            return {row["ip"] for row in cur.fetchall()}
+
     def get_indicators_by_kind(self, kind: str = "ip") -> List[ThreatIndicator]:
         """All indicators of a specific kind (used by the kind-filtered
         feed URLs; IP and domain populations never bleed into each other)."""
