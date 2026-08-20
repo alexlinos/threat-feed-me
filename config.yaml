@@ -339,6 +339,18 @@ scoring:
     # except "custom") among the sources: an IP known only from custom
     # uploads, local lists, or manual adds tops out at medium.
     require_threat_intel: true
+    # Domain HIGH is provenance-first: a domain reported by any feed listed
+    # here is high-confidence on that feed's word alone. Domain blocklists
+    # aggregate each other, so the overlap-discounted vote count collapses
+    # their consensus toward one witness and votes alone can't reach HIGH;
+    # WHO reported a domain is the honest signal. List only primary curators
+    # (not aggregators): urlhaus is abuse.ch's curated malware-distribution
+    # list; cert_pl is a national CERT (ships disabled — listing it here
+    # simply takes effect if you enable it). A tier-scoped whitelist entry
+    # excludes a false positive from HIGH without dropping it entirely.
+    authoritative_domain_feeds:
+      - urlhaus_hostfile
+      - cert_pl
 
   medium_confidence:
     min_sources: 2

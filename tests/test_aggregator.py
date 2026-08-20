@@ -2357,6 +2357,52 @@ def test_domain_witness_gate_is_domain_only(db):
         == ConfidenceTier.HIGH
 
 
+def test_domain_authoritative_feed_forces_high(db):
+    """Provenance-first domain HIGH: one designated authoritative source is
+    enough, regardless of votes or the k-means boundary."""
+    cfg = {"feeds": [{"name": "urlhaus_hostfile", "feed_type": "threat_intel"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {
+                           "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
+    scorer = ConfidenceScorer(db, cfg)
+    t = scorer._tier_from_votes
+    # single authoritative source, ~1 vote, break far above -> HIGH
+    assert t(1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='domain') == ConfidenceTier.HIGH
+    # same evidence, non-authoritative feed -> falls through to boundary (LOW)
+    assert t(1.0, ["openphish_community"], 1.1, 10.0, kind='domain') == ConfidenceTier.LOW
+    # authoritative among others still trips it
+    assert t(1.5, ["openphish_community", "urlhaus_hostfile"], 1.1, 10.0,
+             kind='domain') == ConfidenceTier.HIGH
+
+
+def test_domain_authoritative_is_domain_only_and_optional(db):
+    """The provenance gate never applies to IPs, and an empty/absent list
+    leaves tiering untouched."""
+    cfg = {"feeds": [{"name": "urlhaus_hostfile", "feed_type": "threat_intel"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {
+                           "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
+    scorer = ConfidenceScorer(db, cfg)
+    assert scorer._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='ip') \
+        == ConfidenceTier.LOW
+    bare = ConfidenceScorer(db, EV_CONFIG)  # no authoritative list configured
+    assert bare._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='domain') \
+        == ConfidenceTier.LOW
+
+
+def test_domain_authoritative_honors_require_threat_intel(db):
+    """A custom-typed feed marked authoritative cannot force HIGH while
+    require_threat_intel is on — the intel gate outranks the designation."""
+    cfg = {"feeds": [{"name": "my_upload", "feed_type": "custom"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {
+                           "require_threat_intel": True,
+                           "authoritative_domain_feeds": ["my_upload"]}}}
+    scorer = ConfidenceScorer(db, cfg)
+    assert scorer._tier_from_votes(1.0, ["my_upload"], 1.1, 10.0, kind='domain') \
+        == ConfidenceTier.LOW
+
+
 def test_domain_witness_gate_honors_require_threat_intel(db):
     """With require_threat_intel, three effective witnesses that are all
     custom/unknown do NOT trip the gate; one curated source among them does."""

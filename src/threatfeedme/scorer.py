@@ -476,25 +476,31 @@ class ConfidenceScorer:
         tier keeps the require_threat_intel gate — an IP known only from
         custom/manual data tops out at medium no matter how many votes.
 
-        Domain witness gate: a domain with at least min_domain_sources
-        EFFECTIVE (overlap-discounted) witnesses earns HIGH even when k-means
-        natural breaks fold that thin high-leaning cluster (e.g. a three-feed
-        typo-squat) into MEDIUM. It keys on `votes`, not the raw source count,
-        so correlated feeds the votes engine already collapses toward one
-        witness (openphish/phishing_army/cert_pl share the same phishing data)
-        cannot force HIGH — the same independence accounting the rest of
-        tiering uses. It still honors require_threat_intel.
+        Domain HIGH is provenance-first: a domain reported by a feed the
+        operator designated authoritative (scoring.high_confidence.
+        authoritative_domain_feeds) is HIGH on that feed's word alone.
+        Curated domain blocklists aren't independent witnesses the way IP
+        scanner feeds are — aggregators republish each other, so the
+        overlap-discounted vote count collapses real consensus toward one
+        witness and (measured on prod) NO domain clears the vote boundary.
+        Who reported it is the honest confidence signal for domains; a
+        tier-scoped whitelist entry remains the per-domain escape hatch.
+
+        Secondary domain witness gate: >= min_domain_sources EFFECTIVE
+        (overlap-discounted) witnesses also earns HIGH — genuinely
+        independent corroboration counts even without an authoritative
+        source. Both gates honor require_threat_intel.
         """
         if not sources:
             return ConfidenceTier.LOW
-        high_require_intel = bool(self.config.get('scoring', {})
-                                  .get('high_confidence', {})
-                                  .get('require_threat_intel', False))
+        high_cfg = self.config.get('scoring', {}).get('high_confidence', {})
+        high_require_intel = bool(high_cfg.get('require_threat_intel', False))
         intel_ok = (not high_require_intel) or self._has_intel_source(sources)
         if kind == 'domain':
-            min_witnesses = float(self.config.get('scoring', {})
-                                  .get('high_confidence', {})
-                                  .get('min_domain_sources', 3))
+            auth_feeds = set(high_cfg.get('authoritative_domain_feeds') or [])
+            if intel_ok and auth_feeds and any(s in auth_feeds for s in sources):
+                return ConfidenceTier.HIGH
+            min_witnesses = float(high_cfg.get('min_domain_sources', 3))
             if votes >= min_witnesses and intel_ok:
                 return ConfidenceTier.HIGH
         if votes > high_b and intel_ok:
