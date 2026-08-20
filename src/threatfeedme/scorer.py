@@ -194,7 +194,8 @@ class ConfidenceScorer:
                  self._tier_from_votes(
                      votes, sources,
                      dom_med if kind == 'domain' else ip_med,
-                     dom_high if kind == 'domain' else ip_high).value,
+                     dom_high if kind == 'domain' else ip_high,
+                     kind).value,
                  votes, ip)
                 for ip, score, votes, sources, kind in evidence
             ]
@@ -469,15 +470,31 @@ class ConfidenceScorer:
         return med_b, high_b
 
     def _tier_from_votes(self, votes: float, sources: Optional[List[str]],
-                         med_b: float, high_b: float) -> ConfidenceTier:
+                         med_b: float, high_b: float,
+                         kind: str = 'ip') -> ConfidenceTier:
         """Tier from effective votes: strictly above the boundary. The high
         tier keeps the require_threat_intel gate — an IP known only from
-        custom/manual data tops out at medium no matter how many votes."""
+        custom/manual data tops out at medium no matter how many votes.
+
+        Domain witness gate: a domain reported by >= min_domain_sources
+        independent feeds earns HIGH strictly from its witness count,
+        regardless of the k-means cluster boundary. The k-means natural
+        breaks fold thin high-leaning domain clusters (e.g. three-source
+        typo-squats) into MEDIUM because they are too small to split from the
+        dominant medium/low populations; the gate is a hard membership rule
+        that is not a floor clamp on the boundary.
+        """
         if not sources:
             return ConfidenceTier.LOW
         high_require_intel = bool(self.config.get('scoring', {})
                                   .get('high_confidence', {})
                                   .get('require_threat_intel', False))
+        if kind == 'domain':
+            min_sources = int(self.config.get('scoring', {})
+                              .get('high_confidence', {})
+                              .get('min_domain_sources', 3))
+            if len(set(sources)) >= min_sources:
+                return ConfidenceTier.HIGH
         if votes > high_b and (not high_require_intel or self._has_intel_source(sources)):
             return ConfidenceTier.HIGH
         if votes > med_b:
