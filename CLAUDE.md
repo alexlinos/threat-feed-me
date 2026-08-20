@@ -343,6 +343,23 @@ sightings ring-window prune (vs. unbounded growth) and indicator eviction
 both roll on retention; the backup-prune by timestamped filename (54a524d)
 already avoids the mtime NTP edge.
 
+## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
+
+Live data settled it: domain blocklists aggregate each other, so the
+overlap-discounted vote count collapses their consensus toward one witness —
+measured on prod, the max domain sat at 1.97 effective votes (3 raw sources)
+and NO domain could clear the 2.0 boundary; domain HIGH was structurally
+empty. v2.4.4's raw-count witness gate was the wrong fix (it counted
+correlated feeds as independent and bypassed require_threat_intel; reworked
+in 2.4.5). The ratified model (2.4.6): **who reported a domain is the
+signal** — feeds listed in `scoring.high_confidence.authoritative_domain_feeds`
+(shipped: urlhaus_hostfile, cert_pl — primary curators, never aggregators)
+force HIGH on their own word. The effective-votes witness gate remains as a
+secondary path; both honor require_threat_intel; tier-scoped whitelist is the
+per-domain FP escape hatch. Live-verified: 459 urlhaus domains in HIGH.
+Gotcha: a config-only scoring change doesn't move the rescore gate's corpus
+key — force a recalc (dashboard button) after editing scoring config.
+
 ## soc-grfna01 prod host: DNS resolver (2026-08-18)
 
 The prod box has ONE working upstream resolver (`172.31.10.1`);
