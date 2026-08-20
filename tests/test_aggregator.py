@@ -2332,6 +2332,45 @@ def test_tier_from_votes_keeps_threat_intel_gate(db):
         == ConfidenceTier.HIGH
 
 
+def test_domain_witness_gate_uses_effective_votes_not_raw_count(db):
+    """The domain witness gate keys on EFFECTIVE (overlap-discounted) votes,
+    not the raw distinct-source count. high_b is set high (10) so only the gate
+    can produce HIGH — isolating its behavior from the k-means boundary."""
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    t = scorer._tier_from_votes
+    # 3 effective independent witnesses -> gate forces HIGH despite high_b=10
+    assert t(3.0, ["a", "b", "c"], 1.1, 10.0, kind='domain') == ConfidenceTier.HIGH
+    # 3 DISTINCT source names but effectively ~1 witness (correlated/echoes):
+    # the old raw-count gate wrongly promoted this; the votes gate must not.
+    assert t(1.0, ["a", "b", "c"], 1.1, 10.0, kind='domain') == ConfidenceTier.LOW
+    # just under the witness threshold -> falls through to the boundary logic
+    assert t(2.9, ["a", "b", "c"], 1.1, 10.0, kind='domain') == ConfidenceTier.MEDIUM
+
+
+def test_domain_witness_gate_is_domain_only(db):
+    """The gate applies to domains, not IPs: an IP with 3 effective votes under
+    a high break stays MEDIUM (no gate), while the same domain goes HIGH."""
+    scorer = ConfidenceScorer(db, EV_CONFIG)
+    assert scorer._tier_from_votes(3.0, ["a", "b", "c"], 1.1, 10.0, kind='ip') \
+        == ConfidenceTier.MEDIUM
+    assert scorer._tier_from_votes(3.0, ["a", "b", "c"], 1.1, 10.0, kind='domain') \
+        == ConfidenceTier.HIGH
+
+
+def test_domain_witness_gate_honors_require_threat_intel(db):
+    """With require_threat_intel, three effective witnesses that are all
+    custom/unknown do NOT trip the gate; one curated source among them does."""
+    cfg = {"feeds": [{"name": "curated", "feed_type": "threat_intel"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {"require_threat_intel": True,
+                                           "min_domain_sources": 3}}}
+    scorer = ConfidenceScorer(db, cfg)
+    assert scorer._tier_from_votes(3.0, ["up1", "up2", "up3"], 1.1, 10.0, kind='domain') \
+        == ConfidenceTier.MEDIUM
+    assert scorer._tier_from_votes(3.0, ["curated", "up2", "up3"], 1.1, 10.0, kind='domain') \
+        == ConfidenceTier.HIGH
+
+
 def test_natural_breaks_degenerate_population_uses_floors(db):
     scorer = ConfidenceScorer(db, EV_CONFIG)
     assert scorer._natural_breaks([]) == (1.1, 2.0)
