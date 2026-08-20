@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threat Feed Me! A carnivorous blocklist for your firewall</title>
-<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 19 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
+<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 22 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
 <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
 
 <!-- Open Graph / social -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
-<meta property="og:description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 19 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
+<meta property="og:description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 22 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
 <meta property="og:url" content="https://threatfeedme.app/">
 <meta property="og:image" content="https://threatfeedme.app/assets/social-preview.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
-<meta name="twitter:description" content="On-prem threat-intel aggregator: 19 free, keyless feeds — malicious IPs and domains — deduped and scored into confidence tiers, served as URLs your firewall and DNS filter poll.">
+<meta name="twitter:description" content="On-prem threat-intel aggregator: 22 free, keyless feeds — malicious IPs and domains — deduped and scored into confidence tiers, served as URLs your firewall and DNS filter poll.">
 <meta name="twitter:image" content="https://threatfeedme.app/assets/social-preview.png">
 
 <style>
@@ -192,7 +192,7 @@
     <img class="banner" src="assets/banner.svg" alt="Threat Feed Me! A carnivorous blocklist for your firewall">
     <p class="pitch">
       An <b>on-prem threat-intelligence aggregator</b> that normalizes, dedupes, and scores
-      <b>19 free, keyless threat feeds</b> — malicious <b>IPs</b> and <b>domains</b> —
+      <b>22 free, keyless threat feeds</b> — malicious <b>IPs</b> and <b>domains</b> —
       into High/Medium/Low confidence tiers, then serves them as
       <b>URLs your firewall and DNS filter poll</b>.
     </p>
@@ -232,8 +232,8 @@
 
       <p class="after-code">
         Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
-        On first start it fetches the 19 feeds (15 IP feeds plus URLhaus, OpenPhish,
-        Phishing Army, and HaGeZi domain feeds), dedupes and scores them, and begins serving block lists,
+        On first start it fetches the 22 feeds (16 IP feeds plus URLhaus, OpenPhish,
+        Phishing Army, HaGeZi TIF, Phishunt, and DRB-Ra C2 domain feeds), dedupes and scores them, and begins serving block lists,
         then auto-refreshes every 60 minutes. Opt-in integrations with free API keys:
         <a href="https://honeydb.io" target="_blank" rel="noopener">HoneyDB</a> (honeypot sensor
         network, including sensors <i>you</i> operate voting as a source) and AlienVault OTX.
