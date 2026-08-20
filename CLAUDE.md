@@ -325,14 +325,24 @@ The gate is the two enabling pieces, both shipped:
   can still be purged; serve-time filtering still excludes it — this governs
   row retention only. The refresh path passes `db.get_whitelist_map()` so a
   whitelisted IP never ages out.
-- **`sightings` churn log** is the leave/return ground truth. Per source per
-  refresh tick, `append_sightings(source, present_map, tick)` snapshots that
-  source's current indicator set in ONE batch (executemany on the
-  UNIQUE(source_name, ip, tick) key) — the same batching discipline as the
-  feed bulk-write path, so a refresh tick never wedges the log. A source
-  that errored/skipped the tick is left out; its prior rows make the leave
-  observable (ip present at tick N, no row at N+1). `run_refresh` wires this
-  per successfully-refreshed source each tick.
+- **`sightings` churn log** is the leave/return ground truth — **TRANSITION
+  format since v2.4.9**. The original per-tick full-presence snapshots wrote
+  ~50M rows/day (~10 GB/day of DB + backups to match) and nearly filled the
+  prod disk in two days; they also diffed `get_source_ips` (indicator_sources
+  = add-only attribution that never shrinks), so leaves were unobservable
+  anyway. Now: `FeedIngestor.ingested_values` captures each clean fetch's
+  ACTUAL post-filter values; `run_refresh` passes them to
+  `db.update_source_sightings(source, values, tick)`, which diffs against
+  `source_state` (per-source membership, bounded by the live corpus) and
+  writes ONLY arrivals (present=1) / leaves (present=0). Unchanged refetches
+  and not-modified/errored fetches write nothing (no fake mass-leaves).
+  First observation seeds state with NO events (a baseline is a censoring
+  boundary, not churn). `detect_leaves` reads transitions directly. The
+  v2.4.9 schema migration DROPs old-format rows (a row-wise DELETE would
+  balloon the WAL on an already-full disk), VACUUMs once to shrink the file
+  (else freed pages keep inflating every backup), and stamps
+  settings.sightings_format — one-time, self-healing for every deployment
+  that pulled 2.4.2-2.4.8.
 
 Training signal (leave then return within window) only exists once the log
 has accumulated measurable churn — weeks out. The prediction remains

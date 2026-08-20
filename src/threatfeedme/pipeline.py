@@ -57,8 +57,16 @@ def due_feeds(db: Database, default_interval_seconds: int) -> List[str]:
     return due
 
 
-def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
-    """Fetch and ingest enabled feeds (optionally a subset by name)."""
+def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
+                collect_values: Optional[Dict] = None) -> Dict:
+    """Fetch and ingest enabled feeds (optionally a subset by name).
+
+    `collect_values`, when given, is filled with {feed_name: set(values)} for
+    every feed whose fetch fully succeeded with fresh content (not-modified
+    and errored feeds leave no entry) — the churn log's clean-snapshot input.
+    Kept out of the returned results dict on purpose: that dict is stored as
+    refresh status and serialized to the dashboard, where a half-million-value
+    set has no business being."""
     safety_cfg = config.get('safety', {}) or {}
     ingestor = FeedIngestor(
         db,
@@ -79,6 +87,8 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None) ->
         except Exception as e:
             results[feed.name] = {'status': 'error', 'error': str(e)}
             logger.error(f"[fail] {feed.name}: {e}")
+    if collect_values is not None:
+        collect_values.update(ingestor.ingested_values)
     return results
 
 
@@ -242,27 +252,24 @@ def retention_max_age_days(db: Database, config: Dict) -> int:
 def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
     """Full refresh: fetch -> score -> export -> push. Returns per-feed fetch
     results."""
-    fetched = fetch_feeds(db, config, only=only)
+    fetched_values: Dict = {}
+    fetched = fetch_feeds(db, config, only=only, collect_values=fetched_values)
     tick = datetime.now(timezone.utc).isoformat()
-    # Churn ground truth: snapshot each successfully-refreshed source's
-    # current indicator set into the sightings log, one batch per source per
-    # tick. A source that errored/skipped this tick is left out — its prior
-    # tick rows make the leave observable without writing False rows (an ip
-    # present at tick N with no row at N+1 is the leave). The Sightings
-    # UNIQUE(source_name, ip, tick) key is why re-inserting the same tick
-    # replaces; leave-then-return is the predictor's training signal.
-    for name, res in fetched.items():
-        if res.get("status") != "success":
+    # Churn ground truth, transition format: diff each cleanly-fetched
+    # source's ACTUAL ingested values against its last snapshot and record
+    # only arrivals/leaves (see Database.update_source_sightings — an
+    # unchanged refetch writes nothing). Only feeds present in fetched_values
+    # had a complete fresh parse; errored and not-modified feeds are absent,
+    # so a partial refresh can never fake a mass-leave. Diffing the fetched
+    # values (not indicator_sources, which is add-only attribution) is what
+    # makes leaves observable at all — attribution never shrinks.
+    for name, values in fetched_values.items():
+        if fetched.get(name, {}).get("status") != "success":
             continue
-        ips = db.get_source_ips(name)
-        if ips:
-            # snapshot_ok gate (#2): a "success" refresh is a clean,
-            # complete snapshot (error/not-modified/partial already skip via
-            # the status check above), so leave detection only ever compares
-            # consecutive complete snapshots — a partial fetch can't flip a
-            # present row to a fake leave.
-            db.append_sightings(name, {ip: True for ip in ips}, tick,
-                                snapshot_ok=True)
+        stats = db.update_source_sightings(name, values, tick)
+        if stats["arrived"] or stats["left"]:
+            logger.info(f"[churn] {name}: +{stats['arrived']} arrived, "
+                        f"-{stats['left']} left")
     max_age_days = retention_max_age_days(db, config)
     # Ring-prune the churn log so sightings can't grow without bound (one row
     # per source per ip per tick). Keep well beyond the indicator retention

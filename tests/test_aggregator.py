@@ -1019,58 +1019,130 @@ def test_purge_stale_indicators_keeps_feed_scoped_whitelist(db):
     assert db.get_indicator("203.0.113.65") is not None
 
 
+def _ticks_ago(*days):
+    now = datetime.now(timezone.utc)
+    return [(now - timedelta(days=d)).isoformat() for d in days]
+
+
+def test_sightings_migration_drops_old_format_once(db, tmp_path):
+    """Upgrading a 2.4.2-2.4.8 database (presence-snapshot sightings, no
+    format flag) drops the bloated rows, stamps the flag, and never repeats;
+    transition-format data written after the migration survives reopens."""
+    # Simulate the old format: rows present, flag absent.
+    conn = sqlite3.connect(db.db_path)
+    try:
+        conn.executemany(
+            "INSERT INTO sightings (source_name, ip, tick, present) VALUES (?,?,?,1)",
+            [("S", f"203.0.113.{i}", "2026-08-19T00:00:00+00:00") for i in range(1, 6)])
+        conn.execute("DELETE FROM settings WHERE key='sightings_format'")
+        conn.commit()
+    finally:
+        conn.close()
+    migrated = Database(db.db_path)   # re-open: migration must fire
+    with migrated._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM sightings")
+        assert cur.fetchone()[0] == 0
+    assert migrated.get_setting("sightings_format") == "transitions"
+    # New-format data written now must survive a further reopen (no re-drop).
+    t1, t2 = _ticks_ago(2, 1)
+    migrated.update_source_sightings("S", {"A"}, t1)
+    migrated.update_source_sightings("S", {"B"}, t2)
+    again = Database(db.db_path)
+    with again._cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM sightings")
+        assert cur.fetchone()[0] == 2   # A leave + B arrival, kept
+
+
+def test_update_source_sightings_baseline_writes_no_events(db):
+    # First observation seeds state without arrival events: a baseline is a
+    # censoring boundary, not churn.
+    t1, = _ticks_ago(3)
+    stats = db.update_source_sightings("S", {"A", "B"}, t1)
+    assert stats == {"arrived": 0, "left": 0, "baseline": 2}
+    conn = sqlite3.connect(db.db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM source_state").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_update_source_sightings_unchanged_refetch_writes_nothing(db):
+    t1, t2 = _ticks_ago(3, 2)
+    db.update_source_sightings("S", {"A", "B"}, t1)          # baseline
+    stats = db.update_source_sightings("S", {"A", "B"}, t2)  # identical
+    assert stats == {"arrived": 0, "left": 0, "baseline": 0}
+    conn = sqlite3.connect(db.db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_update_source_sightings_records_transitions_and_updates_state(db):
+    t1, t2 = _ticks_ago(3, 2)
+    db.update_source_sightings("S", {"A", "B"}, t1)              # baseline
+    stats = db.update_source_sightings("S", {"A", "C"}, t2)      # B left, C arrived
+    assert stats == {"arrived": 1, "left": 1, "baseline": 0}
+    conn = sqlite3.connect(db.db_path)
+    try:
+        rows = conn.execute("SELECT ip, present FROM sightings ORDER BY ip").fetchall()
+        assert rows == [("B", 0), ("C", 1)]
+        state = {r[0] for r in conn.execute(
+            "SELECT ip FROM source_state WHERE source_name='S'").fetchall()}
+        assert state == {"A", "C"}
+    finally:
+        conn.close()
+
+
 def test_prune_sightings_drops_old_keeps_recent(db):
     # The churn log is ring-pruned so it can't grow without bound.
-    old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
-    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    db.append_sightings("spamhaus_drop", {"203.0.113.70": True}, old)
-    db.append_sightings("spamhaus_drop", {"203.0.113.70": True}, recent)
+    t1, t_old, t_recent = _ticks_ago(45, 40, 1)
+    db.update_source_sightings("S", {"A"}, t1)           # baseline
+    db.update_source_sightings("S", {"A", "B"}, t_old)   # B arrival (old event)
+    db.update_source_sightings("S", {"A"}, t_recent)     # B leave (recent event)
     assert db.prune_sightings(30) == 1
     conn = sqlite3.connect(db.db_path)
     try:
         ticks = [r[0] for r in conn.execute("SELECT tick FROM sightings").fetchall()]
     finally:
         conn.close()
-    assert ticks == [recent]
+    assert ticks == [t_recent]
 
 
 def test_prune_sightings_disabled_when_zero(db):
-    old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
-    db.append_sightings("spamhaus_drop", {"203.0.113.71": True}, old)
+    t1, t_old = _ticks_ago(45, 40)
+    db.update_source_sightings("S", {"A"}, t1)
+    db.update_source_sightings("S", {"A", "B"}, t_old)
     assert db.prune_sightings(0) == 0
 
 
 def test_detect_leaves_left_and_returned(db):
     # A present throughout; B left-then-returned; C left. left=[C], returned=[B],
     # and A (continuously present) must be in neither.
-    now = datetime.now(timezone.utc)
-    t1 = (now - timedelta(days=3)).isoformat()
-    t2 = (now - timedelta(days=2)).isoformat()
-    t3 = (now - timedelta(days=1)).isoformat()
-    db.append_sightings("S", {"A": True, "B": True, "C": True}, t1)
-    db.append_sightings("S", {"A": True, "C": True}, t2)          # B absent
-    db.append_sightings("S", {"A": True, "B": True}, t3)          # B back, C absent
+    t1, t2, t3 = _ticks_ago(3, 2, 1)
+    db.update_source_sightings("S", {"A", "B", "C"}, t1)   # baseline
+    db.update_source_sightings("S", {"A", "C"}, t2)        # B leaves
+    db.update_source_sightings("S", {"A", "B"}, t3)        # B returns, C leaves
     r = db.detect_leaves("S", 30)
-    assert sorted(r["left"]) == ["C"]
-    assert sorted(r["returned"]) == ["B"]
+    assert r["left"] == ["C"]
+    assert r["returned"] == ["B"]
     assert "A" not in r["left"] and "A" not in r["returned"]
 
 
 def test_detect_leaves_single_snapshot_has_no_churn(db):
-    t1 = datetime.now(timezone.utc).isoformat()
-    db.append_sightings("S", {"A": True, "B": True}, t1)
+    t1, = _ticks_ago(1)
+    db.update_source_sightings("S", {"A", "B"}, t1)        # baseline only
     r = db.detect_leaves("S", 30)
     assert r["left"] == [] and r["returned"] == []
 
 
 def test_detect_leaves_first_appearance_is_not_a_return(db):
-    # An ip newly seen (absent earlier only because it hadn't appeared yet) is
-    # not a return, and being in the latest snapshot it hasn't left.
-    now = datetime.now(timezone.utc)
-    t1 = (now - timedelta(days=3)).isoformat()
-    t2 = (now - timedelta(days=2)).isoformat()
-    db.append_sightings("S", {"A": True}, t1)
-    db.append_sightings("S", {"A": True, "X": True}, t2)
+    # A newly-seen value arrives (a real arrival event, post-baseline) but has
+    # no prior leave — not a return; still in the list — not a leave.
+    t1, t2 = _ticks_ago(3, 2)
+    db.update_source_sightings("S", {"A"}, t1)             # baseline
+    db.update_source_sightings("S", {"A", "X"}, t2)        # X arrives
     r = db.detect_leaves("S", 30)
     assert "X" not in r["returned"]
     assert "X" not in r["left"]
@@ -1078,16 +1150,13 @@ def test_detect_leaves_first_appearance_is_not_a_return(db):
 
 def test_detect_leaves_return_outside_window_excluded(db):
     # B leaves and returns, but the return is older than the window.
-    now = datetime.now(timezone.utc)
-    t1 = (now - timedelta(days=60)).isoformat()
-    t2 = (now - timedelta(days=55)).isoformat()
-    t3 = (now - timedelta(days=50)).isoformat()
-    db.append_sightings("S", {"A": True, "B": True}, t1)
-    db.append_sightings("S", {"A": True}, t2)                     # B absent
-    db.append_sightings("S", {"A": True, "B": True}, t3)          # B back, but 50d ago
+    t1, t2, t3 = _ticks_ago(60, 55, 50)
+    db.update_source_sightings("S", {"A", "B"}, t1)        # baseline
+    db.update_source_sightings("S", {"A"}, t2)             # B leaves (55d ago)
+    db.update_source_sightings("S", {"A", "B"}, t3)        # B returns (50d ago)
     r = db.detect_leaves("S", 30)
     assert "B" not in r["returned"]        # return is outside the 30d window
-    assert r["left"] == []                  # B present at latest snapshot
+    assert r["left"] == []                  # B is back in the list
 
 
 def test_corpus_change_key_moves_on_add_and_fp(db):
@@ -2731,36 +2800,26 @@ def test_429_retry_after_is_capped_and_final_attempt_raises(db, monkeypatch):
 # ------------------------------------------------------------ sightings ----
 
 
-def test_sightings_appended_per_tick(db):
-    """Sightings table records per-source per-tick presence in batch."""
-    tick = "2026-08-18T00:00:00Z"
-    present_map = {"203.0.113.77": True, "198.51.100.1": True}
-    count = db.append_sightings("honeydb_mydata", present_map, tick)
-    assert count == 2
-
-    # Verify rows landed
+def test_sightings_transitions_isolated_per_source(db):
+    """Transition events are scoped per source: one feed's churn never bleeds
+    into another's state or events, and an empty current set records every
+    prior member as a leave."""
+    t1, t2 = _ticks_ago(2, 1)
+    db.update_source_sightings("honeydb_mydata", {"203.0.113.77", "198.51.100.1"}, t1)
+    db.update_source_sightings("greensnow", {"203.0.113.77"}, t1)   # same ip, other feed
+    # honeydb drains to empty -> both members leave; greensnow untouched
+    stats = db.update_source_sightings("honeydb_mydata", set(), t2)
+    assert stats == {"arrived": 0, "left": 2, "baseline": 0}
     with db._cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM sightings WHERE source_name=? AND tick=?",
-            ("honeydb_mydata", tick),
-        )
-        assert cur.fetchone()[0] == 2
-
-    # UNIQUE(source_name, ip, tick): re-insert with same tick replaces
-    db.append_sightings("honeydb_mydata", {"203.0.113.77": True}, tick)
-    with db._cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM sightings")
-        assert cur.fetchone()[0] == 2  # still 2
-
-    # Different tick adds new rows
-    tick2 = "2026-08-18T01:00:00Z"
-    db.append_sightings("honeydb_mydata", {"203.0.113.77": True}, tick2)
-    with db._cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM sightings")
-        assert cur.fetchone()[0] == 3
-
-    # Empty map is a no-op
-    assert db.append_sightings("honeydb_mydata", {}, tick2) == 0
+        cur.execute("SELECT COUNT(*) FROM sightings WHERE source_name=?",
+                    ("honeydb_mydata",))
+        assert cur.fetchone()[0] == 2   # two leave events
+        cur.execute("SELECT COUNT(*) FROM sightings WHERE source_name=?",
+                    ("greensnow",))
+        assert cur.fetchone()[0] == 0   # baseline only, no events
+        cur.execute("SELECT COUNT(*) FROM source_state WHERE source_name=?",
+                    ("greensnow",))
+        assert cur.fetchone()[0] == 1   # greensnow state intact
 
 
 def test_other_4xx_still_fails_immediately(db, monkeypatch):

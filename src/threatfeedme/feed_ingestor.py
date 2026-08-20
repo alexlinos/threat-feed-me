@@ -223,6 +223,13 @@ class FeedIngestor:
         # mid-ingest). None means "nothing to persist" (local file or 304);
         # (None, None) means "clear the stored validators".
         self._pending_validators: Optional[Tuple[Optional[str], Optional[str]]] = None
+        # Per-feed values from each COMPLETE ingest this ingestor performed,
+        # keyed by feed name — the churn log diffs these against source_state
+        # (see Database.update_source_sightings). A not-modified or failed
+        # fetch deliberately leaves no entry: no clean snapshot, no diff, so a
+        # partial refresh can never fake a mass-leave. Post-safety-filter, so
+        # the log tracks what actually entered the corpus.
+        self.ingested_values: Dict[str, Set[str]] = {}
 
     def fetch_feed(self, feed: FeedSource) -> Union[List[Dict], _NotModified]:
         """Fetch indicators from a feed source.
@@ -487,6 +494,10 @@ class FeedIngestor:
                 rows.append((entry['ip'], metadata))
 
             count = self.db.add_indicators_bulk(rows, source=feed.name, kind=feed.indicator_kind)
+            # Full parse succeeded: this IS the source's current membership.
+            # (The not-modified path returns earlier and records nothing —
+            # unchanged content means no transitions by definition.)
+            self.ingested_values[feed.name] = {r[0] for r in rows}
 
             if skipped:
                 logger.info(f"{feed.name}: skipped {skipped} private/reserved/known-good entries")

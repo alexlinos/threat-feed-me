@@ -1,11 +1,14 @@
 """SQLite database layer for Threat Feed Me!
 """
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Set, Tuple
 import json
 import os
+
+logger = logging.getLogger(__name__)
 
 from threatfeedme.models import (ThreatIndicator, WhitelistEntry, ConfidenceTier, FeedStats,
                     FeedSource, FeedType, ALL_FEEDS, REASON_FALSE_POSITIVE, REASON_OTHER,
@@ -224,6 +227,19 @@ class Database:
                 )
             """)
 
+            # Per-source membership as of the last successful snapshot — the
+            # baseline update_source_sightings diffs against so the sightings
+            # log records TRANSITIONS (arrivals/leaves) instead of re-recording
+            # every present value every tick. Bounded by the live corpus: rows
+            # are inserted on arrival and deleted on leave, never accumulated.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS source_state (
+                    source_name TEXT NOT NULL,
+                    ip TEXT NOT NULL,
+                    PRIMARY KEY (source_name, ip)
+                ) WITHOUT ROWID
+            """)
+
             # Legacy whitelist migration
             existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
             if existing_cols and 'feed_name' not in existing_cols:
@@ -337,6 +353,45 @@ class Database:
             # so that DELETE is a range scan, not a full table scan.
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
 
+            # --- Sightings format migration (v2.4.9) -------------------------
+            # Versions 2.4.2-2.4.8 recorded FULL per-tick presence snapshots:
+            # ~50M rows/day on a mid-size roster, ~10 GB/day of database (and
+            # backups to match) — live-measured filling the prod disk within
+            # days. The transition format records only arrivals/leaves. The
+            # old rows are semantically incompatible with transition queries,
+            # so on first start after upgrade: DROP the bloated table (a
+            # row-wise DELETE would balloon the WAL by the table's size on a
+            # disk that is already under pressure), recreate it empty, and
+            # VACUUM once to shrink the file — otherwise the freed pages keep
+            # inflating every subsequent backup. Guarded by a settings flag so
+            # it runs exactly once; fresh installs stamp the flag and skip.
+            cursor.execute("SELECT value FROM settings WHERE key = 'sightings_format'")
+            fmt = cursor.fetchone()
+            if not fmt or fmt[0] != 'transitions':
+                cursor.execute("SELECT MAX(id) FROM sightings")
+                had_rows = (cursor.fetchone()[0] or 0) > 0
+                cursor.execute("DROP TABLE sightings")
+                cursor.execute("""
+                    CREATE TABLE sightings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_name TEXT NOT NULL,
+                        ip TEXT NOT NULL,
+                        tick TEXT NOT NULL,
+                        present INTEGER NOT NULL,
+                        UNIQUE(source_name, ip, tick)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
+                cursor.execute("DELETE FROM source_state")
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
+                conn.commit()
+                if had_rows:
+                    logger.info("[migration] sightings: presence-snapshot rows dropped; "
+                                "VACUUM to reclaim disk (one-time, may take minutes)...")
+                    conn.execute("VACUUM")
+                    logger.info("[migration] sightings VACUUM done")
+
             conn.commit()
         finally:
             conn.close()
@@ -415,94 +470,106 @@ class Database:
         finally:
             conn.close()
 
-    def append_sightings(self, source_name: str, present_map: Dict[str, bool],
-                         tick: str, snapshot_ok: bool = True) -> int:
-        """Record per-source per-tick presence for churn tracking.
+    def update_source_sightings(self, source_name: str, current_values: Set[str],
+                                tick: str) -> Dict[str, int]:
+        """Record a source's churn as TRANSITIONS, not presence snapshots.
 
-        Appends the whole source's per-tick set in ONE batch (executemany on
-        the UNIQUE(source_name, ip, tick) key) so a refresh tick doesn't
-        wedge the log — the same reason the feed bulk-write path batches.
-        Re-inserting the same tick replaces the prior row (present flips to
-        absent on a leave tick). Returns rows appended.
+        Diffs `current_values` (the values a clean, complete fetch actually
+        ingested) against source_state (this source's membership as of its
+        last snapshot) and writes only the changes: present=1 rows for
+        arrivals, present=0 rows for leaves. An unchanged refetch writes
+        NOTHING — this is what keeps the log at churn volume (~tens of
+        thousands of rows/day) instead of corpus x tick volume (the
+        2.4.2-2.4.8 presence format wrote ~50M rows/day, live-measured, and
+        filled the prod disk in days).
 
-        `snapshot_ok` is the clean-snapshot gate (#2): only a COMPLETE fetch
-        counts as a valid snapshot. When False (an error, not-modified, or
-        partial/truncated body), nothing is written — the source's prior
-        clean rows stay, so a partial refresh can never manufacture a fake
-        mass-leave. Leave detection only compares consecutive clean
-        snapshots of the same source, so churn labels are trustworthy.
+        The clean-snapshot gate lives at the caller: run_refresh only calls
+        this for sources whose fetch fully succeeded (errors and not-modified
+        are skipped), so a partial refresh can never manufacture a fake
+        mass-leave.
+
+        First observation of a source seeds source_state WITHOUT writing
+        arrival events: a baseline is a censoring boundary, not churn, and
+        recording it would flood the log with one corpus-sized wave per feed
+        (and pollute return-detection with meaningless "arrivals").
+
+        Returns {"arrived": n, "left": n, "baseline": n}.
         """
-        if not present_map or not snapshot_ok:
-            return 0
-        rows = [(source_name, ip, tick, 1 if present else 0)
-                for ip, present in present_map.items()]
         with self._cursor() as cur:
-            cur.executemany(
-                "INSERT OR REPLACE INTO sightings "
-                "(source_name, ip, tick, present) VALUES (?, ?, ?, ?)",
-                rows,
-            )
-            return len(rows)
+            cur.execute("SELECT ip FROM source_state WHERE source_name = ?",
+                        (source_name,))
+            prior = {row["ip"] for row in cur.fetchall()}
+
+            if not prior:
+                if current_values:
+                    cur.executemany(
+                        "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
+                        [(source_name, v) for v in current_values])
+                return {"arrived": 0, "left": 0, "baseline": len(current_values)}
+
+            arrived = current_values - prior
+            left = prior - current_values
+            if arrived:
+                cur.executemany(
+                    "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                    "VALUES (?, ?, ?, 1)",
+                    [(source_name, v, tick) for v in arrived])
+                cur.executemany(
+                    "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
+                    [(source_name, v) for v in arrived])
+            if left:
+                cur.executemany(
+                    "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                    "VALUES (?, ?, ?, 0)",
+                    [(source_name, v, tick) for v in left])
+                cur.executemany(
+                    "DELETE FROM source_state WHERE source_name = ? AND ip = ?",
+                    [(source_name, v) for v in left])
+            return {"arrived": len(arrived), "left": len(left), "baseline": 0}
 
     def detect_leaves(self, source_name: str, window_days: int) -> Dict[str, List[str]]:
-        """Churn labels from a source's own consecutive clean snapshots.
+        """Churn labels from the transition log.
 
-        A "snapshot" is one tick where the source wrote rows; because the
-        snapshot_ok gate means partial/errored fetches write nothing, an ip's
-        ABSENCE at a snapshot tick (a snapshot exists, but no row for that ip)
-        reliably means it was not in the source's list then — never a partial
-        fetch artifact. All comparisons are within THIS source's ticks, never
-        global ticks, so another feed's refresh cadence cannot pollute the
+        Events are written only on clean snapshots (see
+        update_source_sightings), so a leave event is a real disappearance
+        from the source's list, never a partial-fetch artifact. All within
+        THIS source's events — another feed's cadence cannot pollute the
         signal.
 
         Returns {"left": [...], "returned": [...]}:
-        - `left`   = present at some snapshot but ABSENT at the source's
-                     latest snapshot.
-        - `returned` = present -> absent-at-an-intervening-snapshot -> present,
-                     with the return tick within `window_days`. This is the
-                     leave-then-return label the predictor trains on; an ip
-                     seen for the first time (no prior presence) is NOT a
-                     return, and a continuously-present ip is neither.
+        - `left`     = ips whose LATEST event for this source is a leave
+                       (present=0) within `window_days` — currently out.
+        - `returned` = ips with an arrival (present=1) within `window_days`
+                       that follows an earlier leave — the leave-then-return
+                       label the predictor trains on. A first appearance is
+                       seeded as baseline state, not an arrival event, so it
+                       can never read as a return.
         """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
         with self._cursor() as cur:
             cur.execute(
-                "SELECT tick, ip FROM sightings "
-                "WHERE source_name = ? AND present = 1 ORDER BY tick",
-                (source_name,),
-            )
-            rows = cur.fetchall()
-        if not rows:
-            return {"left": [], "returned": []}
-
-        present_by_tick: Dict[str, Set[str]] = {}
-        for r in rows:
-            present_by_tick.setdefault(r["tick"], set()).add(r["ip"])
-        ticks = sorted(present_by_tick)          # this source's snapshot ticks
-        latest_set = present_by_tick[ticks[-1]]
-        ever: Set[str] = set().union(*present_by_tick.values())
-
-        # left: appeared at some point, gone from the latest snapshot.
-        left = sorted(ever - latest_set)
-
-        # returned: for each ip, a present tick, then a later snapshot where it
-        # was absent, then a present tick again within the window.
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
-        returned = []
-        for ip in ever:
-            present_ticks = [t for t in ticks if ip in present_by_tick[t]]
-            for earlier, later in zip(present_ticks, present_ticks[1:]):
-                # any snapshot strictly between two present ticks is one where
-                # the ip was absent (it's a snapshot tick without this ip).
-                gap = any(earlier < t < later for t in ticks)
-                if gap and later >= cutoff:
-                    returned.append(ip)
-                    break
-        return {"left": left, "returned": sorted(returned)}
+                "SELECT DISTINCT ip FROM sightings s1 "
+                "WHERE s1.source_name = ? AND s1.present = 0 AND s1.tick >= ? "
+                "AND NOT EXISTS (SELECT 1 FROM sightings s2 "
+                "  WHERE s2.source_name = s1.source_name AND s2.ip = s1.ip "
+                "  AND s2.tick > s1.tick)",
+                (source_name, cutoff))
+            left = sorted(row["ip"] for row in cur.fetchall())
+            cur.execute(
+                "SELECT DISTINCT ip FROM sightings s1 "
+                "WHERE s1.source_name = ? AND s1.present = 1 AND s1.tick >= ? "
+                "AND EXISTS (SELECT 1 FROM sightings s2 "
+                "  WHERE s2.source_name = s1.source_name AND s2.ip = s1.ip "
+                "  AND s2.present = 0 AND s2.tick < s1.tick)",
+                (source_name, cutoff))
+            returned = sorted(row["ip"] for row in cur.fetchall())
+        return {"left": left, "returned": returned}
 
     def prune_sightings(self, keep_days: int) -> int:
-        """Ring-window prune of the churn log: drop sightings older than
-        keep_days. Bounds the table's otherwise-unbounded growth (one row per
-        source per ip per tick). tick is an ISO-8601 UTC string, so a lexical
+        """Ring-window prune of the churn log: drop transition events older
+        than keep_days. The transition format grows at churn rate, so this is
+        a light guard rather than the load-bearing bound it was for the old
+        presence-snapshot format. tick is an ISO-8601 UTC string, so a lexical
         '< cutoff' is a chronological compare; idx_sightings_tick makes it an
         index range delete rather than a full scan each refresh.
         """
@@ -531,20 +598,6 @@ class Database:
             n_src = cur.execute("SELECT COUNT(*) FROM indicator_sources").fetchone()[0]
             n_fb = cur.execute("SELECT COUNT(*) FROM feed_feedback").fetchone()[0]
         return (n_ind, n_src, n_fb)
-
-    def get_source_ips(self, source_name: str) -> Set[str]:
-        """Current set of IPs a feed source contributes (indicator_sources
-        joined to indicators). The refresh uses this to snapshot that
-        source's presence for the sightings churn log each tick.
-        """
-        with self._cursor() as cur:
-            cur.execute(
-                "SELECT i.ip FROM indicator_sources s "
-                "JOIN indicators i ON i.id = s.indicator_id "
-                "WHERE s.source_name = ?",
-                (source_name,),
-            )
-            return {row["ip"] for row in cur.fetchall()}
 
     def get_indicators_by_kind(self, kind: str = "ip") -> List[ThreatIndicator]:
         """All indicators of a specific kind (used by the kind-filtered
