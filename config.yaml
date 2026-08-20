@@ -142,6 +142,43 @@ feeds:
     enabled: false
     update_interval: 86400
 
+  # drb-ra C2IntelFeeds (ratified 2026-08-20): Cobalt Strike / C2 domains —
+  # a threat class no other domain feed covers (IP-side C2 is Feodo/ThreatFox).
+  # The filter-abused 30-day variant excludes legitimate fronted/CDN domains
+  # (blocking a raw fronted domain would block the CDN); small (~100) but
+  # every entry is a live C2. CSV "#domain,ioc" -> drb_ra_domains scraper.
+  - name: drb_ra_c2
+    url: https://raw.githubusercontent.com/drb-ra/C2IntelFeeds/master/feeds/domainC2s-30day-filter-abused.csv
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    update_interval: 3600
+    scraper: drb_ra_domains
+
+  # Phishunt (ratified 2026-08-20): live phishing URLs, keyless, small (~700)
+  # and fresh. An upstream of phishing_army — same freshness rationale as
+  # openphish (primary updates continuously; the aggregate is 6-hourly), and
+  # the overlap discounting prices the agreement.
+  - name: phishunt
+    url: https://phishunt.io/feed.txt
+    feed_type: "phishing"
+    indicator_kind: "domain"
+    update_interval: 3600
+
+  # PhishTank verified+online phishing URLs (ratified 2026-08-20). KEYLESS
+  # despite older notes calling it key-walled (live-probed: the public
+  # online-valid.csv downloads without a key; follow redirects). ~70k URLs.
+  # Ships OFF for the same reason as cert_pl: it is an upstream of
+  # phishing_army, so enabling both twin-flags it as largely contained —
+  # the provenance-pure alternative for operators preferring the primary.
+  # CSV "phish_id,url,..." -> phishtank_urls scraper.
+  - name: phishtank_online_valid
+    url: https://data.phishtank.com/data/online-valid.csv
+    feed_type: "phishing"
+    indicator_kind: "domain"
+    enabled: false
+    update_interval: 3600
+    scraper: phishtank_urls
+
   # --- DShield / SANS ISC recommended block list (top attacking /24s) ----
   # Netblock-shaped: rows are start/end/mask, rewritten to CIDR by the
   # dshield_block scraper so the real /24 prefixes drive overlap scoring.
@@ -163,6 +200,15 @@ feeds:
     url: https://www.spamhaus.org/drop/drop.txt
     feed_type: "spam"
     update_interval: 7200
+
+  # --- bsdly.net greytrap (ratified 2026-08-20) ---------------------------
+  # Peter Hansteen's SMTP greytrapping + bruteforce trap list: small (~600),
+  # hourly, and genuinely independent — trap-caught senders, not a
+  # republication of other rosters. Comment header ignored by the IP parser.
+  - name: bsdly_traplist
+    url: https://www.bsdly.net/~peter/bsdly.net.traplist
+    feed_type: "spam"
+    update_interval: 3600
 
   # --- GreenSnow (multi-service attack sensors) --------------------------
   - name: greensnow

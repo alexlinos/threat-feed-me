@@ -1486,6 +1486,45 @@ def test_dshield_scraper_rewrites_ranges_to_cidr(db, monkeypatch):
     assert "203.0.113.255" not in by_ip and len(by_ip) == 2
 
 
+def test_drb_ra_scraper_extracts_domain_column(db, monkeypatch):
+    """drb-ra '#domain,ioc' CSV: domains ingest, descriptions don't."""
+    raw = (
+        "#domain,ioc\n"
+        "aaa.ad4min.com,Possible Cobalt Strike C2 Domain\n"
+        "c2.evil.example,Possible Cobalt Strike C2 Fronted Domain\n"
+        "\n"
+    )
+    _stub_get(monkeypatch, [_FakeResponse(200, {}, raw)])
+    feed = FeedSource(name="drb_ra_c2", url="http://feeds.example/c2.csv",
+                      feed_type=FeedType.THREAT_INTEL, weight=1.0,
+                      update_interval=3600, scraper="drb_ra_domains",
+                      indicator_kind="domain")
+    entries = FeedIngestor(db).fetch_feed(feed)
+    values = {e["ip"] for e in entries}
+    assert values == {"aaa.ad4min.com", "c2.evil.example"}
+    assert all(e.get("kind") == "domain" for e in entries)
+
+
+def test_phishtank_scraper_extracts_url_hosts(db, monkeypatch):
+    """PhishTank CSV: the url column's HOST ingests; the header row and quoted
+    commas inside a URL don't break parsing."""
+    raw = (
+        "phish_id,url,phish_detail_url,submission_time\n"
+        "9508326,https://facture-92481.com/index.php,http://phishtank.example/9508326,2026-08-20\n"
+        '9508327,"https://evil.example/pay,me/now",http://phishtank.example/9508327,2026-08-20\n'
+    )
+    _stub_get(monkeypatch, [_FakeResponse(200, {}, raw)])
+    feed = FeedSource(name="phishtank_online_valid", url="http://feeds.example/pt.csv",
+                      feed_type=FeedType.PHISHING, weight=1.0,
+                      update_interval=3600, scraper="phishtank_urls",
+                      indicator_kind="domain")
+    entries = FeedIngestor(db).fetch_feed(feed)
+    values = {e["ip"] for e in entries}
+    assert values == {"facture-92481.com", "evil.example"}
+    # detail-page hosts (column 2) must never leak into the corpus
+    assert not any("phishtank.example" in v for v in values)
+
+
 # ------------------------------------------------------- OTX pulses scraper ----
 
 import ipaddress

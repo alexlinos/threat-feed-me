@@ -1,6 +1,8 @@
 """
 Feed Ingestion Engine - Fetch, normalize, and ingest threat feeds
 """
+import csv
+import io
 import os
 import re
 import socket
@@ -760,3 +762,48 @@ def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
 
 
 FeedIngestor.register_scraper("honeydb")(_scrape_honeydb)
+
+
+# =============================================================================
+# CSV-column scrapers (drb-ra C2 domains, PhishTank online-valid)
+# =============================================================================
+#
+# The domain parser wants domain/URL/hosts-file lines; a CSV row like
+# "evil.example,Possible Cobalt Strike C2 Domain" fails domain validation on
+# the comma (deliberately — never loosen the validator for a feed's framing).
+# These scrapers reduce a CSV to one column of plain values and hand the
+# result to the normal parser. Fetching goes through _fetch_url, so
+# conditional GET, retries, size caps, and the SSRF guard all apply.
+
+def _scrape_csv_column(self: FeedIngestor, feed: FeedSource, column: int):
+    content = self._fetch_url(feed)
+    if content is NOT_MODIFIED:
+        return NOT_MODIFIED
+    out = []
+    # csv module (not str.split): PhishTank quotes fields, and a quoted URL
+    # may legally contain commas.
+    for row in csv.reader(io.StringIO(content)):
+        if not row or row[0].lstrip().startswith('#'):
+            continue  # drb-ra's "#domain,ioc" header
+        if len(row) <= column:
+            continue
+        value = row[column].strip()
+        if not value or value.lower() in ('domain', 'url'):
+            continue  # PhishTank's unquoted "phish_id,url,..." header row
+        out.append(value)
+    return "\n".join(out)
+
+
+def _scrape_drb_ra_domains(self: FeedIngestor, feed: FeedSource):
+    """drb-ra C2IntelFeeds: '#domain,ioc' — the domain is column 0."""
+    return _scrape_csv_column(self, feed, 0)
+
+
+def _scrape_phishtank_urls(self: FeedIngestor, feed: FeedSource):
+    """PhishTank online-valid.csv: 'phish_id,url,...' — the URL is column 1;
+    the URL parser keeps the full host (see parse_domain_feed_content)."""
+    return _scrape_csv_column(self, feed, 1)
+
+
+FeedIngestor.register_scraper("drb_ra_domains")(_scrape_drb_ra_domains)
+FeedIngestor.register_scraper("phishtank_urls")(_scrape_phishtank_urls)

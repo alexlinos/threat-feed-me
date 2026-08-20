@@ -343,6 +343,35 @@ sightings ring-window prune (vs. unbounded growth) and indicator eviction
 both roll on retention; the backup-prune by timestamped filename (54a524d)
 already avoids the mtime NTP edge.
 
+### Ratified (maintainer, 2026-08-20) — go direct to primaries, not aggregates
+
+Direction: copy the SOURCES of aggregate lists (romainmarcoux malicious-domains/
+malicious-ip reviewed as the trigger), never the aggregates themselves —
+primary provenance feeds the votes engine real independence and can qualify
+as authoritative. Live-probed and shipped in v2.4.7:
+
+1. `drb_ra_c2` ON — drb-ra C2IntelFeeds, Cobalt Strike/C2 domains
+   (30day-filter-abused variant: excludes legit fronted/CDN domains). ~100
+   entries but a threat class nothing else in the roster covers. CSV via
+   `drb_ra_domains` scraper. Future authoritative candidate after live obs.
+2. `phishunt` ON — keyless live phishing URLs (~700). Upstream of
+   phishing_army; same freshness rationale as openphish.
+3. `phishtank_online_valid` OFF — **keyless after all** (older "key-walled"
+   notes are stale; online-valid.csv downloads publicly, follow redirects).
+   ~70k verified+online phishing URLs via `phishtank_urls` scraper. OFF per
+   the cert_pl precedent (upstream of phishing_army, twin-flags).
+4. `bsdly_traplist` ON — Peter Hansteen's greytrap (~600 IPs, hourly),
+   genuinely independent trap-caught senders.
+
+Probed and rejected this pass: digitalside (still down), red.flag.domains
+(re-affirmed: French TLDs), ut1-fr (tarball format + French focus),
+malwarebytes (no discoverable public URL), duggytuxy (no stable raw URLs,
+FR/BE focus), projecthoneypot (membership-walled), stamparm/ipsum +
+romainmarcoux full-* (aggregators — the very thing this ratification avoids).
+Zero-code option for later: subscribe the OTX account to romainmarcoux's
+AlienVault pulses (banking/dropbox/googledocs/microsoft/paypal phishtank,
+phishing-scam) — they'd flow through the existing otx_pulses scraper.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
