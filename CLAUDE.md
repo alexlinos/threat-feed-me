@@ -386,6 +386,20 @@ signal** — feeds listed in `scoring.high_confidence.authoritative_domain_feeds
 force HIGH on their own word. The effective-votes witness gate remains as a
 secondary path; both honor require_threat_intel; tier-scoped whitelist is the
 per-domain FP escape hatch. Live-verified: 459 urlhaus domains in HIGH.
+
+Post-roster-audit refinements (2026-08-20, v2.4.8): **authority is revocable
+by evidence** — an authoritative feed whose FP penalty factor drops below
+FP_DEGRADED_FACTOR (0.6, the same threshold as the dashboard's "degraded"
+badge) loses force-HIGH until the flags clear; keyed on the penalty factor,
+not weight, so an operator-pinned low base weight never strips authority.
+Rationale: tiers are pure vote math and never see reputation, so without this
+the FP self-heal loop couldn't touch provenance-HIGH at all. Also noted from
+the audit: the witness gate (>=3 effective votes) is currently SHADOWED by
+the 2.0 boundary floor — the boundary is the easier corroboration path to
+domain HIGH; this is deliberate layering, don't "fix" it. Open decision:
+promotion criteria for drb_ra_c2 into authoritative_domain_feeds (proposed:
+~2 weeks live, zero FP flags, stable fetches) — its live C2s currently sit
+in low/medium, below urlhaus commodity malware, until promoted.
 Gotcha: a config-only scoring change doesn't move the rescore gate's corpus
 key — force a recalc (dashboard button) after editing scoring config.
 

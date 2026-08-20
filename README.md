@@ -91,9 +91,10 @@ firewalls can poll them.
   (`*.example.com` covers the domain and every subdomain).
   The whitelist dialog shows which feed(s) reported the IP, and a reason
   (false positive / risk accepted / internal asset). Flagging a **false
-  positive** lowers that feed's reputation, so a noisy feed's IPs score lower
-  and drop out of the higher-confidence firewall feeds (self-heals when the
-  whitelist entry is removed). Click a feed's **⚠ N FP** badge to review what
+  positive** lowers that feed's reputation, so a noisy feed's indicators score
+  lower — and a feed flagged past the *degraded* threshold also loses its
+  authoritative force-HIGH privilege for domains until the flags are cleared
+  (self-heals when the whitelist entry is removed). Click a feed's **⚠ N FP** badge to review what
   it was penalized for and forgive individual flags or all of them; the
   whitelist entries stay in place, only the blame is withdrawn.
 - **Multi-format Export**: Text files, CSV, JSON for firewall/SIEM integration

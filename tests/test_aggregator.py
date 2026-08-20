@@ -2429,6 +2429,40 @@ def test_domain_authoritative_is_domain_only_and_optional(db):
         == ConfidenceTier.LOW
 
 
+def test_domain_authoritative_revoked_when_degraded(db):
+    """An authoritative feed whose FP penalty factor fell below the degraded
+    threshold (0.6, same as the dashboard badge) loses force-HIGH; clearing
+    the flags (factor back at 1.0) restores it."""
+    cfg = {"feeds": [{"name": "urlhaus_hostfile", "feed_type": "threat_intel"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {
+                           "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
+    scorer = ConfidenceScorer(db, cfg)
+    scorer.feed_penalty = {"urlhaus_hostfile": 0.59}  # degraded
+    assert scorer._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0,
+                                   kind='domain') == ConfidenceTier.LOW
+    scorer.feed_penalty = {"urlhaus_hostfile": 0.6}   # exactly at threshold: kept
+    assert scorer._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0,
+                                   kind='domain') == ConfidenceTier.HIGH
+    scorer.feed_penalty = {}                           # no flags: healthy default
+    assert scorer._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0,
+                                   kind='domain') == ConfidenceTier.HIGH
+
+
+def test_domain_authoritative_second_healthy_source_still_forces_high(db):
+    """Per-feed revocation: a degraded authoritative feed doesn't drag down a
+    domain also reported by a healthy authoritative feed."""
+    cfg = {"feeds": [{"name": "urlhaus_hostfile", "feed_type": "threat_intel"},
+                     {"name": "cert_pl", "feed_type": "phishing"}],
+           "scoring": {"tiering": {"method": "effective_votes"},
+                       "high_confidence": {
+                           "authoritative_domain_feeds": ["urlhaus_hostfile", "cert_pl"]}}}
+    scorer = ConfidenceScorer(db, cfg)
+    scorer.feed_penalty = {"urlhaus_hostfile": 0.3}  # degraded; cert_pl healthy
+    assert scorer._tier_from_votes(1.5, ["urlhaus_hostfile", "cert_pl"], 1.1, 10.0,
+                                   kind='domain') == ConfidenceTier.HIGH
+
+
 def test_domain_authoritative_honors_require_threat_intel(db):
     """A custom-typed feed marked authoritative cannot force HIGH while
     require_threat_intel is on — the intel gate outranks the designation."""

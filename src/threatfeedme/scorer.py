@@ -486,6 +486,16 @@ class ConfidenceScorer:
         Who reported it is the honest confidence signal for domains; a
         tier-scoped whitelist entry remains the per-domain escape hatch.
 
+        Authority is revocable by evidence: an authoritative feed whose
+        false-positive penalty factor has fallen below FP_DEGRADED_FACTOR —
+        the same threshold that shows the "degraded" badge on the dashboard —
+        loses its force-HIGH privilege until the flags are cleared and the
+        factor recovers. This keys on the FP penalty, not the configured
+        weight, so an operator-pinned low base weight never silently strips
+        authority. It extends the self-healing FP loop to the provenance
+        path: tiers are pure vote math and ignore reputation, so without
+        this a flagged authoritative feed would keep forcing HIGH.
+
         Secondary domain witness gate: >= min_domain_sources EFFECTIVE
         (overlap-discounted) witnesses also earns HIGH — genuinely
         independent corroboration counts even without an authoritative
@@ -498,7 +508,10 @@ class ConfidenceScorer:
         intel_ok = (not high_require_intel) or self._has_intel_source(sources)
         if kind == 'domain':
             auth_feeds = set(high_cfg.get('authoritative_domain_feeds') or [])
-            if intel_ok and auth_feeds and any(s in auth_feeds for s in sources):
+            if intel_ok and auth_feeds and any(
+                    s in auth_feeds
+                    and self.feed_penalty.get(s, 1.0) >= FP_DEGRADED_FACTOR
+                    for s in sources):
                 return ConfidenceTier.HIGH
             min_witnesses = float(high_cfg.get('min_domain_sources', 3))
             if votes >= min_witnesses and intel_ok:
