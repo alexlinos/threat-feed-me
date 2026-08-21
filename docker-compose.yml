@@ -34,7 +34,12 @@ services:
     # "Small-box deployments" in the README.
     # mem_limit: 1g
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/feeds/all.txt', timeout=5).ok else 1)"]
+      # Probe /healthz: constant-cost and unauthenticated. This block
+      # OVERRIDES the image's HEALTHCHECK, so it must be kept in sync with
+      # the Dockerfile. Never probe a feed URL here — /feeds/all.txt grows
+      # with the corpus and eventually outlives the probe timeout, marking
+      # healthy deployments permanently unhealthy.
+      test: ["CMD", "python", "-c", "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/healthz', timeout=5).ok else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
