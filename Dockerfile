@@ -30,8 +30,11 @@ EXPOSE 8080
 
 # Health check. Uses an unauthenticated feed endpoint so it still works when
 # dashboard Basic auth is enabled (the /api/* routes would return 401).
+# Health probe: /healthz is constant-cost and unauthenticated. Never probe a
+# feed URL here — /feeds/all.txt response time grows with the corpus and
+# eventually exceeds the probe timeout, marking healthy deployments unhealthy.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/feeds/all.txt', timeout=5).ok else 1)" || exit 1
+    CMD python -c "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/healthz', timeout=5).ok else 1)" || exit 1
 
 # Default command: start dashboard immediately; run the pipeline in the
 # background so a failing/slow feed fetch never blocks startup.

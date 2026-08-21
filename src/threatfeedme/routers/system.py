@@ -403,6 +403,21 @@ def indicators_page(request: Request, q: str = "", _=Depends(require_auth)):
     })
 
 
+@router.get("/healthz")
+def healthz():
+    """Container liveness probe: constant-cost and unauthenticated.
+
+    Deliberately NOT a feed URL — the old healthcheck streamed
+    /feeds/all.txt, whose response time grows with the corpus, and past
+    ~300k indicators it exceeded its own 5s timeout on a small box, marking
+    every large deployment permanently unhealthy (and flooding the Docker
+    event buffer with failed probes). Not /api/* either: those 401 when
+    dashboard Basic auth is enabled. A cheap indexed settings read proves
+    the server thread and the database file are both alive."""
+    core.db.get_setting("sightings_format")
+    return {"ok": True}
+
+
 @router.get("/api/stats")
 def get_stats(_=Depends(require_auth)):
     """Get statistics summary"""

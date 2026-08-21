@@ -905,3 +905,12 @@ def test_csrf_enforced_even_when_auth_off(client):
     }, headers={"X-Requested-With": "not-the-dashboard"})
     assert r.status_code == 403
     assert "CSRF" in r.json().get("detail", "")
+
+
+def test_healthz_is_cheap_and_unauthenticated(client):
+    """The container healthcheck target: must answer without auth headers and
+    without streaming the corpus (the old /feeds/all.txt probe timed out at
+    large corpus sizes, marking healthy deployments permanently unhealthy)."""
+    r = client.get("/healthz", headers={})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
