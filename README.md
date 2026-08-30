@@ -42,12 +42,13 @@ on-prem; feeds are pulled inbound only.
 - The dashboard shows the exact URLs to paste, per confidence tier, with a
   Copy button and firewall-specific instructions.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
-  or force a refresh, all from the dashboard, no config editing.
-- A few feeds ship **disabled**: AlienVault OTX, HoneyDB community and
-  own-sensor feeds, a keyless ThreatFox mirror (the auth-walled ThreatFox
-  export is built in, so a keyless mirror is enabled by default), and a
-  sample custom list. Enable them from the dashboard once configured. Feeds
-  that need API credentials have a **Set key** button: it prompts for each
+  a refresh, all from the dashboard, no config editing.
+- A few feeds ship **disabled**, opt-in from the dashboard once configured:
+  AlienVault OTX and the two HoneyDB feeds (free API keys required), the
+  auth-walled abuse.ch ThreatFox export (the keyless ThreatFox IOC mirror
+  covers it and ships enabled), CERT.PL, HaGeZi fake, ThreatView domains,
+  joewein, PhishTank online-valid, and a sample custom honeypot list.
+  Feeds that need API credentials have a **Set key** button: it prompts for each
   required credential (HoneyDB takes an id and key pair), stores them
   server-side in the data volume's `.env`, applies them immediately, and
   never displays them back.
