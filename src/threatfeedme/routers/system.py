@@ -412,9 +412,11 @@ def healthz():
     ~300k indicators it exceeded its own 5s timeout on a small box, marking
     every large deployment permanently unhealthy (and flooding the Docker
     event buffer with failed probes). Not /api/* either: those 401 when
-    dashboard Basic auth is enabled. A cheap indexed settings read proves
-    the server thread and the database file are both alive."""
-    core.db.get_setting("sightings_format")
+    dashboard Basic auth is enabled. db.ping() is a commit-free read — it
+    proves the server thread and the database file are both alive without
+    ever touching the WAL single-writer lock (get_setting's _cursor()
+    commits, which the 30s-interval probe must not do)."""
+    core.db.ping()
     return {"ok": True}
 
 

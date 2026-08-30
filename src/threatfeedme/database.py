@@ -1494,6 +1494,20 @@ class Database:
 
     # ==================== SETTINGS ====================
 
+    def ping(self) -> None:
+        """Liveness check: open the DB and run a read query WITHOUT commit.
+
+        Unlike _cursor()-based reads, this never issues a commit — in WAL
+        mode a commit after a read transaction still touches the single-writer
+        lock. The container healthcheck fires this every 30s; it must prove
+        the DB file opens and the schema exists without contending for the
+        writer lock at all."""
+        conn = self._get_connection()
+        try:
+            conn.execute("SELECT 1 FROM settings LIMIT 1")
+        finally:
+            conn.close()
+
     def get_setting(self, key: str, default: str = None) -> Optional[str]:
         with self._cursor() as cur:
             cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
