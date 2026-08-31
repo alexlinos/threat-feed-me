@@ -3,6 +3,14 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
+# Refresh the base image's OS packages at build time. python:3.11-slim drifts
+# behind Debian security updates between base rebuilds, so a fresh build still
+# ships known-vulnerable openssl/util-linux/etc.; upgrading here pulls the
+# fixes that DO exist (Grype-confirmed) without changing the Python minor.
+# Won't-fix Debian CVEs (perl-base, libc) remain — those need a base change,
+# not apt. Clean apt lists afterward to keep the layer small.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser
 
