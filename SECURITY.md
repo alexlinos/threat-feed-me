@@ -73,6 +73,30 @@ docker buildx imagetools inspect alexlinos/threat-feed-me:latest \
   --format '{{ json .Provenance }}'
 ```
 
+## Scanning the image yourself
+
+The SBOM above is the input to a CVE scan. To scan the published image with
+[Grype](https://github.com/anchore/grype) — no install required:
+
+```bash
+docker run --rm anchore/grype:latest alexlinos/threat-feed-me:latest
+```
+
+**How to read the results.** A scan covers the whole image, most of which is
+the `python:3.11-slim` Debian base rather than this project's code. A raw
+total (and the Critical count in particular) is misleading without this split:
+
+| Bucket | Posture |
+|---|---|
+| **App dependencies** (`requests`, `fastapi`, `python-multipart`, …) | Pinned in `requirements.txt` **and** `pyproject.toml`, bumped promptly when an advisory affects a version we ship. This is the surface we own. |
+| **Base OS packages with a fix available** (openssl, util-linux, …) | The Dockerfile runs `apt-get upgrade` at build, so a freshly built or pulled image carries the current Debian security fixes — rebuild/repull to refresh them. |
+| **Base OS packages marked `wont-fix` / `not-fixed`** (perl-base, libc, …) | Debian's decision, present in essentially every Debian-based image. Several — e.g. all the perl CVEs — are **not reachable**: perl is never invoked by the application. Driving these to zero requires a different base image (distroless/alpine), a trade-off we have not taken. |
+| **Build tooling** (pip, setuptools, wheel) | Present in the image but not part of the runtime attack surface — the service never installs packages at runtime. |
+
+If you believe a finding is reachable and exploitable, report it via the
+private vulnerability process at the top of this file — please include why
+you believe it is reachable, not just the CVE id.
+
 ## Known limitations (accepted trade-offs)
 
 - No rate limiting or brute-force lockout on Basic auth — front with a
