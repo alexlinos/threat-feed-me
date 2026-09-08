@@ -27,7 +27,7 @@ import ipaddress
 import json
 import os
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
 FEATURE_NAMES: List[str] = [
@@ -74,12 +74,14 @@ class FeatureBuilder:
 
     def __init__(self, db, config: Optional[Dict] = None,
                  window_days: Optional[int] = None,
-                 now: Optional[datetime] = None):
+                 now: Optional[datetime] = None,
+                 exclude_sources: Optional[Iterable[str]] = None):
         cfg = (config or {}).get("predictor", {}) or {}
         self.window_days = int(window_days if window_days is not None
                                else cfg.get("feature_window_days", 14))
         self.db = db
         self.now = now or datetime.now(timezone.utc)
+        self.exclude_sources = sorted(set(exclude_sources or []))
         self._loaded = False
         self._events: Dict[str, List[Tuple[datetime, str, int]]] = {}
         self._prefix_counts: Counter = Counter()
@@ -90,12 +92,18 @@ class FeatureBuilder:
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
-        cutoff = (self.now - timedelta(days=self.window_days)).isoformat()
+        # Load the FULL log, not just the feature window: the ring prune keeps
+        # it bounded (<= ~30d), and one cache serves every reference time —
+        # live scoring (ref=now) and offline training (ref=past tick) share
+        # this single code path. The window filter applies per build.
         with self.db._cursor() as cur:
-            cur.execute(
-                "SELECT ip, source_name, tick, present FROM sightings "
-                "WHERE tick >= ? ORDER BY tick, source_name, ip",
-                (cutoff,))
+            sql = ("SELECT ip, source_name, tick, present FROM sightings")
+            params: Tuple = ()
+            if self.exclude_sources:
+                marks = ",".join("?" * len(self.exclude_sources))
+                sql += f" WHERE source_name NOT IN ({marks})"
+                params = tuple(self.exclude_sources)
+            cur.execute(sql + " ORDER BY tick, source_name, ip", params)
             events: Dict[str, List[Tuple[datetime, str, int]]] = defaultdict(list)
             for row in cur.fetchall():
                 ts = _parse_tick(row["tick"])
@@ -147,7 +155,11 @@ class FeatureBuilder:
         return out
 
     def _build_one(self, ip_str: str) -> List[float]:
-        ev = sorted(self._events.get(ip_str, []), key=lambda t: t[0])
+        # Clamp the stream to the reference time: a builder instantiated at a
+        # past tick (offline training, Task 7) must see ONLY events up to that
+        # tick. Live scoring passes now=real-now, so this is a no-op there.
+        ev = sorted((e for e in self._events.get(ip_str, []) if e[0] <= self.now),
+                    key=lambda t: t[0])
         ind = self.db.get_indicator(ip_str)
 
         arrival_count = sum(1 for _, _, p in ev if p == 1)
@@ -193,7 +205,8 @@ class FeatureBuilder:
             fs = ind.first_seen
             if fs.tzinfo is None:
                 fs = fs.replace(tzinfo=timezone.utc)
-            first_seen_age_h = max(0.0, (self.now - fs).total_seconds() / 3600.0)
+            if fs <= self.now:
+                first_seen_age_h = (self.now - fs).total_seconds() / 3600.0
         if ev:
             last_event_age_h = max(0.0, (self.now - ev[-1][0]).total_seconds() / 3600.0)
 

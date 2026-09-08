@@ -4,9 +4,6 @@ The predictor ships dark: these tests cover feature construction from the
 transition-format sightings log, graceful behavior without a model, and the
 metadata-persistence path. No training here — that's Task 7.
 """
-import json
-import os
-import tempfile
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -111,7 +108,8 @@ class TestFeatureBuilder:
         db.add_indicator("203.0.113.40", "proofpoint")
         _seed_cycle(db, "203.0.113.40", "talos", [1, 0], start_tick=0)
         _seed_cycle(db, "203.0.113.40", "proofpoint", [1, 0, 1], start_tick=2)
-        fb = FeatureBuilder(db, now=datetime(2026, 8, 1, tzinfo=timezone.utc))
+        # now past every seeded tick: the builder clamps out future events
+        fb = FeatureBuilder(db, now=datetime(2026, 8, 1, 10, tzinfo=timezone.utc))
         vec = dict(zip(FEATURE_NAMES, fb.build("203.0.113.40")))
         assert vec["source_count"] == 2.0
         # events: arrive t0, leave t1 (talos); arrive t2, leave t3, return t4
