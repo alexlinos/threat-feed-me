@@ -1095,6 +1095,53 @@ def test_update_source_sightings_records_transitions_and_updates_state(db):
         conn.close()
 
 
+def test_update_source_sightings_record_false_syncs_state_without_rows(db):
+    """churn_log_exclude feeds: transitions must NOT hit sightings, but
+    source_state must still track membership so a re-enable diffs cleanly."""
+    t1, t2, t3 = _ticks_ago(4, 3, 2)
+    db.update_source_sightings("R", {"A", "B"}, t1)                     # baseline
+    stats = db.update_source_sightings("R", {"B", "C"}, t2, record=False)
+    assert stats == {"arrived": 1, "left": 1, "baseline": 0}
+    conn = sqlite3.connect(db.db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
+        state = {r[0] for r in conn.execute(
+            "SELECT ip FROM source_state WHERE source_name='R'").fetchall()}
+        assert state == {"B", "C"}
+    finally:
+        conn.close()
+    # Re-enabling diffs against the synced state, not the stale baseline.
+    stats = db.update_source_sightings("R", {"C"}, t3)
+    assert stats == {"arrived": 0, "left": 1, "baseline": 0}
+    conn = sqlite3.connect(db.db_path)
+    try:
+        rows = conn.execute("SELECT ip, present FROM sightings").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("B", 0)]
+
+
+def test_run_refresh_honors_churn_log_exclude(db, monkeypatch):
+    cfg = {"scoring": CONFIG["scoring"], "retention": {"churn_log_exclude": ["rotator"]}}
+    calls = []
+
+    def fake_fetch(db_, config, only=None, collect_values=None):
+        if collect_values is not None:
+            collect_values.update({"rotator": {"1.1.1.1"}, "honest": {"2.2.2.2"}})
+        return {"rotator": {"status": "success"}, "honest": {"status": "success"}}
+
+    monkeypatch.setattr(pipeline, "fetch_feeds", fake_fetch)
+    monkeypatch.setattr(pipeline, "export_tiers", lambda *a, **k: {})
+    monkeypatch.setattr(pipeline, "recalculate", lambda *a, **k: 0)
+    monkeypatch.setattr(db, "update_source_sightings",
+                        lambda source, values, tick, record=True:
+                        calls.append((source, record)) or {"arrived": 0, "left": 0, "baseline": 0})
+    pipeline.run_refresh(db, cfg)
+    assert ("rotator", False) in calls and ("honest", True) in calls
+    assert pipeline.churn_log_exclude(cfg) == {"rotator"}
+    assert pipeline.churn_log_exclude({}) == set()
+
+
 def test_prune_sightings_drops_old_keeps_recent(db):
     # The churn log is ring-pruned so it can't grow without bound.
     t1, t_old, t_recent = _ticks_ago(45, 40, 1)

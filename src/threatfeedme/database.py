@@ -471,8 +471,15 @@ class Database:
             conn.close()
 
     def update_source_sightings(self, source_name: str, current_values: Set[str],
-                                tick: str) -> Dict[str, int]:
+                                tick: str, record: bool = True) -> Dict[str, int]:
         """Record a source's churn as TRANSITIONS, not presence snapshots.
+
+        `record=False` (churn_log: false on a feed) diffs and syncs
+        source_state but writes NO sightings rows: the state stays correct so
+        a later re-enable diffs cleanly, while a wholesale-rotating feed stops
+        flooding the churn log and its indexes (cins_army alone wrote ~74% of
+        all transitions and 51% of churn "positives" were its list rotation,
+        not repeat-offender behavior).
 
         Diffs `current_values` (the values a clean, complete fetch actually
         ingested) against source_state (this source's membership as of its
@@ -510,18 +517,20 @@ class Database:
             arrived = current_values - prior
             left = prior - current_values
             if arrived:
-                cur.executemany(
-                    "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
-                    "VALUES (?, ?, ?, 1)",
-                    [(source_name, v, tick) for v in arrived])
+                if record:
+                    cur.executemany(
+                        "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                        "VALUES (?, ?, ?, 1)",
+                        [(source_name, v, tick) for v in arrived])
                 cur.executemany(
                     "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
                     [(source_name, v) for v in arrived])
             if left:
-                cur.executemany(
-                    "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
-                    "VALUES (?, ?, ?, 0)",
-                    [(source_name, v, tick) for v in left])
+                if record:
+                    cur.executemany(
+                        "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                        "VALUES (?, ?, ?, 0)",
+                        [(source_name, v, tick) for v in left])
                 cur.executemany(
                     "DELETE FROM source_state WHERE source_name = ? AND ip = ?",
                     [(source_name, v) for v in left])

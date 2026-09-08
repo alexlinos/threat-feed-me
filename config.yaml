@@ -464,6 +464,15 @@ retention:
   # dashboard (Feeds toolbar) and stored in the DB, which then takes precedence.
   max_age_days: 7
 
+  # Feeds whose churn transitions are NOT logged to `sightings`. A
+  # wholesale-rotating feed (list rewrites nearly every refresh) makes its
+  # "leaves" meaningless for churn labels AND swamps the log: cins_army alone
+  # wrote ~74% of all transitions on the deploy DB, and 51% of raw churn
+  # "positives" were its rotation, not repeat-offender behavior. source_state
+  # still syncs for excluded feeds, so re-enabling diffs cleanly later.
+  churn_log_exclude:
+    - cins_army
+
 database:
   path: ./data/threatfeedme.db
   backup:

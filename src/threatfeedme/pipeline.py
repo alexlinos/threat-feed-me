@@ -249,6 +249,21 @@ def retention_max_age_days(db: Database, config: Dict) -> int:
 
 # ---- Full refresh ----
 
+def churn_log_exclude(config: Dict) -> set:
+    """Feed names whose churn transitions should NOT be written to `sightings`.
+
+    Set via `retention.churn_log_exclude` in config. For wholesale-rotating
+    feeds — the list rewrites nearly every refresh, so a "leave" says nothing
+    about the IP's behavior — logging churn costs disk and poisons the
+    predictor's positive class. Live-measured on the deploy DB: cins_army
+    wrote 74% of all transitions and accounted for 51% of churn "positives"
+    while its 'stayed' population was 5 of 91k (pure rotation). Source state
+    still syncs for excluded feeds, so re-enabling later diffs cleanly.
+    """
+    names = (config.get('retention', {}) or {}).get('churn_log_exclude', []) or []
+    return {str(n) for n in names}
+
+
 def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
     """Full refresh: fetch -> score -> export -> push. Returns per-feed fetch
     results."""
@@ -266,7 +281,8 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     for name, values in fetched_values.items():
         if fetched.get(name, {}).get("status") != "success":
             continue
-        stats = db.update_source_sightings(name, values, tick)
+        stats = db.update_source_sightings(
+            name, values, tick, record=name not in churn_log_exclude(config))
         if stats["arrived"] or stats["left"]:
             logger.info(f"[churn] {name}: +{stats['arrived']} arrived, "
                         f"-{stats['left']} left")
