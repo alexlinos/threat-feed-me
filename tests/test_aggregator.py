@@ -135,6 +135,74 @@ def test_recalculate_persists_scores(db):
     assert db.get_indicator("203.0.113.7").confidence_score > 0
 
 
+# ---------------------------------------------------- predictor factor ----
+
+
+def _pcfg(enabled, weight=0.08):
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in CONFIG.items()}
+    cfg["scoring"]["predictor_weight"] = weight
+    cfg["predictor"] = {"enabled": enabled}
+    return cfg
+
+
+def test_predictor_factor_weights_score(db):
+    """A stored predictive_score raises the score iff the factor is enabled;
+    missing/None contributes exactly 0."""
+    db.add_indicator("203.0.113.60", "abuse_ch_malware", {})
+    db.add_indicator("203.0.113.61", "abuse_ch_malware", {"predictive_score": 0.9})
+    sc_on = ConfidenceScorer(db, _pcfg(True))
+    # same scorer instance, otherwise-identical indicators: the delta isolates
+    # the factor exactly (comparing across on/off scorers would also change
+    # the other components' normalization)
+    delta = sc_on.calculate_score("203.0.113.61")[0] - sc_on.calculate_score("203.0.113.60")[0]
+    assert delta == pytest.approx(sc_on.weights["predictor"] * 0.9)
+    sc_off = ConfidenceScorer(db, _pcfg(False))
+    # dark: the stored score must move nothing (approx: last_seen decays with
+    # wall-clock between the two calls)
+    assert sc_off.calculate_score("203.0.113.61")[0] == \
+        pytest.approx(sc_off.calculate_score("203.0.113.60")[0], abs=1e-6)
+
+
+def test_predictor_dark_never_changes_scores(db):
+    """enabled: false must pin the weight to 0 even if predictor_weight is
+    configured, so a stale metadata score cannot steer anything, and the
+    other components keep their plain normalization."""
+    db.add_indicator("203.0.113.62", "abuse_ch_malware", {"predictive_score": 1.0})
+    scorer = ConfidenceScorer(db, _pcfg(False, weight=0.5))
+    assert scorer.weights["predictor"] == 0.0
+    plain = ConfidenceScorer(db, CONFIG).calculate_score("203.0.113.62")[0]
+    assert scorer.calculate_score("203.0.113.62")[0] == pytest.approx(plain)
+
+
+def test_predictor_invalid_score_value_contributes_zero(db):
+    """Garbage metadata must not crash scoring; out-of-range clips."""
+    db.add_indicator("203.0.113.60", "abuse_ch_malware", {})
+    db.add_indicator("203.0.113.63", "abuse_ch_malware", {"predictive_score": "high"})
+    db.add_indicator("203.0.113.64", "abuse_ch_malware", {"predictive_score": 5.0})
+    scorer = ConfidenceScorer(db, _pcfg(True))
+    s_plain = scorer.calculate_score("203.0.113.60")[0]
+    s_bad = scorer.calculate_score("203.0.113.63")[0]
+    s_clip = scorer.calculate_score("203.0.113.64")[0]
+    assert s_bad == pytest.approx(s_plain)  # garbage contributes 0
+    # clipped to 1.0: the full predictor share
+    assert s_clip - s_plain == pytest.approx(scorer.weights["predictor"])
+
+
+def test_predictor_cannot_mask_feed_fp_penalty(db):
+    """The FP-degraded feed's IPs must rank below corroborated ones even with
+    a max predictor score: corroboration dominates by construction."""
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in CONFIG.items()}
+    cfg["scoring"]["predictor_weight"] = 0.08
+    cfg["predictor"] = {"enabled": True}
+    db.add_indicator("1.1.1.1", "abuse_ch_malware", {"predictive_score": 1.0})
+    db.add_indicator("2.2.2.2", "abuse_ch_malware", {})
+    db.add_indicator("2.2.2.2", "spamhaus_drop", {})
+    scorer = ConfidenceScorer(db, cfg)
+    s1 = scorer.calculate_score("1.1.1.1")[0]
+    s2 = scorer.calculate_score("2.2.2.2")[0]
+    assert s2 > s1  # one more corroborating source outweighs a perfect predictor
+
+
 # ------------------------------------------------------------- whitelist ----
 
 def test_whitelist_excludes_and_expires(db):

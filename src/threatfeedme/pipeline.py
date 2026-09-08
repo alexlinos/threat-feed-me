@@ -27,6 +27,9 @@ def scorer_config(db: Database, config: Dict) -> Dict:
     database feeds (which may differ from the seed config after edits)."""
     return {
         'scoring': config.get('scoring', {}),
+        # predictor block must ride along: the scorer gates its
+        # predictor_weight on predictor.enabled (Task 8)
+        'predictor': config.get('predictor', {}),
         'feeds': [
             {'name': f.name, 'weight': f.weight}
             for f in db.get_feed_sources()

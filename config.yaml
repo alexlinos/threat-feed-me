@@ -412,6 +412,12 @@ scoring:
   source_weight: 0.45
   reputation_weight: 0.33
   recency_weight: 0.22
+  # Recurrence-predictor factor (see the predictor: block). Normalized with
+  # the others, so at 0.08 raw (~5.7% of the total) it shifts an IP's score
+  # slightly within its tier — it can never outrank feed corroboration or
+  # lift an FP-degraded feed's IPs. Forced to 0 while predictor.enabled is
+  # false.
+  predictor_weight: 0.08
 
   # Age decay (scores decrease over time)
   decay_half_life_hours: 72  # Score halves every 3 days
@@ -472,6 +478,17 @@ retention:
   # still syncs for excluded feeds, so re-enabling diffs cleanly later.
   churn_log_exclude:
     - cins_army
+
+# Recurrence predictor (ships DARK: enabled=false until the Task 9 backtest
+# passes on real accumulated churn). The scoring factor reads the stored
+# probability from indicator metadata; nothing here runs at refresh time
+# while disabled. Train offline on the deploy host with
+#   python -m threatfeedme.train_predictor data/predictor_model.txt
+predictor:
+  enabled: false
+  model_path: data/predictor_model.txt
+  # Feature window the FeatureBuilder aggregates churn events over (days).
+  feature_window_days: 14
 
 database:
   path: ./data/threatfeedme.db

@@ -50,6 +50,16 @@ class ConfidenceScorer:
             'source': scoring.get('source_weight', 0.45),
             'reputation': scoring.get('reputation_weight', 0.33),
             'recency': scoring.get('recency_weight', 0.22),
+            # Recurrence-predictor factor (Task 8). Normalized WITH the other
+            # components so it can never outweigh feed corroboration, and
+            # forced to 0 while predictor.enabled is false — a stale
+            # predictive_score in metadata from a previously-enabled run must
+            # not keep steering scores after the switch is thrown off. The
+            # value is read from indicator metadata, never recomputed here:
+            # scoring must not depend on lightgbm or the model file.
+            'predictor': (scoring.get('predictor_weight', 0.0)
+                          if (config.get('predictor', {}) or {}).get('enabled', False)
+                          else 0.0),
         }
         total = sum(raw_weights.values()) or 1.0
         self.weights = {k: v / total for k, v in raw_weights.items()}
@@ -261,11 +271,26 @@ class ConfidenceScorer:
             source_score = min(votes * 0.25, 1.0)
         reputation_score = self._calculate_reputation_score(sources)
         recency_score = self._calculate_recency_score(indicator.last_seen)
+        # Predictor factor: the stored probability from a prior predict pass
+        # (metadata.predictive_score, written by Predictor.predict_and_store).
+        # Missing/None/invalid contributes exactly 0, and with the weight
+        # normalized in __init__ this can never outrank corroboration; tiers
+        # come from effective votes, so this shifts score within a tier, not
+        # the tier itself. That composition is what keeps an FP-degraded
+        # feed's IPs from riding the predictor back up the ranking.
+        raw_ps = (indicator.metadata or {}).get("predictive_score")
+        predictor_score = 0.0
+        if raw_ps is not None:
+            try:
+                predictor_score = min(max(float(raw_ps), 0.0), 1.0)
+            except (TypeError, ValueError):
+                predictor_score = 0.0
 
         total_score = (
             source_score * self.weights['source']
             + reputation_score * self.weights['reputation']
             + recency_score * self.weights['recency']
+            + predictor_score * self.weights['predictor']
         )
 
         return total_score, votes, sources
