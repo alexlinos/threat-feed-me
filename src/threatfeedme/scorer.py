@@ -282,9 +282,13 @@ class ConfidenceScorer:
         predictor_score = 0.0
         if raw_ps is not None:
             try:
-                predictor_score = min(max(float(raw_ps), 0.0), 1.0)
+                v = float(raw_ps)
             except (TypeError, ValueError):
-                predictor_score = 0.0
+                v = 0.0
+            # NaN passes min/max comparisons untouched (and json.loads
+            # accepts bare NaN), so it must be trapped explicitly
+            if math.isfinite(v):
+                predictor_score = min(max(v, 0.0), 1.0)
 
         total_score = (
             source_score * self.weights['source']

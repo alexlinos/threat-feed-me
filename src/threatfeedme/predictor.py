@@ -81,7 +81,10 @@ class FeatureBuilder:
                                else cfg.get("feature_window_days", 14))
         self.db = db
         self.now = now or datetime.now(timezone.utc)
+        if self.now.tzinfo is None:  # a naive now would crash event clamping
+            self.now = self.now.replace(tzinfo=timezone.utc)
         self.exclude_sources = sorted(set(exclude_sources or []))
+        self._buckets = None
         self._loaded = False
         self._events: Dict[str, List[Tuple[datetime, str, int]]] = {}
         self._prefix_counts: Counter = Counter()
@@ -93,10 +96,13 @@ class FeatureBuilder:
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
-        # Load the FULL log, not just the feature window: the ring prune keeps
-        # it bounded (<= ~30d), and one cache serves every reference time —
-        # live scoring (ref=now) and offline training (ref=past tick) share
-        # this single code path. The window filter applies per build.
+        # Load the FULL log: the ring prune keeps it bounded (<= ~30d), and
+        # one cache serves every reference time — live scoring (ref=now) and
+        # offline training (ref=past tick) share this single code path.
+        # Rows are clamped to events <= ref time in _build_one. window_days
+        # is reserved (not yet applied as a lower bound); the Task 9 gate
+        # numbers were measured on full-log features, so applying it now
+        # would silently change the thing the backtest certified.
         with self.db._cursor() as cur:
             sql = ("SELECT ip, source_name, tick, present FROM sightings")
             params: Tuple = ()
@@ -106,17 +112,23 @@ class FeatureBuilder:
                 params = tuple(self.exclude_sources)
             cur.execute(sql + " ORDER BY tick, source_name, ip", params)
             events: Dict[str, List[Tuple[datetime, str, int]]] = defaultdict(list)
-            for row in cur.fetchall():
+            # stream the cursor: fetchall() on a 4.6M-row log materialized a
+            # second full copy of the rows on top of the events dict (review
+            # finding 1)
+            for row in cur:
                 ts = _parse_tick(row["tick"])
                 if ts is None:
                     continue
                 events[row["ip"]].append((ts, row["source_name"], int(row["present"])))
         self._events = events
+        # geo table once per build, not once per row (review finding 4:
+        # CountryBuckets.load() re-reads the file on every call)
+        self._buckets = self._geo_buckets()
 
         # /16 (and /64) densities and country ranks over the current IP corpus.
         prefix_counts: Counter = Counter()
         country_counts: Counter = Counter()
-        buckets = self._geo_buckets()
+        buckets = self._buckets
         with self.db._cursor() as cur:
             cur.execute("SELECT ip FROM indicators WHERE kind = 'ip'")
             for row in cur.fetchall():
@@ -247,7 +259,7 @@ class FeatureBuilder:
             density = 0
 
         country = -1.0
-        buckets = self._geo_buckets()
+        buckets = self._buckets
         if buckets is not None:
             try:
                 code = buckets.country_for_ip(int(ipaddress.ip_address(ip_str)))

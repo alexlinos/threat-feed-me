@@ -416,7 +416,9 @@ scoring:
   # the others, so at 0.08 raw (~5.7% of the total) it shifts an IP's score
   # slightly within its tier — it can never outrank feed corroboration or
   # lift an FP-degraded feed's IPs. Forced to 0 while predictor.enabled is
-  # false.
+  # false. Caveat: enabling it renormalizes the other weights down ~7%;
+  # harmless under effective_votes tiering (votes decide tiers), but under
+  # tiering.method legacy the fixed min_score gates can demote indicators.
   predictor_weight: 0.08
 
   # Age decay (scores decrease over time)
@@ -487,7 +489,9 @@ retention:
 predictor:
   enabled: false
   model_path: data/predictor_model.txt
-  # Feature window the FeatureBuilder aggregates churn events over (days).
+  # Reserved (see predictor.FeatureBuilder): the churn event window in days.
+  # Currently features aggregate the full ring-pruned log; this knob has no
+  # effect until the backtest is re-run with it wired.
   feature_window_days: 14
 
 database:

@@ -118,6 +118,50 @@ class TestFeatureBuilder:
         assert vec["mean_gap_h"] == pytest.approx(1.0)
 
 
+class TestReviewFixes:
+    """Regression pins for the 2026-09-11 Claude review findings."""
+
+    def test_naive_now_is_coerced_to_utc(self, tmp_path):
+        from datetime import datetime as dt
+        db = _db(tmp_path)
+        db.add_indicator("203.0.113.77", "talos")
+        _seed_cycle(db, "203.0.113.77", "talos", [1, 0, 1])
+        fb = FeatureBuilder(db, now=dt(2026, 8, 1, 10))  # naive
+        vec = fb.build("203.0.113.77")  # must not raise TypeError
+        assert len(vec) == 14
+
+    def test_nan_predictive_score_does_not_poison(self, tmp_path):
+        from threatfeedme.scorer import ConfidenceScorer
+        db = _db(tmp_path)
+        db.add_indicator("203.0.113.90", "talos", {"predictive_score": float("nan")})
+        db.add_indicator("203.0.113.91", "talos", {})
+        cfg = {"predictor": {"enabled": True},
+               "scoring": {"predictor_weight": 0.08},
+               "feeds": [{"name": "talos", "weight": 0.9}]}
+        s = ConfidenceScorer(db, cfg)
+        score, tier = s.calculate_score("203.0.113.90")
+        import math
+        assert math.isfinite(score)
+        # approx: recency decays with wall-clock between the two calls
+        assert score == pytest.approx(s.calculate_score("203.0.113.91")[0], abs=1e-6)
+
+    def test_geo_buckets_loaded_once_per_build(self, tmp_path):
+        import threatfeedme.predictor as P
+        db = _db(tmp_path)
+        calls = {"n": 0}
+        orig = P.FeatureBuilder._geo_buckets
+        def counting(self):
+            calls["n"] += 1
+            return orig(self)
+        P.FeatureBuilder._geo_buckets = counting
+        try:
+            fb = P.FeatureBuilder(db)
+            fb.build_many([f"203.0.{i}.1" for i in range(20)])
+        finally:
+            P.FeatureBuilder._geo_buckets = orig
+        assert calls["n"] == 1, f"geo table loaded {calls['n']}x, expected 1"
+
+
 class TestPredictor:
     def test_dark_predictor_returns_none_never_raises(self, tmp_path):
         db = _db(tmp_path)
