@@ -51,7 +51,11 @@ HOLDOUT_FRACTION = 0.25
 
 def _event_stream(db, exclude_sources: Set[str]):
     """Yield (ip, ts, present) ordered by ts. One pass; the caller buckets."""
-    sql = "SELECT ip, tick, present FROM sightings ORDER BY tick, source_name, ip"
+    # present DESC: arrivals before leaves within one tick, so a same-tick
+    # leave cannot be swallowed by a same-tick return and erase the pair
+    # (A2A review 2026-09-11, finding 8; FeatureBuilder orders identically).
+    sql = ("SELECT ip, tick, present FROM sightings "
+           "ORDER BY tick, present DESC, source_name, ip")
     params: Tuple = ()
     if exclude_sources:
         marks = ",".join("?" * len(exclude_sources))
@@ -77,6 +81,7 @@ def collect_labels(db, exclude_sources: Set[str],
     churn_returns: Dict[str, List[datetime]] = {}
     t_min: Optional[datetime] = None
     t_max: Optional[datetime] = None
+    # stream order is tick-ascending; arrivals precede leaves within a tick
     for ip, ts, present in _event_stream(db, exclude_sources):
         if t_min is None:
             t_min = ts
@@ -89,7 +94,7 @@ def collect_labels(db, exclude_sources: Set[str],
             gap = (ts - last_leave[ip]).total_seconds() / 3600.0
             if gap >= min_gap_h:
                 churn_returns.setdefault(ip, []).append(ts)
-            del last_leave[ip]
+            del last_leave[ip]  # consumed either way (feature side agrees)
     return first_event, churn_returns, t_min, t_max
 
 
@@ -121,7 +126,10 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     # against the real 21-day log; synthetic tests share one first tick and
     # cannot see it).
     observed = sorted(first_event, key=lambda ip: (first_event[ip], ip))
-    T = t_min  # rolling origin starts at the first logged event
+    # first snapshot at t_min + step: at T == t_min every feature clamps to
+    # before the FIRST logged event, i.e. an all-zero vector with some rows
+    # labeled positive, pure label noise (A2A review finding 3)
+    T = t_min + step
     # monotonic cursors over the chronologically sorted population
     obs_i = 0
     while T <= t_max:
@@ -138,7 +146,9 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
                     pos.append(ip)
                     continue
             neg.append(ip)
-        stride = max(1, (len(neg) + max_neg) // max_neg)
+        # ceil: (n + cap - 1) // cap keeps <= cap negatives (floor+1 form
+        # halved the budget at exactly max_neg, finding 9)
+        stride = max(1, -(-len(neg) // max_neg))
         keep = neg[::stride]
         s_i = len(snaps)
         snaps.append((T, len(pos), len(keep), stride))
@@ -169,21 +179,13 @@ def train(db_path: str, config_path: str, model_out: str) -> int:
     s = np.asarray(snap_ix)
     n_snap = len(snaps)
     split = max(1, min(n_snap - 1, int(n_snap * (1 - HOLDOUT_FRACTION))))
-    hold = s >= split
-    tr = ~hold
+    tr, hold, tr_hi, spw = _split_masks(y, s, snaps, split)
     if hold.sum() < 10 or tr.sum() < 10 or y[hold].sum() < 2 or y[tr].sum() < 2:
         raise SystemExit(f"split too thin (train={int(tr.sum())}/{int(y[tr].sum())}p, "
                          f"hold={int(hold.sum())}/{int(y[hold].sum())}p); "
                          "accumulate more churn first")
 
-    n_pos_tr, n_neg_tr = int(y[tr].sum()), int((y[tr] == 0).sum())
-    stride_avg = sum(x[3] for x in snaps) / max(1, n_snap)
-    spw = stride_avg * max(1, n_neg_tr) / max(1, n_pos_tr)
-    params = {
-        "objective": "binary", "metric": "auc", "verbose": -1,
-        "num_leaves": 31, "learning_rate": 0.05, "feature_fraction": 0.9,
-        "min_data_in_leaf": 50, "scale_pos_weight": spw, "seed": 42,
-    }
+    params = _lgb_params(spw)
     dtrain = lgb.Dataset(X[tr], label=y[tr], feature_name=_feature_names())
     dhold = lgb.Dataset(X[hold], label=y[hold], reference=dtrain)
     booster = lgb.train(params, dtrain, num_boost_round=300,
@@ -192,8 +194,8 @@ def train(db_path: str, config_path: str, model_out: str) -> int:
     auc = _auc(y[hold], booster.predict(X[hold]))
     print(f"rows={len(y)} pos={int(y.sum())} snaps={n_snap} "
           f"train={int(tr.sum())} hold={int(hold.sum())} "
-          f"split_at={snaps[split][0].isoformat()} "
-          f"rounds={booster.best_iteration} holdout_auc={auc:.4f}")
+          f"split_at={snaps[split][0].isoformat()} embargo_to={snaps[tr_hi-1][0].isoformat()} "
+          f"spw={spw:.1f} rounds={booster.best_iteration} holdout_auc={auc:.4f}")
     imp = sorted(zip(_feature_names(), booster.feature_importance("gain")),
                  key=lambda kv: kv[1], reverse=True)
     for name, gain in imp[:8]:
@@ -206,6 +208,74 @@ def train(db_path: str, config_path: str, model_out: str) -> int:
 def _feature_names() -> List[str]:
     from .predictor import FEATURE_NAMES
     return list(FEATURE_NAMES)
+
+
+def _split_masks(y, s, snaps, split: int, horizon_s: Optional[float] = None):
+    """Train/holdout masks + exact scale_pos_weight, shared by train() and
+    backtest() so the two cannot drift (A2A review finding 7).
+
+    HOLDOUT EMBARGO (finding 1, HIGH): a return within (T, T+horizon] labels
+    ~horizon/snapshot_h CONSECUTIVE snapshots positive. With a 7-day horizon
+    and daily snapshots, a split inside that span reuses the SAME return
+    event as the positive label of near-identical rows on both sides of the
+    split: the holdout is not label-independent. Dropping train snapshots
+    within `horizon` of the split leaves the label events cleanly apart:
+    train labels end before the embargo window, holdout labels live inside
+    the holdout future. On fixtures with fewer snapshots than the embargo
+    spans, tr_hi floors at 1 and the gate number is contaminated: the guard
+    is honest about it via the printed embargo_to timestamp.
+    """
+    import numpy as np
+    # snapshot cadence measured from the snaps themselves (not the module
+    # constant, so a caller's snapshot_h cannot desync the embargo)
+    if horizon_s is None:
+        horizon_s = HORIZON_H * 3600.0
+    if len(snaps) > 1:
+        step_s = (snaps[1][0] - snaps[0][0]).total_seconds()
+    else:
+        step_s = SNAPSHOT_H * 3600.0
+    embargo_snaps = int(np.ceil(horizon_s / step_s))
+    tr_hi = max(1, split - embargo_snaps)
+    # a tiny fixture (fewer snapshots than the embargo spans) must still
+    # leave train rows: shrink the embargo until train is non-empty
+    if tr_hi > split - 1:
+        tr_hi = max(1, split - 1)
+    hold = np.asarray(s) >= split
+    tr = (np.asarray(s) >= 0) & (np.asarray(s) < tr_hi)
+    # exact spw: true kept-negatives-per-positive over the TRAIN snapshots,
+    # = sum(kept_i * stride_i) / n_pos_tr (a real neg appears stride_i times)
+    n_pos_tr = int(np.asarray(y)[tr].sum())
+    true_neg_tr = sum(nk * st for i, (_T, _p, nk, st) in enumerate(snaps)
+                      if i < tr_hi)
+    spw = true_neg_tr / max(1, n_pos_tr)
+    if spw <= 0:
+        spw = 1.0  # all-positive (or empty) train partition: unweighted
+    return tr, hold, tr_hi, spw
+
+
+def _lgb_params(spw: float) -> dict:
+    return {
+        "objective": "binary", "metric": "auc", "verbose": -1,
+        "num_leaves": 31, "learning_rate": 0.05, "feature_fraction": 0.9,
+        "min_data_in_leaf": 50, "scale_pos_weight": spw, "seed": 42,
+    }
+
+
+def _recall_at(scores, y_hold, frac: int = 10) -> float:
+    """Recall of positives in the top-frac rows. Ties are broken by rank
+    average (finding 9): with a constant score every row shares the mean
+    rank, so top-k must be taken from a deterministic order, not argsort's
+    incident row order (rows are appended positives-first, which otherwise
+    lets a constant model report 100% recall)."""
+    import numpy as np
+    n = len(scores)
+    k = max(1, n // frac)
+    # tie-break by a fixed random permutation (seeded): breaking ties by ROW
+    # order would hand a constant-scoring model 100% recall, since rows are
+    # appended positives-first
+    tie = np.random.default_rng(12345).random(n)
+    order = np.lexsort((tie, -np.asarray(scores, dtype=float)))
+    return int(np.asarray(y_hold)[order[:k]].sum()) / max(1, int(np.sum(np.asarray(y_hold) == 1)))
 
 
 def _auc(y_true, scores) -> float:
@@ -267,8 +337,8 @@ def backtest(db_path: str, config_path: str, model_path: str = "",
     else:
         split = max(1, min(n_snap - 1, int(n_snap * (1 - HOLDOUT_FRACTION))))
 
-    hold = s >= split
-    tr = ~hold
+    tr, hold, tr_hi, spw = _split_masks(y, s, snaps, split,
+                                        horizon_s=horizon_h * 3600.0)
     n_tr, n_hold = int(tr.sum()), int(hold.sum())
     n_pos_tr, n_pos_hold = int(y[tr].sum()), int(y[hold].sum())
     n_neg_hold = n_hold - n_pos_hold
@@ -277,21 +347,19 @@ def backtest(db_path: str, config_path: str, model_path: str = "",
     print(f"backtest: rows={len(y)} pos={int(y.sum())} snaps={n_snap}")
     print(f"  train={n_tr} ({n_pos_tr}p {n_tr - n_pos_tr}n) "
           f"hold={n_hold} ({n_pos_hold}p {n_neg_hold}n)")
-    print(f"  split_at={split_dt.isoformat()}")
+    print(f"  split_at={split_dt.isoformat()} embargo_to={snaps[max(0,tr_hi-1)][0].isoformat()}")
 
     if n_pos_hold < 2:
         print("  too few holdout positives — metrics are unreliable")
         return {"pos_hold": n_pos_hold}
+    if n_tr < 10 or n_pos_tr < 2:
+        # same thin-split guard train() has (finding 7): an empty training
+        # partition must not silently produce a constant booster
+        raise SystemExit(f"train partition too thin (rows={n_tr}, "
+                         f"pos={n_pos_tr}) — move the boundary later")
 
-    # Train booster on the training partition
-    stride_avg = sum(x[3] for x in snaps) / max(1, n_snap)
-    n_neg_tr = n_tr - n_pos_tr
-    spw = stride_avg * max(1, n_neg_tr) / max(1, n_pos_tr)
-    params = {
-        "objective": "binary", "metric": "auc", "verbose": -1,
-        "num_leaves": 31, "learning_rate": 0.05, "feature_fraction": 0.9,
-        "min_data_in_leaf": 50, "scale_pos_weight": spw, "seed": 42,
-    }
+    # Train booster on the embargoed training partition
+    params = _lgb_params(spw)
     dtrain = lgb.Dataset(X[tr], label=y[tr], feature_name=_feature_names())
     dhold = lgb.Dataset(X[hold], label=y[hold], reference=dtrain)
     booster = lgb.train(params, dtrain, num_boost_round=300,
@@ -300,22 +368,18 @@ def backtest(db_path: str, config_path: str, model_path: str = "",
 
     scores = np.asarray(booster.predict(X[hold]), dtype=float).reshape(-1)
     model_auc = _auc(y[hold], scores)
-    n_top = max(1, n_hold // 10)
-    top_idx = np.argsort(scores)[-n_top:]
-    model_recall = int(y[hold][top_idx].sum()) / n_pos_hold if n_pos_hold else float("nan")
+    model_recall = _recall_at(scores, y[hold])
 
     # Random baseline (seeded for reproducibility)
     rng = np.random.default_rng(42)
     rand_scores = rng.random(n_hold)
     rand_auc = _auc(y[hold], rand_scores)
-    rand_top = np.argsort(rand_scores)[-n_top:]
-    rand_recall = int(y[hold][rand_top].sum()) / n_pos_hold if n_pos_hold else float("nan")
+    rand_recall = _recall_at(rand_scores, y[hold])
 
     # Source-count baseline (feature index 0 = FEATURE_NAMES[0] = source_count)
     sc_scores = X[hold][:, 0]
     sc_auc = _auc(y[hold], sc_scores)
-    sc_top = np.argsort(sc_scores)[-n_top:]
-    sc_recall = int(y[hold][sc_top].sum()) / n_pos_hold if n_pos_hold else float("nan")
+    sc_recall = _recall_at(sc_scores, y[hold])
 
     print(f"  rounds={booster.best_iteration}")
     print("  --- AUROC ---")

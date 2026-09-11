@@ -53,30 +53,22 @@ class TestBacktestHarness:
 
     @staticmethod
     def _seed_noise_population(db):
-        """200 IPs: 100 churn, 100 stay — but IDENTICAL features at T=0.
+        """200 IPs: 100 churn, 100 stay — identical event history at the
+        TRAINING snapshot, differing only in the future.
 
-        Seeded on a SHARED membership set per source (not per-IP calls):
-        update_source_sightings diffs the whole set, so per-IP calls would
-        make every other IP appear to leave/return and manufacture churn
-        events the noise group does not have.
+        Sentinel baseline at -1 so the t0 arrivals are REAL events for
+        every IP (both groups). Churn group then leaves/returns at
+        (36,42), (60,66), (84,90) — all gaps 6h, at/above the floor. The
+        stay group is present at every tick (silent no-ops). Both groups
+        live in ONE /16 so prefix_density/country_code cannot encode
+        membership.
 
-        Tick plan (source talos):
-          t0   baseline: all 200 present (state seeded, zero events written)
-          t12  churn group (100) absent, stay group present   -> 100 leaves
-          t18  churn group present again                      -> 100 returns (gap 6h)
-          t30  churn group absent again                       -> 100 leaves
-          t36  churn group present                            -> 100 returns
-          t60  churn group absent                             -> 100 leaves
-          t66  churn group present                            -> 100 returns
-        Snapshots every 24h from t0: T=0, 24, 48 (max event t66). Boundary
-        T=24: train rows are the T=0 snapshot, where features clamp to
-        strictly-before-0 — every IP's feature vector is identical, while
-        100 are positive (return t18 within horizon) and 100 negative. A
-        tree routes constant features to one leaf: the booster can only
-        predict a constant, so holdout AUROC sits at chance (0.5).
-        Both groups live in ONE /16 (203.0.113.x): country_code and
-        prefix_density must not encode group membership, or the model
-        separates on netblock instead of history (learned the hard way).
+        Snapshots: t_min=0, first snapshot at 24 (t_min + step). Boundary
+        T=48 -> train snapshot is T=24 only, where features clamp to <24:
+        every row sees arrival-at-0 and nothing else (the churn pairs are
+        at 36+). Zero feature variance, half the rows positive (return at
+        42 in horizon): a constant-feature booster emits a constant and
+        holdout AUROC sits at chance (0.5) via the tie path.
         """
         churn = [f"203.0.113.{i}" for i in range(100)]
         stay = [f"203.0.113.{100 + i}" for i in range(100)]
@@ -86,7 +78,7 @@ class TestBacktestHarness:
         present_at_off = set(stay) | {_SENTINEL}
         db.update_source_sightings("talos", {_SENTINEL}, _tick(-1))
         db.update_source_sightings("talos", everyone, _tick(0))
-        for off, back in ((12, 18), (30, 36), (60, 66)):
+        for off, back in ((36, 42), (60, 66), (84, 90), (120, 126)):
             db.update_source_sightings("talos", present_at_off, _tick(off))
             db.update_source_sightings("talos", everyone, _tick(back))
 
@@ -127,9 +119,9 @@ class TestBacktestHarness:
         with open(cfg_path, "w") as f:
             yaml.dump(cfg, f)
 
-        # boundary at T=24 → train: T=0 ; hold: T=24, T=48
+        # boundary at T=48 -> train: T=24 only ; hold: T=48,72,96,120
         result = tp.backtest(db_path, cfg_path, "",
-                             boundary=BASE + timedelta(hours=24),
+                             boundary=BASE + timedelta(hours=48),
                              horizon_h=168, snapshot_h=24, max_neg=500)
         assert result["pos_hold"] >= 2, (
             f"need ≥2 holdout positives, got {result['pos_hold']}")

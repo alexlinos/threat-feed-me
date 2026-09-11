@@ -24,15 +24,20 @@ def _db(tmp_path):
 _SENTINEL = "192.0.2.254"  # keeps source_state non-empty between cycles
 
 
-def _seed_cycle(db, ip, source, pattern, start_tick=0):
-    """pattern: list of 1/0 written as consecutive ticks.
+def _seed_cycle(db, ip, source, pattern, start_tick=0, stride_h=1):
+    """pattern: list of 1/0 written as ticks stride_h hours apart.
 
     A sentinel member is seeded first so the source is never EMPTY:
     update_source_sightings treats empty state as a silent baseline, and
     without the sentinel a return after the target's leave would be
     mis-seeded instead of logged as an arrival event.
+
+    Leave->return pairs closer than CHURN_MIN_GAP_H (6h) count as
+    cadence noise, not churn: use stride_h >= 6 for churn-positive patterns.
     """
-    ticks = _ticks(len(pattern), start_hour=start_tick)
+    base = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    ticks = [(base + timedelta(hours=(start_tick + i) * stride_h)).isoformat()
+             for i in range(len(pattern))]
     db.update_source_sightings(source, {_SENTINEL}, ticks[0])
     for tick, present in zip(ticks, pattern):
         current = {_SENTINEL} | ({ip} if present else set())
@@ -52,9 +57,9 @@ class TestFeatureBuilder:
     def test_churn_counts_and_gaps(self, tmp_path):
         db = _db(tmp_path)
         db.add_indicator("198.51.100.5", "talos")
-        # leave at tick1 -> return at tick2 (1h gap), leave at tick3 -> return tick4
-        _seed_cycle(db, "198.51.100.5", "talos", [1, 0, 1, 0, 1])
-        now = datetime(2026, 8, 1, 10, tzinfo=timezone.utc)
+        # 6h-stride ticks: two churn cycles, gaps exactly at the floor
+        _seed_cycle(db, "198.51.100.5", "talos", [1, 0, 1, 0, 1], stride_h=6)
+        now = datetime(2026, 8, 2, tzinfo=timezone.utc)
         fb = FeatureBuilder(db, now=now)
         vec = dict(zip(FEATURE_NAMES, fb.build("198.51.100.5")))
         assert vec["arrival_count"] == 3   # t0 arrival + two returns
@@ -62,9 +67,9 @@ class TestFeatureBuilder:
         assert vec["churn_count"] == 2
         assert vec["churned_flag"] == 1.0
         assert vec["max_consec_churn"] == 2.0  # both returns followed leaves back-to-back
-        assert vec["mean_gap_h"] == pytest.approx(1.0)
-        assert vec["min_gap_h"] == pytest.approx(1.0)
-        assert vec["max_gap_h"] == pytest.approx(1.0)
+        assert vec["mean_gap_h"] == pytest.approx(6.0)
+        assert vec["min_gap_h"] == pytest.approx(6.0)
+        assert vec["max_gap_h"] == pytest.approx(6.0)
 
     def test_first_appearance_is_not_a_return(self, tmp_path):
         db = _db(tmp_path)
@@ -106,16 +111,18 @@ class TestFeatureBuilder:
         db = _db(tmp_path)
         db.add_indicator("203.0.113.40", "talos")
         db.add_indicator("203.0.113.40", "proofpoint")
-        _seed_cycle(db, "203.0.113.40", "talos", [1, 0], start_tick=0)
-        _seed_cycle(db, "203.0.113.40", "proofpoint", [1, 0, 1], start_tick=2)
+        # 6h stride so leave->return gaps meet CHURN_MIN_GAP_H
+        _seed_cycle(db, "203.0.113.40", "talos", [1, 0], start_tick=0, stride_h=6)
+        _seed_cycle(db, "203.0.113.40", "proofpoint", [1, 0, 1], start_tick=2, stride_h=6)
         # now past every seeded tick: the builder clamps out future events
-        fb = FeatureBuilder(db, now=datetime(2026, 8, 1, 10, tzinfo=timezone.utc))
+        fb = FeatureBuilder(db, now=datetime(2026, 8, 2, tzinfo=timezone.utc))
         vec = dict(zip(FEATURE_NAMES, fb.build("203.0.113.40")))
         assert vec["source_count"] == 2.0
-        # events: arrive t0, leave t1 (talos); arrive t2, leave t3, return t4
-        # (proofpoint) -> two churn cycles, each 1h after its leave
+        # events: arrive t0, leave t6 (talos); arrive t12, leave t18, return
+        # t24 (proofpoint) -> two churn cycles (t12 return closes the t6
+        # leave cross-source; t24 closes t18), gaps 6h
         assert vec["churn_count"] == 2.0
-        assert vec["mean_gap_h"] == pytest.approx(1.0)
+        assert vec["mean_gap_h"] == pytest.approx(6.0)
 
 
 class TestReviewFixes:

@@ -68,6 +68,14 @@ def _prefix4_for(addr) -> str:
     return str(net)
 
 
+# Minimum absence gap (hours) for a leave->return pair to count as churn.
+# A sub-hour gap is feed-cadence noise (list rotation between fetches), not
+# repeat-offender behavior. The label side (train_predictor.MIN_GAP_H) and the
+# feature side MUST share this one constant: when they diverged, features
+# counted artifacts the labels rejected (A2A review 2026-09-11, finding 4).
+CHURN_MIN_GAP_H = 6.0
+
+
 class FeatureBuilder:
     """Builds FEATURE_NAMES rows from the DB. Batch-first: the event log and
     the corpus-side lookups load once per build, not once per IP."""
@@ -84,6 +92,7 @@ class FeatureBuilder:
         if self.now.tzinfo is None:  # a naive now would crash event clamping
             self.now = self.now.replace(tzinfo=timezone.utc)
         self.exclude_sources = sorted(set(exclude_sources or []))
+        self.churn_min_gap_h = float(cfg.get("churn_min_gap_h", CHURN_MIN_GAP_H))
         self._buckets = None
         self._loaded = False
         self._events: Dict[str, List[Tuple[datetime, str, int]]] = {}
@@ -110,7 +119,12 @@ class FeatureBuilder:
                 marks = ",".join("?" * len(self.exclude_sources))
                 sql += f" WHERE source_name NOT IN ({marks})"
                 params = tuple(self.exclude_sources)
-            cur.execute(sql + " ORDER BY tick, source_name, ip", params)
+            # present DESC: at one tick, process arrivals BEFORE leaves. A
+            # leave ordered first would be consumed by a same-tick arrival
+            # (gap 0), swallowing the pair AND deleting last_leave, so a real
+            # return 12h later never registers (A2A review finding 8).
+            cur.execute(sql + " ORDER BY tick, present DESC, source_name, ip",
+                        params)
             events: Dict[str, List[Tuple[datetime, str, int]]] = defaultdict(list)
             # stream the cursor: fetchall() on a 4.6M-row log materialized a
             # second full copy of the rows on top of the events dict (review
@@ -219,11 +233,15 @@ class FeatureBuilder:
             else:
                 if last_leave is not None:
                     delta = (ts - last_leave).total_seconds() / 3600.0
-                    if delta > 0:
+                    if delta >= self.churn_min_gap_h:
                         churn += 1
                         streak += 1
                         max_streak = max(max_streak, streak)
                         gaps.append(delta)
+                    # consumed either way: an unresolved short gap is
+                    # cadence noise, and the NEXT return measures from the
+                    # next leave after it (arrival-first tick ordering means
+                    # same-tick pairs no longer land here)
                     last_leave = None
         if last_leave is not None:
             streak = 0  # trailing unanswered leave is not a churn cycle

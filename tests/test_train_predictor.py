@@ -104,16 +104,49 @@ class TestDataset:
         stayers = {f"198.18.{i}.1" for i in range(1, 31)}
         db.update_source_sightings("talos", {tp_sentinel()}, _tick(0))
         db.update_source_sightings("talos", {tp_sentinel()} | stayers, _tick(5))
-        db.update_source_sightings("talos", {tp_sentinel()} | stayers, _tick(40))
+        # one SUB-FLOOR pair (3h gap): logs events advancing the timeline past
+        # the first snapshot (t_min + step) without creating a churn label
+        leaver = "198.18.1.1"
+        db.update_source_sightings("talos",
+                                   {tp_sentinel()} | (stayers - {leaver}), _tick(30))
+        db.update_source_sightings("talos", {tp_sentinel()} | stayers, _tick(33))
         cfg = {"retention": {"churn_log_exclude": []}}
         X, y, snap_ix, snaps = tp.build_dataset(
             db, cfg, horizon_h=24, snapshot_h=24, max_neg=10)
         assert X, "expected rows"
-        assert sum(y) == 0  # pure-negative pool: nobody churned
+        assert sum(y) == 0  # sub-floor pair is cadence noise, not churn
+        # cohort: 30 IPs (the leaver is one of them), zero labels, cap 10
         for (_, npos, nkeep, stride) in snaps:
             assert npos == 0
-            assert nkeep <= 10  # capped by max_neg... 30 negatives, stride 3
-            assert stride >= 3
+            assert stride == 3  # ceil(30/10)
+            assert nkeep == 10  # exactly the budget (floor+1 form kept fewer)
+
+    def test_staggered_cohorts_reach_full_population(self, tmp_path):
+        """Regression (review finding 5): IPs whose first events are spread
+        over time must ALL join the cohort at late snapshots. A lexicographic
+        sort regression stalls obs_i at the first out-of-order IP."""
+        db = _db(tmp_path)
+        db.update_source_sightings("talos", {tp_sentinel()}, _tick(0))
+        by_time = []  # ip arrives at hour 4*i
+        for i in range(60):
+            ip = f"10.{(i * 7) % 251}.{(i * 13) % 251}.1"
+            by_time.append((ip, 4 * i))
+            db.add_indicator(ip, "talos")
+            cur = {tp_sentinel()} | {p for p, t in by_time if t <= 4 * i}
+            db.update_source_sightings("talos", cur, _tick(4 * i))
+        # churner: leaves at 250, returns at 260 (gap 10h)
+        db.update_source_sightings("talos", {tp_sentinel()}, _tick(250))
+        db.update_source_sightings("talos", {tp_sentinel()} | {p for p, _ in by_time}, _tick(260))
+        cfg = {"retention": {"churn_log_exclude": []}}
+        X, y, snap_ix, snaps = tp.build_dataset(
+            db, cfg, horizon_h=24, snapshot_h=24, max_neg=1000)
+        last_T, npos, nkeep, _ = snaps[-1]
+        # every staggered arrival joins the final cohort: all 60 left at 250
+        # and returned at 260 (10h gap), so the last snapshot reads 60
+        # positives. A lexicographic-sort regression stalls obs_i far below
+        # 60 and this collapses.
+        assert npos + nkeep == 60 and npos == 60, \
+            f"cohort wrong at {last_T}: {npos}p/{nkeep}n of 60 staggered IPs"
 
     def test_empty_log_exits_cleanly(self, tmp_path):
         db = _db(tmp_path)
