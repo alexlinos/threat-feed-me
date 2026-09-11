@@ -115,9 +115,14 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     snap_ix: List[int] = []
 
     fb = FeatureBuilder(db, config, exclude_sources=exclude)
-    observed = sorted(first_event)
+    # MUST be sorted by first-event TIME, not by IP string: the cursor below
+    # advances monotonically and assumes chronological order. Lexicographic
+    # sort stalls the cohort at the first out-of-order IP (found running this
+    # against the real 21-day log; synthetic tests share one first tick and
+    # cannot see it).
+    observed = sorted(first_event, key=lambda ip: (first_event[ip], ip))
     T = t_min  # rolling origin starts at the first logged event
-    # monotonic cursors over the sorted population
+    # monotonic cursors over the chronologically sorted population
     obs_i = 0
     while T <= t_max:
         while obs_i < len(observed) and first_event[observed[obs_i]] <= T:
@@ -221,6 +226,128 @@ def _auc(y_true, scores) -> float:
     if n_pos == 0 or n_neg == 0:
         return float("nan")
     return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
+def backtest(db_path: str, config_path: str, model_path: str = "",
+              boundary: Optional[datetime] = None,
+              horizon_h: int = HORIZON_H, snapshot_h: int = SNAPSHOT_H,
+              max_neg: int = MAX_NEG_PER_SNAPSHOT) -> dict:
+    """Train on pre-boundary snapshots, score post-boundary holdout, compute
+    AUROC and recall@10pct vs random and source-count baselines.
+
+    Prints all numbers. Returns a dict of the metrics for programmatic access.
+    """
+    import numpy as np
+    import lightgbm as lgb
+    from .database import Database
+    from .core import load_config
+
+    db = Database(db_path)
+    config = load_config(config_path)
+    X, y, snap_ix, snaps = build_dataset(db, config,
+                                          horizon_h=horizon_h,
+                                          snapshot_h=snapshot_h,
+                                          max_neg=max_neg)
+    if not X:
+        raise SystemExit("no rows built; log too short")
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.int8)
+    s = np.asarray(snap_ix)
+    n_snap = len(snaps)
+
+    # Determine split: first snapshot at or after boundary, or default 75/25
+    if boundary is not None:
+        split = n_snap
+        for i, (T, _, _, _) in enumerate(snaps):
+            if T >= boundary:
+                split = i
+                break
+        if split < 1:
+            raise SystemExit("boundary too early — no train snapshots")
+    else:
+        split = max(1, min(n_snap - 1, int(n_snap * (1 - HOLDOUT_FRACTION))))
+
+    hold = s >= split
+    tr = ~hold
+    n_tr, n_hold = int(tr.sum()), int(hold.sum())
+    n_pos_tr, n_pos_hold = int(y[tr].sum()), int(y[hold].sum())
+    n_neg_hold = n_hold - n_pos_hold
+
+    split_dt = snaps[min(split, n_snap - 1)][0]
+    print(f"backtest: rows={len(y)} pos={int(y.sum())} snaps={n_snap}")
+    print(f"  train={n_tr} ({n_pos_tr}p {n_tr - n_pos_tr}n) "
+          f"hold={n_hold} ({n_pos_hold}p {n_neg_hold}n)")
+    print(f"  split_at={split_dt.isoformat()}")
+
+    if n_pos_hold < 2:
+        print("  too few holdout positives — metrics are unreliable")
+        return {"pos_hold": n_pos_hold}
+
+    # Train booster on the training partition
+    stride_avg = sum(x[3] for x in snaps) / max(1, n_snap)
+    n_neg_tr = n_tr - n_pos_tr
+    spw = stride_avg * max(1, n_neg_tr) / max(1, n_pos_tr)
+    params = {
+        "objective": "binary", "metric": "auc", "verbose": -1,
+        "num_leaves": 31, "learning_rate": 0.05, "feature_fraction": 0.9,
+        "min_data_in_leaf": 50, "scale_pos_weight": spw, "seed": 42,
+    }
+    dtrain = lgb.Dataset(X[tr], label=y[tr], feature_name=_feature_names())
+    dhold = lgb.Dataset(X[hold], label=y[hold], reference=dtrain)
+    booster = lgb.train(params, dtrain, num_boost_round=300,
+                        valid_sets=[dhold],
+                        callbacks=[lgb.early_stopping(25, verbose=False)])
+
+    scores = np.asarray(booster.predict(X[hold]), dtype=float).reshape(-1)
+    model_auc = _auc(y[hold], scores)
+    n_top = max(1, n_hold // 10)
+    top_idx = np.argsort(scores)[-n_top:]
+    model_recall = int(y[hold][top_idx].sum()) / n_pos_hold if n_pos_hold else float("nan")
+
+    # Random baseline (seeded for reproducibility)
+    rng = np.random.default_rng(42)
+    rand_scores = rng.random(n_hold)
+    rand_auc = _auc(y[hold], rand_scores)
+    rand_top = np.argsort(rand_scores)[-n_top:]
+    rand_recall = int(y[hold][rand_top].sum()) / n_pos_hold if n_pos_hold else float("nan")
+
+    # Source-count baseline (feature index 0 = FEATURE_NAMES[0] = source_count)
+    sc_scores = X[hold][:, 0]
+    sc_auc = _auc(y[hold], sc_scores)
+    sc_top = np.argsort(sc_scores)[-n_top:]
+    sc_recall = int(y[hold][sc_top].sum()) / n_pos_hold if n_pos_hold else float("nan")
+
+    print(f"  rounds={booster.best_iteration}")
+    print("  --- AUROC ---")
+    print(f"  model:         {model_auc:.4f}")
+    print(f"  random:        {rand_auc:.4f}")
+    print(f"  source_count:  {sc_auc:.4f}")
+    print("  --- Recall@10pct ---")
+    print(f"  model:         {model_recall:.4f}")
+    print(f"  random:        {rand_recall:.4f}")
+    print(f"  source_count:  {sc_recall:.4f}")
+
+    if model_path:
+        booster.save_model(model_path, num_iteration=booster.best_iteration)
+        print(f"model written: {model_path}")
+
+    return {
+        "rows": len(y),
+        "pos": int(y.sum()),
+        "snaps": n_snap,
+        "train": n_tr,
+        "hold": n_hold,
+        "pos_train": n_pos_tr,
+        "pos_hold": n_pos_hold,
+        "split_at": split_dt.isoformat(),
+        "rounds": booster.best_iteration,
+        "model_auc": model_auc,
+        "rand_auc": rand_auc,
+        "sc_auc": sc_auc,
+        "model_recall": model_recall,
+        "rand_recall": rand_recall,
+        "sc_recall": sc_recall,
+    }
 
 
 def main(argv: List[str]) -> int:
