@@ -441,6 +441,14 @@ the auto-refresh interval and the retention window) can be changed live from
 the dashboard toolbar (or `POST /api/settings`); the stored value then takes
 precedence over the file, so it survives restarts without editing config.
 
+## Privacy
+
+Threat Feed Me runs where you install it and phones home to nobody: no
+telemetry, no analytics, no update check. What it stores on your data
+volume, what it sends to the feed providers you enable and to your UniFi
+gateway, and what it exposes on the network are spelled out, component by
+component, in [PRIVACY.md](PRIVACY.md).
+
 ## License
 
 MIT

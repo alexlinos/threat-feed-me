@@ -29,6 +29,9 @@ boundaries are deliberate and worth understanding:
 
 **Do not expose the dashboard or API directly to the internet.**
 
+What the software stores, sends and logs, and to whom, is documented in
+[PRIVACY.md](PRIVACY.md).
+
 ## Hardening measures in place
 
 Verified in code review (adversarial pass, 2026-08):
