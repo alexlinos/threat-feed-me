@@ -19,6 +19,35 @@ disagree, the remote wins.
 - Before a large change, re-check `git log origin/main -1`, cheap, and it
   catches a stale base immediately.
 
+## Security rules for every change
+
+These are standing rules, not suggestions. An adversarial review attacks the
+diff against them before any release; `SECURITY.md` records what has been
+verified. OWASP Top 10 is the outline, ASVS is the checklist.
+
+- **Every input is hostile**: request parameters, uploaded files, fetched
+  feed content, dashboard config. Parse with `ipaddress` / `idna`, cap sizes,
+  reject rather than coerce. Never trust a feed to be well formed.
+- **SQL is parameterized.** Never interpolate request-derived values, not even
+  column names. Internal constants only.
+- **User-supplied paths are `realpath`-resolved and containment-checked**
+  against the upload directory. A filename or symlink must not escape it.
+- **Remote fetches go through the SSRF guard** (`safety.allow_private_feed_urls`,
+  default false). No new fetch path bypasses it.
+- **Served lists pass the output safety filter** (bogons, RFC1918, known-good
+  infrastructure). Never add an export that skips it; a poisoned upstream
+  must not be able to make a firewall block its own network.
+- **Mutating endpoints require the `X-Requested-With` header** (CSRF). New
+  endpoints inherit the check; do not special-case one.
+- **Escape on output.** Jinja autoescape stays on; client-side rows HTML-escape
+  feed-derived values. No `innerHTML` with feed data.
+- **Secrets never round-trip to the browser** and never land in logs, test
+  fixtures or commits.
+- **Run Grype on the image before tagging.** A new finding is fixed or
+  documented as won't-fix in `SECURITY.md` in the same release.
+- **A change to what the app stores or sends updates `PRIVACY.md` in the same
+  commit.**
+
 ## Releasing
 
 CI publishes the Docker image on a `v*.*.*` tag and **refuses to publish if
