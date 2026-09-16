@@ -324,7 +324,19 @@ class Predictor:
     @property
     def builder(self) -> FeatureBuilder:
         if self._builder is None:
-            self._builder = FeatureBuilder(self.db, self.config)
+            # Match the trainer: build_dataset drops churn_log_exclude feeds
+            # from the event stream (train_predictor.build_dataset ->
+            # FeatureBuilder(exclude_sources=churn_log_exclude(config))). If
+            # scoring did NOT exclude the same feeds, features would count
+            # transitions the labels never saw — train/serve skew that silently
+            # invalidates the backtest the model was certified against. Read the
+            # same config path directly (no pipeline import: predictor must stay
+            # importable without the app's fetch stack).
+            excl = (self.config.get("retention", {}) or {}).get(
+                "churn_log_exclude", []) or []
+            self._builder = FeatureBuilder(
+                self.db, self.config,
+                exclude_sources={str(n) for n in excl})
         return self._builder
 
     def model_ready(self) -> bool:

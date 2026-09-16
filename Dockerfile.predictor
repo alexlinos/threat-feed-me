@@ -1,0 +1,29 @@
+# Tools image for the OFFLINE recurrence predictor.
+#
+# This is NOT the serving image. The app (Dockerfile) ships dark on purpose:
+# no numpy, no lightgbm, no libgomp — a smaller runtime and CVE surface, and
+# the model never runs in the request path. This image layers exactly those
+# offline-only deps on top of a released app image so `train_predictor` and
+# `predict_pass` can run in a throwaway/cron container against the data volume.
+#
+# Build (on the deploy host, after the app release that carries the predictor
+# code is live):
+#     docker build -f Dockerfile.predictor -t threat-feed-me-predictor:latest .
+#
+# The FROM tag pins which app code (and thus which feature contract) the tools
+# image carries; keep it in step with the running app so features match.
+ARG APP_IMAGE=alexlinos/threat-feed-me:latest
+FROM ${APP_IMAGE}
+
+USER root
+# libgomp1 is the OpenMP runtime lightgbm's wheel links against; the slim base
+# does not ship it. numpy + lightgbm are the ONLY extra wheels — no sklearn,
+# no pandas, no scipy (predictor.py forbids them at predict time).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "numpy>=1.26" "lightgbm>=4.0"
+USER appuser
+
+# No default CMD: the caller picks train_predictor or predict_pass. See
+# scripts/predict-pass.sh.

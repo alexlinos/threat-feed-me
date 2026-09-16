@@ -2,3 +2,10 @@
 -r requirements.txt
 pytest>=8.0
 httpx>=0.26.0   # required by starlette TestClient for dashboard endpoint tests
+# Offline predictor stack: train_predictor.py + predict_pass.py and their tests
+# import these. Deliberately NOT in requirements.txt — the serving image ships
+# dark (no numpy/lightgbm, smaller CVE surface); the model is trained and scored
+# only in the tools container. Without them here, the predictor/backtest tests
+# (which are unguarded beyond lightgbm importorskip) would not run in CI.
+numpy>=1.26
+lightgbm>=4.0   # needs libgomp1 on the runner (present on ubuntu-latest)

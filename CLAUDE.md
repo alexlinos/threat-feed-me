@@ -382,6 +382,45 @@ sightings ring-window prune (vs. unbounded growth) and indicator eviction
 both roll on retention; the backup-prune by timestamped filename (54a524d)
 already avoids the mtime NTP edge.
 
+### Backtest passed + serving wired (2026-09-16)
+
+The Task 9 backtest ran on the real 27-day log for the first time and PASSED:
+AUROC 0.862 vs 0.776 source-count baseline vs 0.500 random, time-disjoint
+split with a Sep-01 embargo (289k leave→return positive labels; ~40% return
+rate — 10x past the readiness bar). Recall@10pct edge is thin (0.194 vs 0.182)
+and the trainer's documented anachronism mildly inflates, so the model is a
+within-tier ranking nudge to enable-small-and-watch, not to lean on.
+
+Operationalized the SERVING side (previously only the consumption half existed —
+`scorer.py` read `predictive_score`, nothing wrote it, and `predict_and_store`
+was called nowhere):
+
+- **`predict_pass.py`** — offline pass, mirrors `train_predictor.py`. Scores
+  every `kind='ip'` indicator via `Predictor.score_many` (one feature build +
+  one batch predict) and writes `metadata.predictive_score` in chunked
+  `json_patch` transactions. Decoupled from `predictor.enabled` on purpose:
+  it populates the field whenever a model file exists (so you can score-then-
+  verify BEFORE flipping the switch); `enabled` gates only whether the scorer
+  consumes it. Runs against the LIVE DB — WAL + chunked commits + `busy_timeout`
+  keep it from blocking refresh.
+- **Train/serve skew fix**: `Predictor.builder` now excludes the same
+  `churn_log_exclude` feeds `train_predictor.build_dataset` drops. Without it,
+  serving fed the model transitions the labels never saw, silently invalidating
+  the certified backtest.
+- **Offline-only, image stays dark**: numpy/lightgbm are in `requirements-dev`,
+  never `requirements.txt`. `Dockerfile.predictor` layers them (+ libgomp1) onto
+  the app image as a TOOLS image; `scripts/predictor.sh {train|predict|both}`
+  runs it in a throwaway container against the data volume (mem-capped), for
+  cron. The serving image never grows the ML deps or their CVE surface.
+- **CI note**: the predictor/backtest tests never ran in CI before — the v2.4.13
+  tag predates the predictor commits and CI only fires on version tags. Adding
+  numpy/lightgbm to `requirements-dev` is what lets them run from the next
+  release on. `test_predict_pass` gates its ML path on `importorskip`.
+- **Still dark**: `predictor.enabled: false`. To actually consume scores: run a
+  predict pass, verify the score distribution, then set a small
+  `predictor_weight` (~0.10) + `enabled: true`, release, force a recalc (a
+  config-only scoring change doesn't move the rescore-gate corpus key).
+
 ### Ratified (maintainer, 2026-08-20) — go direct to primaries, not aggregates
 
 Direction: copy the SOURCES of aggregate lists (romainmarcoux malicious-domains/
