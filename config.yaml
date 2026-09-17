@@ -413,13 +413,13 @@ scoring:
   reputation_weight: 0.33
   recency_weight: 0.22
   # Recurrence-predictor factor (see the predictor: block). Normalized with
-  # the others, so at 0.08 raw (~5.7% of the total) it shifts an IP's score
+  # the others, so at 0.10 raw (~9% of the total) it shifts an IP's score
   # slightly within its tier — it can never outrank feed corroboration or
   # lift an FP-degraded feed's IPs. Forced to 0 while predictor.enabled is
-  # false. Caveat: enabling it renormalizes the other weights down ~7%;
+  # false. Caveat: enabling it renormalizes the other weights down ~9%;
   # harmless under effective_votes tiering (votes decide tiers), but under
   # tiering.method legacy the fixed min_score gates can demote indicators.
-  predictor_weight: 0.08
+  predictor_weight: 0.10
 
   # Age decay (scores decrease over time)
   decay_half_life_hours: 72  # Score halves every 3 days
@@ -487,7 +487,7 @@ retention:
 # while disabled. Train offline on the deploy host with
 #   python -m threatfeedme.train_predictor data/predictor_model.txt
 predictor:
-  enabled: false
+  enabled: true
   model_path: data/predictor_model.txt
   # Reserved (see predictor.FeatureBuilder): the churn event window in days.
   # Currently features aggregate the full ring-pruned log; this knob has no

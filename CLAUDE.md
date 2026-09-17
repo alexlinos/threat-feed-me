@@ -416,10 +416,14 @@ was called nowhere):
   tag predates the predictor commits and CI only fires on version tags. Adding
   numpy/lightgbm to `requirements-dev` is what lets them run from the next
   release on. `test_predict_pass` gates its ML path on `importorskip`.
-- **Still dark**: `predictor.enabled: false`. To actually consume scores: run a
-  predict pass, verify the score distribution, then set a small
-  `predictor_weight` (~0.10) + `enabled: true`, release, force a recalc (a
-  config-only scoring change doesn't move the rescore-gate corpus key).
+- **ENABLED (v2.4.15, 2026-09-17)**: `predictor.enabled: true`,
+  `predictor_weight: 0.10` (~9% of the normalized score). After a week of clean
+  daily predict passes (438k→457k IPs scored, distribution stable at
+  0.17/0.70/0.99), the factor now shifts within-tier ranking. Tiers are still
+  pure vote math (effective_votes), so this reorders inside a tier and never
+  moves an IP between High/Medium/Low. A config-only scoring change does NOT
+  move the rescore-gate corpus key, so the roll was followed by a forced recalc
+  (POST /api/recalculate-scores) — do that after any future scoring-config edit.
 
 ### Ratified (maintainer, 2026-08-20) — go direct to primaries, not aggregates
 
