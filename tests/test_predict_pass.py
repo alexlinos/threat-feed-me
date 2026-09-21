@@ -4,6 +4,8 @@ Pure-logic guards (missing model, train/serve exclusion wiring) run everywhere;
 the end-to-end write path is gated on lightgbm (dev-only dep, never in the
 serving image).
 """
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -44,6 +46,52 @@ def test_main_missing_db_returns_2(tmp_path, monkeypatch):
     monkeypatch.setenv("THREATFEED_DB", str(tmp_path / "nope.db"))
     monkeypatch.setenv("THREATFEED_CONFIG", _cfg(tmp_path))
     assert predict_pass.main(["predict_pass"]) == 2
+
+
+class _FakeCursor:
+    def __init__(self, sink):
+        self.sink = sink
+
+    def execute(self, *a):        # the PRAGMA busy_timeout
+        pass
+
+    def executemany(self, _sql, rows):
+        self.sink.extend(rows)
+
+
+class _FakeLockingDB:
+    """A db whose _cursor() raises 'database is locked' the first `fail_n`
+    times, then succeeds — to exercise _write_chunks' retry loop without a
+    real writer to contend with."""
+    def __init__(self, fail_n):
+        self.fail_n = fail_n
+        self.calls = 0
+        self.sink = []
+
+    @contextmanager
+    def _cursor(self):
+        self.calls += 1
+        if self.calls <= self.fail_n:
+            raise sqlite3.OperationalError("database is locked")
+        yield _FakeCursor(self.sink)
+
+
+def test_write_chunks_retries_transient_lock(monkeypatch):
+    monkeypatch.setattr(predict_pass.time, "sleep", lambda *_: None)  # no real backoff
+    db = _FakeLockingDB(fail_n=2)  # locked twice, succeeds on the 3rd attempt
+    rows = [("{}", f"1.2.3.{i}") for i in range(4)]
+    written = predict_pass._write_chunks(db, rows, chunk=10)
+    assert written == 4
+    assert len(db.sink) == 4
+    assert db.calls == 3  # 2 failures + 1 success
+
+
+def test_write_chunks_reraises_when_lock_never_clears(monkeypatch):
+    monkeypatch.setattr(predict_pass.time, "sleep", lambda *_: None)
+    db = _FakeLockingDB(fail_n=99)  # never clears
+    with pytest.raises(sqlite3.OperationalError):
+        predict_pass._write_chunks(db, [("{}", "1.2.3.4")], chunk=10)
+    assert db.calls == predict_pass._LOCK_RETRIES  # gave up after the cap
 
 
 def test_builder_excludes_churn_log_feeds(tmp_path):

@@ -424,6 +424,13 @@ was called nowhere):
   moves an IP between High/Medium/Low. A config-only scoring change does NOT
   move the rescore-gate corpus key, so the roll was followed by a forced recalc
   (POST /api/recalculate-scores) — do that after any future scoring-config edit.
+- **Lock-hardening (v2.4.16, 2026-09-21)**: the daily predict pass crashed once
+  on `sqlite3.OperationalError: database is locked` — at ~552k IPs a live
+  rescore holds the single WAL writer lock longer than Database's 5s
+  busy_timeout, so a `_write_chunks` chunk timed out. Fixed: the write path now
+  sets a 120s per-connection busy_timeout and retries a chunk on lock (chunks
+  are atomic, so a retry re-applies idempotently). If this recurs, the corpus
+  has grown enough that the rescore itself needs attention, not the timeout.
 
 ### Ratified (maintainer, 2026-08-20) — go direct to primaries, not aggregates
 

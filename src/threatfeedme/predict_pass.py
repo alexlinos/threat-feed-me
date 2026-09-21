@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -45,18 +46,42 @@ SCORE_KEY = "predictive_score"
 # keeps the json_patch payloads (and the WAL) small on a 700k-row pass.
 _ROUND = 4
 
+# Lock handling for the write path. WAL has one writer, and at this corpus
+# size a live refresh/rescore transaction can hold that writer lock for far
+# longer than Database's default 5s busy_timeout — which surfaced as a hard
+# `sqlite3.OperationalError: database is locked` mid-pass on prod (2026-09-21,
+# ~552k IPs). Wait the rescore out with a long per-connection busy_timeout, and
+# still retry the chunk a few times with backoff for the rare case that exceeds
+# even that. A chunk is one atomic transaction (commit only on clean exit of
+# _cursor), so a retry re-applies the whole batch idempotently — json_patch of
+# the same score is a no-op.
+_BUSY_TIMEOUT_MS = 120000
+_LOCK_RETRIES = 5
+_LOCK_BACKOFF_S = 2.0
+
 
 def _write_chunks(db, rows: List, chunk: int) -> int:
     """UPDATE ... json_patch in bounded transactions. Each _cursor() block is
-    its own connection+commit, so a chunk is one short-lived write lock."""
+    its own connection+commit, so a chunk is one short-lived write lock. Waits
+    out (and retries) a lock held by a concurrent rescore rather than crashing
+    the whole pass on a single busy moment."""
     written = 0
     for i in range(0, len(rows), chunk):
         batch = rows[i:i + chunk]
-        with db._cursor() as cur:
-            cur.executemany(
-                "UPDATE indicators SET metadata = json_patch("
-                "COALESCE(metadata, '{}'), ?) WHERE ip = ?",
-                batch)
+        for attempt in range(_LOCK_RETRIES):
+            try:
+                with db._cursor() as cur:
+                    cur.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+                    cur.executemany(
+                        "UPDATE indicators SET metadata = json_patch("
+                        "COALESCE(metadata, '{}'), ?) WHERE ip = ?",
+                        batch)
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < _LOCK_RETRIES - 1:
+                    time.sleep(_LOCK_BACKOFF_S * (attempt + 1))
+                    continue
+                raise
         written += len(batch)
     return written
 
