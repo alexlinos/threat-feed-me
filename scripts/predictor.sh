@@ -28,12 +28,18 @@ MODEL="${TFM_MODEL:-data/predictor_model.txt}"
 MEM="${TFM_MEM:-3g}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Build the tools image if absent. It layers numpy/lightgbm onto the app image;
-# rebuild it whenever the app image moves so the feature contract stays in step.
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "[predictor] building $IMAGE from $APP_IMAGE ..."
+# Build the tools image when it is absent OR when the app image has moved
+# since it was built. It layers numpy/lightgbm onto the app image, so it
+# carries that image's code AND config.yaml; a stale one trains/scores with
+# yesterday's feature contract and exclusions (a new churn_log_exclude entry
+# never reached training until the old image was deleted by hand). The build
+# is stamped with the app image id it came from, and rebuilt on mismatch.
+APP_ID="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE" 2>/dev/null || true)"
+BUILT_FROM="$(docker image inspect -f '{{index .Config.Labels "tfm.app_image_id"}}' "$IMAGE" 2>/dev/null || true)"
+if [ -z "$BUILT_FROM" ] || [ "$BUILT_FROM" != "$APP_ID" ]; then
+  echo "[predictor] building $IMAGE from $APP_IMAGE (${APP_ID:-unknown}) ..."
   docker build -f "$HERE/Dockerfile.predictor" --build-arg "APP_IMAGE=$APP_IMAGE" \
-    -t "$IMAGE" "$HERE"
+    --label "tfm.app_image_id=$APP_ID" -t "$IMAGE" "$HERE"
 fi
 
 run() {  # run <module-and-args...>

@@ -138,10 +138,19 @@ def test_recalculate_persists_scores(db):
 # ---------------------------------------------------- predictor factor ----
 
 
+# The predictor factor is live only when enabled AND a model file exists
+# (scorer.predictor_live), so tests of the live factor point at a real file.
+import atexit as _atexit
+import tempfile as _tempfile
+_LIVE_MODEL = _tempfile.NamedTemporaryFile(prefix="tfm-model-", suffix=".txt",
+                                           delete=False).name
+_atexit.register(lambda: os.path.exists(_LIVE_MODEL) and os.unlink(_LIVE_MODEL))
+
+
 def _pcfg(enabled, weight=0.08):
     cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in CONFIG.items()}
     cfg["scoring"]["predictor_weight"] = weight
-    cfg["predictor"] = {"enabled": enabled}
+    cfg["predictor"] = {"enabled": enabled, "model_path": _LIVE_MODEL}
     return cfg
 
 
@@ -193,7 +202,7 @@ def test_predictor_cannot_mask_feed_fp_penalty(db):
     a max predictor score: corroboration dominates by construction."""
     cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in CONFIG.items()}
     cfg["scoring"]["predictor_weight"] = 0.08
-    cfg["predictor"] = {"enabled": True}
+    cfg["predictor"] = {"enabled": True, "model_path": _LIVE_MODEL}  # live factor
     db.add_indicator("1.1.1.1", "abuse_ch_malware", {"predictive_score": 1.0})
     db.add_indicator("2.2.2.2", "abuse_ch_malware", {})
     db.add_indicator("2.2.2.2", "spamhaus_drop", {})

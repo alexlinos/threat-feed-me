@@ -140,6 +140,12 @@ def run(db_path: str, config_path: str, model_path: str = "",
     t1 = time.time()
     written = _write_chunks(db, rows, chunk)
     write_s = time.time() - t1
+    # Stamp the pass so the app's next refresh rescores and actually consumes
+    # these values: predictive_score lives in metadata, which the rescore
+    # gate's corpus counts can't see (pipeline.scoring_input_key).
+    if written:
+        from .pipeline import PREDICT_STAMP_KEY
+        db.set_setting(PREDICT_STAMP_KEY, datetime.now(timezone.utc).isoformat())
 
     vals = [round(s, _ROUND) for s in scores.values() if s is not None]
     summary = {

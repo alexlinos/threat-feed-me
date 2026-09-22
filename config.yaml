@@ -488,11 +488,14 @@ retention:
     # and inflating the sightings log (~140k transitions/3d).
     - honeydb_bad_hosts
 
-# Recurrence predictor (ships DARK: enabled=false until the Task 9 backtest
-# passes on real accumulated churn). The scoring factor reads the stored
-# probability from indicator metadata; nothing here runs at refresh time
-# while disabled. Train offline on the deploy host with
-#   python -m threatfeedme.train_predictor data/predictor_model.txt
+# Recurrence predictor: an optional within-tier ranking nudge (tiers stay pure
+# feed-vote math). enabled:true is safe to ship because the factor is INERT
+# until a trained model file exists at model_path — a fresh install has none,
+# so its scores are untouched. It becomes live only after you train one
+# offline (the image deliberately carries no ML libraries):
+#   scripts/predictor.sh both      # tools container: train + score
+# and schedule that script (see Dockerfile.predictor). Nothing here runs at
+# refresh time; the scorer only reads the stored score from indicator metadata.
 predictor:
   enabled: true
   model_path: data/predictor_model.txt

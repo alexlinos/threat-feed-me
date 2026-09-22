@@ -2,14 +2,29 @@
 Confidence Scoring Engine - Calculate and assign confidence tiers
 """
 import bisect
+import logging
 import math
 import ipaddress
 import json
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 from threatfeedme.models import ThreatIndicator, ConfidenceTier, FeedType, effective_sources
 from threatfeedme.database import Database
+
+logger = logging.getLogger(__name__)
+
+
+def predictor_live(config: Dict) -> bool:
+    """The recurrence factor is live only when enabled AND a trained model
+    file exists. The model is produced offline (train_predictor, tools
+    container); until one exists every predictive_score is absent, so a
+    non-zero weight would only renormalize the real factors down."""
+    pcfg = (config or {}).get('predictor', {}) or {}
+    if not pcfg.get('enabled', False):
+        return False
+    return os.path.exists(pcfg.get('model_path', 'data/predictor_model.txt'))
 
 
 # False-positive penalty tuning. A feed's reputation weight is multiplied by
@@ -52,14 +67,17 @@ class ConfidenceScorer:
             'recency': scoring.get('recency_weight', 0.22),
             # Recurrence-predictor factor (Task 8). Normalized WITH the other
             # components so it can never outweigh feed corroboration, and
-            # forced to 0 while predictor.enabled is false — a stale
-            # predictive_score in metadata from a previously-enabled run must
-            # not keep steering scores after the switch is thrown off. The
-            # value is read from indicator metadata, never recomputed here:
-            # scoring must not depend on lightgbm or the model file.
+            # forced to 0 unless the predictor is live: enabled AND a model
+            # file exists. A stale predictive_score from a previously-enabled
+            # run must not keep steering scores after the switch is thrown
+            # off, and an install that has never trained a model must not pay
+            # the renormalization (every score scaled down ~9%) for a factor
+            # that contributes nothing — which is what the shipped
+            # enabled:true did to every fresh install before v2.4.19. The value
+            # is read from indicator metadata, never recomputed here: scoring
+            # must not depend on lightgbm; it only checks the file is there.
             'predictor': (scoring.get('predictor_weight', 0.0)
-                          if (config.get('predictor', {}) or {}).get('enabled', False)
-                          else 0.0),
+                          if predictor_live(config) else 0.0),
         }
         total = sum(raw_weights.values()) or 1.0
         self.weights = {k: v / total for k, v in raw_weights.items()}
@@ -96,12 +114,22 @@ class ConfidenceScorer:
         for feed in config.get('feeds', []):
             if feed.get('name') and feed.get('feed_type'):
                 self.source_types[feed['name']] = str(feed['feed_type'])
+        # Disabled feeds cast no vote. Disabling a feed only stops FETCHING
+        # it; its attributions stay in indicator_sources, so before v2.4.19 a
+        # disabled (often: disabled-because-noisy) feed kept corroborating its
+        # IPs into Medium/High indefinitely. Its IPs now score as if it never
+        # reported them — gone from the higher tiers at the next rescore — and
+        # retention ages out whatever it alone listed.
+        self.disabled_sources = set()
         if self.db is not None:
             try:
                 for feed in self.db.get_feed_sources():
                     self.source_types[feed.name] = feed.feed_type.value
+                    if not feed.enabled:
+                        self.disabled_sources.add(feed.name)
             except Exception:
-                pass  # never let feed bookkeeping break scoring
+                logger.exception("[score] could not load the feed roster; "
+                                 "feed types and enabled state unknown this rescore")
 
         # Apply the false-positive penalty: feeds users have flagged as noisy
         # get their reputation reduced, so their IPs score lower and fall out
@@ -121,7 +149,11 @@ class ConfidenceScorer:
                             self.source_weights.get(name, DEFAULT_SOURCE_WEIGHT) * factor
                         )
             except Exception:
-                # Never let feedback bookkeeping break scoring.
+                # Never let feedback bookkeeping break scoring — but say so:
+                # losing the penalties silently hands FP-degraded feeds their
+                # full weight (and authority) back.
+                logger.exception("[score] false-positive penalties unavailable; "
+                                 "scoring WITHOUT feed reputation this rescore")
                 self.feed_penalty = {}
 
     # ==================== PUBLIC API ====================
@@ -239,7 +271,7 @@ class ConfidenceScorer:
         eff = effective_sources(indicator.ip, indicator.sources, whitelist_map)
         if eff is None:
             return 0.0, 0.0, None
-        sources = eff
+        sources = [s for s in eff if s not in self.disabled_sources]
         # CIDR-aware when given a WhitelistMatcher; plain dict falls back to
         # exact match. Used below to skip re-adding a netblock source that has
         # been whitelisted for this IP.
@@ -254,7 +286,8 @@ class ConfidenceScorer:
         # not re-added. Sorted so source order (and anything derived from it)
         # stays deterministic.
         for src in sorted(self._netblock_sources_for(indicator.ip, netblocks)):
-            if src not in sources and src not in scoped:
+            if (src not in sources and src not in scoped
+                    and src not in self.disabled_sources):
                 sources.append(src)
 
         # No surviving sources means no evidence -> lowest confidence.
@@ -321,6 +354,12 @@ class ConfidenceScorer:
             sizes = self.db.get_source_counts()
             pairs = self.db.get_feed_overlap()
         except Exception:
+            # Fail-safe but LOUD: with no overlap data every source counts as
+            # an independent witness, so correlated feeds inflate votes and
+            # tiers across the board. Silently doing that is the one outcome
+            # a scoring engine must never hide.
+            logger.exception("[score] feed overlap unavailable; votes fall back "
+                             "to RAW source counts this rescore (tiers inflated)")
             self._overlap = {}
             return self._overlap
         self._source_sizes = sizes
@@ -404,7 +443,9 @@ class ConfidenceScorer:
                             'sources': self._source_fingerprint(kind)}),
             )
         except Exception:
-            pass  # never let bookkeeping break a rescore
+            # never let bookkeeping break a rescore
+            logger.warning("[score] could not persist the %s roster fingerprint", kind,
+                           exc_info=True)
 
     def _fingerprint(self, votes: List[float]) -> List[float]:
         """Quantile snapshot of the vote distribution (deciles). Stable,
@@ -557,7 +598,9 @@ class ConfidenceScorer:
         try:
             self.db.set_setting(key, json.dumps({'medium': med_b, 'high': high_b}))
         except Exception:
-            pass  # never let bookkeeping break a rescore
+            # never let bookkeeping break a rescore; single-IP scoring falls
+            # back to the floors until a persist succeeds
+            logger.warning("[score] could not persist %s tier breaks", kind, exc_info=True)
 
     def _stored_breaks(self, kind: str = 'ip') -> tuple[float, float]:
         """Boundaries persisted by the last full rescore; floors before any
@@ -570,7 +613,8 @@ class ConfidenceScorer:
                 j = json.loads(raw)
                 return float(j['medium']), float(j['high'])
         except Exception:
-            pass
+            logger.warning("[score] stored %s tier breaks unreadable; using the floors",
+                           kind, exc_info=True)
         return self.medium_floor, self.high_floor
 
     def _load_netblock_sources(self):

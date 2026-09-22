@@ -589,24 +589,28 @@ class Database:
             cur.execute("DELETE FROM sightings WHERE tick < ?", (cutoff,))
             return cur.rowcount
 
-    def corpus_change_key(self) -> Tuple[int, int, int]:
-        """Cheap fingerprint of everything that affects scores/tiers: indicator
-        rows, source attributions, and false-positive feedback rows. It moves
-        exactly when a rescore is warranted — an indicator added or purged, an
-        ip gaining a source, or an FP flag/clear (which changes a feed's
-        effective weight). Deliberately excludes last_seen, which bumps on
-        every no-op re-report and would defeat the point.
+    def corpus_change_key(self) -> Tuple[int, ...]:
+        """Cheap fingerprint of the stored scoring inputs: indicator rows,
+        source attributions, and false-positive feedback rows. Count AND
+        max(id) per table — counts alone let an equal number of adds and
+        purges in one refresh cancel out and skip a rescore that was needed.
+        Deliberately excludes last_seen, which bumps on every no-op re-report
+        and would defeat the point.
 
-        run_refresh compares this against the value STORED at the last rescore
-        (not this refresh's start), so a change made BETWEEN refreshes — e.g. an
-        FP flag, which only triggers a background re-export — still forces the
-        rescore it needs. Feed weight/enable edits rescore synchronously on
-        their own path, so they need not appear here."""
+        This covers only the corpus. Config, the feed catalog (weights,
+        enabled), the whitelist, and predict-pass output also change scores;
+        pipeline.scoring_input_key folds those in. (This docstring used to say
+        feed weight/enable edits rescore on their own path; they never did.)"""
         with self._cursor() as cur:
-            n_ind = cur.execute("SELECT COUNT(*) FROM indicators").fetchone()[0]
-            n_src = cur.execute("SELECT COUNT(*) FROM indicator_sources").fetchone()[0]
-            n_fb = cur.execute("SELECT COUNT(*) FROM feed_feedback").fetchone()[0]
-        return (n_ind, n_src, n_fb)
+            parts = []
+            # rowid, not id: feed_feedback has no id column (all three are
+            # ordinary rowid tables; indicators.id aliases rowid). Table names
+            # are internal constants, never request input.
+            for table in ("indicators", "indicator_sources", "feed_feedback"):
+                n, top = cur.execute(
+                    f"SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM {table}").fetchone()
+                parts.extend((n, top))
+        return tuple(parts)
 
     def get_indicators_by_kind(self, kind: str = "ip") -> List[ThreatIndicator]:
         """All indicators of a specific kind (used by the kind-filtered

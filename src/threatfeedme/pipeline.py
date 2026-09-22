@@ -229,11 +229,49 @@ def get_export_stats(db: Database) -> Dict:
 RETENTION_MAX_AGE_KEY = "retention_max_age_days"
 DEFAULT_RETENTION_DAYS = 7  # fallback if neither the DB setting nor config sets it
 
-# Settings key holding the corpus fingerprint (db.corpus_change_key) as of the
-# last rescore, so run_refresh can skip the full recompute when nothing that
-# affects scores/tiers has changed. Stored in the DB so it is per-deployment
-# and survives restarts.
+# Settings key holding the scoring-input fingerprint (scoring_input_key) as of
+# the last rescore, so run_refresh can skip the full recompute when nothing
+# that affects scores/tiers has changed. Stored in the DB so it is
+# per-deployment and survives restarts.
 _RESCORE_KEY = "last_scored_corpus_key"
+
+# Stamped by the offline predict pass when it writes fresh predictive_scores,
+# so the next refresh rescores and actually consumes them.
+PREDICT_STAMP_KEY = "predict_pass_stamp"
+
+
+def scoring_input_key(db: Database, config: Dict) -> str:
+    """Fingerprint of EVERYTHING that changes scores or tiers.
+
+    The gate used to key on three row counts alone, so these changes never
+    rescored until some unrelated corpus change happened to come along
+    (review 2026-09-22): a scoring-config edit (the documented "force a
+    recalc" gotcha), a feed weight or enabled toggle, a whitelist change, and
+    fresh predict-pass scores. The corpus part stays cheap counts; the rest is
+    small (config block, a ~30-row catalog, the whitelist) and is hashed."""
+    import hashlib
+    import json as _json
+    from threatfeedme.scorer import predictor_live
+
+    pcfg = (config.get('predictor') or {})
+    model_path = pcfg.get('model_path', 'data/predictor_model.txt')
+    try:
+        model_mtime = os.path.getmtime(model_path) if predictor_live(config) else None
+    except OSError:
+        model_mtime = None
+    catalog = sorted((f.name, bool(f.enabled), float(f.weight), f.feed_type.value)
+                     for f in db.get_feed_sources())
+    whitelist = sorted((w.ip, w.feed_name, w.reason_code, str(w.expires_at))
+                       for w in db.get_whitelist())
+    blob = _json.dumps({
+        "scoring": config.get('scoring') or {},
+        "predictor": {"enabled": bool(pcfg.get('enabled')), "model_mtime": model_mtime},
+        "catalog": catalog,
+        "whitelist": whitelist,
+        "predict_stamp": db.get_setting(PREDICT_STAMP_KEY),
+    }, sort_keys=True, default=str)
+    digest = hashlib.sha256(blob.encode()).hexdigest()[:16]
+    return ",".join(str(n) for n in db.corpus_change_key()) + ":" + digest
 
 
 def retention_max_age_days(db: Database, config: Dict) -> int:
@@ -321,7 +359,7 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     # flag, which only re-exports) still forces the rescore it needs.
     # Tradeoff: pure age-decay drift between real changes isn't reapplied until
     # the next change; the roster changes often enough to keep this current.
-    key = ",".join(str(n) for n in db.corpus_change_key())
+    key = scoring_input_key(db, config)
     if key == db.get_setting(_RESCORE_KEY):
         logger.info("[refresh] no scoring-relevant change; skipped rescore/export/push")
         return fetched
