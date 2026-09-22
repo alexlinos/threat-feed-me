@@ -71,10 +71,12 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
     refresh status and serialized to the dashboard, where a half-million-value
     set has no business being."""
     safety_cfg = config.get('safety', {}) or {}
+    from threatfeedme.credentials import KeyPolicy
     ingestor = FeedIngestor(
         db,
         safety=SafetyFilter.from_config(config),
         allow_private_urls=bool(safety_cfg.get('allow_private_feed_urls', False)),
+        key_policy=KeyPolicy.from_config(config),
     )
     feeds = db.get_feed_sources(enabled_only=True)
     if only is not None:

@@ -679,7 +679,19 @@ async function unifiSave(quiet) {
     const r = await apiFetch('/api/integrations/unifi', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { unifiRenderStatus(j); if (!quiet) alert('UniFi settings saved'); return true; }
+    if (r.ok) {
+        unifiRenderStatus(j);
+        // A new gateway host clears the saved login server-side (it was bound
+        // to the old gateway) — say so, even on a quiet save, or the next
+        // Test/push just fails with "credentials not set".
+        if (j.credentials_cleared) {
+            alert('Gateway host changed, so the saved UniFi login was cleared. '
+                + 'Re-enter it with "Set credentials" for the new gateway.');
+        } else if (!quiet) {
+            alert('UniFi settings saved');
+        }
+        return true;
+    }
     alert('Could not save: ' + (j.detail || r.status));
     return false;
 }

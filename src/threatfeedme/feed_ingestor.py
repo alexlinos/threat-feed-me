@@ -21,6 +21,28 @@ import requests
 # memory exhaustion from a multi-GB feed response.
 _MAX_FETCH_BYTES = 50 * 1024 * 1024  # 50 MB
 
+
+def _read_capped(response, label: str) -> str:
+    """Read a streamed response body with a running byte counter, so a hostile
+    or broken feed can't exhaust memory. Every fetch path uses this — reading
+    `response.text` on a stream=True response bypassed the cap entirely (the
+    HoneyDB scraper and OTX pagination did, until the 2026-09-22 review)."""
+    total = 0
+    chunks = []
+    for chunk in response.iter_content(chunk_size=65536, decode_unicode=False):
+        total += len(chunk)
+        if total > _MAX_FETCH_BYTES:
+            response.close()
+            raise RuntimeError(
+                f"Feed '{label}' response exceeded {_MAX_FETCH_BYTES // (1024*1024)} MB "
+                f"({total // (1024*1024)} MB received) — download aborted"
+            )
+        chunks.append(chunk)
+    return b''.join(chunks).decode(response.encoding or 'utf-8', errors='replace')
+
+
+from threatfeedme.credentials import (CROSS_ORIGIN_SAFE_HEADERS, KeyPolicy,
+                                      same_origin)
 from threatfeedme.domains import normalize_domain
 from threatfeedme.models import FeedSource, FeedType
 from threatfeedme.database import Database
@@ -209,11 +231,16 @@ class FeedIngestor:
             return fn
         return wrapper
 
-    def __init__(self, db: Database, safety=None, allow_private_urls: bool = False):
+    def __init__(self, db: Database, safety=None, allow_private_urls: bool = False,
+                 key_policy: Optional[KeyPolicy] = None):
         self.db = db
         # Optional SafetyFilter; when set, private/reserved/known-good entries
         # are skipped at ingest so they never reach outputs.
         self.safety = safety
+        # Which env vars a feed may send as its key, and to which hosts (see
+        # credentials.py). None = the empty policy: only TFM_FEED_* keys may be
+        # sent, so an ingestor built without a roster fails closed.
+        self.key_policy = key_policy or KeyPolicy([])
         # Opt-out for the SSRF guard, for deployments that legitimately fetch
         # feeds from internal servers (e.g. an on-prem honeypot).
         self.allow_private_urls = allow_private_urls
@@ -305,6 +332,11 @@ class FeedIngestor:
                     f"'{', '.join(missing) or feed.auth_env}' not set"
                 )
             if len(env_vars) == 1:
+                # Bound to the built-in feed's host (credentials.KeyPolicy): a
+                # feed re-pointed at another server, or a runtime-added feed
+                # naming someone else's key, must not carry it off-box.
+                if not self.key_policy.may_send(env_vars[0], feed.url):
+                    raise RuntimeError(self.key_policy.send_refusal(env_vars[0], feed.url))
                 headers[feed.auth_header] = os.environ[env_vars[0]]
 
         etag, last_modified = self.db.get_feed_http_cache(feed.name)
@@ -318,20 +350,7 @@ class FeedIngestor:
             return NOT_MODIFIED
         response.raise_for_status()
 
-        # Stream the response body with a running byte counter to prevent
-        # memory exhaustion from a multi-GB feed.
-        total = 0
-        chunks = []
-        for chunk in response.iter_content(chunk_size=65536, decode_unicode=False):
-            total += len(chunk)
-            if total > _MAX_FETCH_BYTES:
-                response.close()
-                raise RuntimeError(
-                    f"Feed '{feed.name}' response exceeded {_MAX_FETCH_BYTES // (1024*1024)} MB "
-                    f"({total // (1024*1024)} MB received) — download aborted"
-                )
-            chunks.append(chunk)
-        content = b''.join(chunks).decode(response.encoding or 'utf-8', errors='replace')
+        content = _read_capped(response, feed.name)
 
         # Stash this download's validators; ingest_feed persists them only
         # after the whole ingest succeeds. A 200 without validators stashes
@@ -397,10 +416,16 @@ class FeedIngestor:
         """Single GET, following redirects manually so every hop passes the
         SSRF guard (requests' automatic redirects would only let us check the
         first URL)."""
+        origin = url
         for _ in range(_MAX_REDIRECTS + 1):
             if not self.allow_private_urls:
                 _require_public_url(url)
-            response = requests.get(url, headers=headers, timeout=30,
+            # Credentials never cross an origin change (other host, port, or an
+            # https->http downgrade): a feed that redirects elsewhere gets the
+            # request, not the API key.
+            hop_headers = headers if same_origin(origin, url) else {
+                k: v for k, v in headers.items() if k.lower() in CROSS_ORIGIN_SAFE_HEADERS}
+            response = requests.get(url, headers=hop_headers, timeout=30,
                                     stream=True, allow_redirects=False)
             if response.status_code in _REDIRECT_STATUSES:
                 location = response.headers.get('Location')
@@ -697,7 +722,13 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
         if _ == _OTX_MAX_PAGES - 1:
             break
 
-        # Fetch the next page with the same auth the feed requires.
+        # `next` comes from the response body, so it is attacker-influenced:
+        # the key only follows it to the feed's own origin. Failing the fetch
+        # (rather than stopping early) keeps the prior membership intact — a
+        # silently partial page set would be recorded as a mass leave.
+        if not same_origin(feed.url, next_url):
+            raise RuntimeError(
+                f"{feed.name}: OTX pagination pointed off-origin ({next_url}); refusing")
         headers = {}
         if feed.requires_auth:
             api_key = os.environ.get(feed.auth_env) if feed.auth_env else None
@@ -706,11 +737,13 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
                     f"{feed.name}: requires auth but env var "
                     f"'{feed.auth_env}' is not set"
                 )
+            if not self.key_policy.may_send(feed.auth_env, next_url):
+                raise RuntimeError(self.key_policy.send_refusal(feed.auth_env, next_url))
             headers[feed.auth_header] = api_key
         response = self._get_with_retries(next_url, headers)
         response.raise_for_status()
         try:
-            page = json.loads(response.text)
+            page = json.loads(_read_capped(response, feed.name))
         except ValueError:
             raise RuntimeError(f"{feed.name}: OTX pulses JSON parse failed")
 
@@ -743,11 +776,14 @@ def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
             f"{feed.name}: requires HoneyDB credentials; missing env var(s): "
             f"{', '.join(missing)} (set both via the dashboard's Set key button)"
         )
+    for var in (_HONEYDB_ENV_ID, _HONEYDB_ENV_KEY):
+        if not self.key_policy.may_send(var, feed.url):
+            raise RuntimeError(self.key_policy.send_refusal(var, feed.url))
     headers = {"X-HoneyDb-ApiId": api_id, "X-HoneyDb-ApiKey": api_key}
     response = self._get_with_retries(feed.url, headers)
     response.raise_for_status()
     try:
-        data = json.loads(response.text)
+        data = json.loads(_read_capped(response, feed.name))
     except ValueError:
         raise RuntimeError(f"{feed.name}: HoneyDB JSON parse failed")
     if not isinstance(data, list):

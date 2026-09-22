@@ -449,3 +449,42 @@ def test_api_push_records_outcome(api_client, monkeypatch):
     assert j["last_push"]["summary"]["entries"] == 1
     assert j["last_push"]["error"] is None
     api_client.post("/api/integrations/unifi/credentials", json={})
+
+
+def test_host_change_clears_saved_credentials(api_client):
+    """The saved login is bound to the gateway it was entered for: saving
+    {"host": "attacker"} then pressing Test used to post the gateway admin's
+    password to that host (review 2026-09-22)."""
+    api_client.post("/api/integrations/unifi", json={"host": "10.9.9.1"})
+    r = api_client.post("/api/integrations/unifi/credentials",
+                        json={"username": "svc-tfm", "password": "pw-1"})
+    assert r.json()["credentials_configured"] is True
+
+    # the same gateway, spelled differently, keeps the login
+    j = api_client.post("/api/integrations/unifi", json={"host": "https://10.9.9.1/"}).json()
+    assert j["credentials_cleared"] is False and j["credentials_configured"] is True
+
+    # a different gateway clears it
+    j = api_client.post("/api/integrations/unifi", json={"host": "attacker.example"}).json()
+    assert j["credentials_cleared"] is True and j["credentials_configured"] is False
+    assert ENV_PASSWORD not in os.environ
+
+
+def test_first_time_host_setup_keeps_credentials(api_client):
+    # credentials may be entered before any host exists; setting the first
+    # host must not throw them away
+    from threatfeedme import core
+    from threatfeedme.pusher_unifi import SETTINGS_KEY
+    core.db.set_setting(SETTINGS_KEY, "{}")
+    j = api_client.post("/api/integrations/unifi", json={"host": "10.9.9.2"}).json()
+    assert j["credentials_cleared"] is False and j["credentials_configured"] is True
+
+
+@pytest.mark.parametrize("site,ok", [
+    ("default", True), ("site_2-b", True),
+    ("default/../proxy", False), ("a?x=1", False), ("", False),
+])
+def test_site_id_is_validated(api_client, site, ok):
+    # the site id is interpolated into authenticated gateway API paths
+    r = api_client.post("/api/integrations/unifi", json={"site": site})
+    assert (r.status_code == 200) is ok, r.text

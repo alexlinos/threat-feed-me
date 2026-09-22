@@ -21,6 +21,7 @@ import os
 import yaml
 from fastapi.templating import Jinja2Templates
 
+from threatfeedme.credentials import env_file_may_set
 from threatfeedme.database import Database
 from threatfeedme.safety import SafetyFilter
 
@@ -72,6 +73,12 @@ def load_env_file(path: str) -> None:
             continue
         key, _, value = line.partition('=')
         key = key.strip()
+        # This file is writable through the API, so it may only carry keys,
+        # never process knobs: a proxy/TLS/interpreter/dashboard variable here
+        # would outlive the fix that stopped it being written (credentials.py).
+        if key and not env_file_may_set(key):
+            logger.warning(f"ignoring {key} in {path}: not settable from the data-volume .env")
+            continue
         # Present-but-EMPTY counts as unset: docker compose's
         # `VAR=${VAR:-}` mappings inject empty strings for every variable
         # the host doesn't define, and treating those as operator overrides

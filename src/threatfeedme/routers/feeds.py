@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
+from threatfeedme.credentials import KeyPolicy, split_vars
 from threatfeedme.feed_ingestor import parse_domain_feed_content, parse_feed_content
 from threatfeedme.models import FeedSource, FeedType
 from threatfeedme.scheduler import _refresh_state, start_refresh_async
@@ -79,6 +80,15 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
         raise HTTPException(status_code=400, detail="Feed URL must start with http:// or https://")
     if request.indicator_kind not in ("ip", "domain"):
         raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
+    # auth_env names the env var whose VALUE is sent as this feed's key, so it
+    # must never name someone else's secret (UNIFI_PASSWORD, DASHBOARD_*) or a
+    # process knob (HTTPS_PROXY). See credentials.py.
+    if request.auth_env:
+        policy = KeyPolicy.from_config(core.config)
+        for var in split_vars(request.auth_env):
+            reason = policy.disallowed_reason(var)
+            if reason:
+                raise HTTPException(status_code=400, detail=reason)
     try:
         feed = FeedSource(
             name=name,
@@ -342,6 +352,14 @@ def set_api_key(name: str, request: ApiKeyRequest,
     declared = [v.strip() for v in feed.auth_env.split(',') if v.strip()]
     if not all(_ENV_VAR_RE.fullmatch(v) for v in declared):
         raise HTTPException(status_code=400, detail="Feed auth_env is not a valid variable name")
+    # Re-checked here, not only at add time: a feed stored before this rule
+    # (auth_env=HTTPS_PROXY) must not turn this endpoint into an environment
+    # editor that reroutes every outbound request through an attacker proxy.
+    policy = KeyPolicy.from_config(core.config)
+    for var in declared:
+        reason = policy.disallowed_reason(var)
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
 
     # Multi-credential feeds submit {ENV_VAR: value}; single-var feeds may
     # keep using the plain api_key field. Only vars the feed declares in

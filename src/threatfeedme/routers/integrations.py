@@ -27,6 +27,24 @@ _VALID_TIERS = ("high", "medium", "low")
 # Bare hostname/IP or http(s) URL — enough to catch pastes of whole URLs
 # with paths, which the pusher would mangle into bad API endpoints.
 _HOST_RE = re.compile(r'^(https?://)?[A-Za-z0-9.:\[\]-]+/?$')
+# The site id is interpolated into authenticated gateway API paths, so '/',
+# '?', or '..' would retarget those calls; UniFi site ids are short slugs.
+_SITE_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+
+
+def _host_key(host: str) -> str:
+    """Comparable form of a gateway host: scheme, trailing slash, case gone."""
+    h = (host or "").strip().lower()
+    for prefix in ("https://", "http://"):
+        if h.startswith(prefix):
+            h = h[len(prefix):]
+    return h.rstrip("/")
+
+
+def _clear_credentials() -> None:
+    for var in (ENV_USER, ENV_PASSWORD):
+        _write_env_var(core.env_file(), var, None)
+        os.environ.pop(var, None)
 
 
 def _status() -> dict:
@@ -81,6 +99,9 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
         if host and not _HOST_RE.match(host):
             raise HTTPException(status_code=400,
                                 detail="host must be an IP/hostname or http(s) URL without a path")
+    if request.site is not None and not _SITE_RE.match(request.site.strip()):
+        raise HTTPException(status_code=400,
+                            detail="site must be the UniFi site id (letters, digits, - or _)")
     stored = {}
     try:
         raw = core.db.get_setting(SETTINGS_KEY)
@@ -88,12 +109,25 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
             stored = json.loads(raw) or {}
     except Exception:
         stored = {}
+    # The saved login is bound to the gateway it was entered for. Repointing
+    # the host must not silently carry it along — otherwise saving
+    # {"host": "attacker"} and pressing Test posts the gateway admin's
+    # password to that host (review 2026-09-22). First-time setup (no host
+    # yet) keeps credentials, since they may be entered before the host.
+    credentials_cleared = False
+    previous_host = effective_block(core.db, core.config).get("host") or ""
+    if (request.host is not None and _host_key(previous_host)
+            and _host_key(request.host) != _host_key(previous_host)):
+        _clear_credentials()
+        credentials_cleared = True
     for field in ("enabled", "host", "site", "tier", "domain_tier"):
         value = getattr(request, field)
         if value is not None:
             stored[field] = value.strip() if isinstance(value, str) else value
     core.db.set_setting(SETTINGS_KEY, json.dumps(stored))
-    return _status()
+    status = _status()
+    status["credentials_cleared"] = credentials_cleared
+    return status
 
 
 class UniFiCredentialsRequest(BaseModel):

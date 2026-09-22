@@ -1715,6 +1715,20 @@ import ipaddress
 from threatfeedme.feed_ingestor import NOT_MODIFIED
 
 
+# The keyed scrapers only send a shipped key to the host its shipped feed uses
+# (credentials.KeyPolicy), so these tests run under the REAL shipped roster —
+# that binding is the production contract, not a test convenience.
+def _shipped_key_policy():
+    import os as _os
+    from threatfeedme.core import load_config
+    from threatfeedme.credentials import KeyPolicy
+    root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    return KeyPolicy.from_config(load_config(_os.path.join(root, "config.yaml")))
+
+
+_SHIPPED_KEYS = _shipped_key_policy()
+
+
 def _otx_feed():
     return FeedSource(name="alienVault_otx",
                       url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50",
@@ -1748,7 +1762,7 @@ def test_otx_pulses_single_page_extracts_ipv4_only(db, monkeypatch):
     ])
     _stub_get(monkeypatch, [_FakeResponse(200, {}, body)])
     feed = _otx_feed()
-    entries = FeedIngestor(db).fetch_feed(feed)
+    entries = FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     ips = sorted(e["ip"] for e in entries)
     assert ips == ["1.1.1.1", "2.2.2.2"]
     # no IPv6/hostname/URL/hash leaked in
@@ -1765,7 +1779,7 @@ def test_otx_pulses_paginates_via_next(db, monkeypatch):
         _FakeResponse(200, {}, page2),
     ])
     feed = _otx_feed()
-    entries = FeedIngestor(db).fetch_feed(feed)
+    entries = FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     ips = sorted(e["ip"] for e in entries)
     assert ips == ["1.1.1.1", "2.2.2.2"]
     assert calls[1]["url"] == "https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2"
@@ -1782,7 +1796,7 @@ def test_otx_pulses_pagination_cap_stops(db, monkeypatch):
     page3 = _pulse_page([[("3.3.3.3", "IPv4")]])
     calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1), _FakeResponse(200, {}, page2), _FakeResponse(200, {}, page3)])
     feed = _otx_feed()
-    entries = FeedIngestor(db).fetch_feed(feed)
+    entries = FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     # cap=1: the scraper ingests page 1 and stops before ever pulling page 2
     # (it never fetches a page it wouldn't process on a later iteration).
     assert sorted(e["ip"] for e in entries) == ["1.1.1.1"]
@@ -1796,7 +1810,7 @@ def test_otx_pulses_empty_results_is_rejected(db, monkeypatch):
     _stub_get(monkeypatch, [_FakeResponse(200, {}, body)])
     feed = _otx_feed()
     with pytest.raises(RuntimeError, match="returned no indicators"):
-        FeedIngestor(db).fetch_feed(feed)
+        FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
 
 
 def test_otx_pulses_malformed_json_raises(db, monkeypatch):
@@ -1806,7 +1820,7 @@ def test_otx_pulses_malformed_json_raises(db, monkeypatch):
     delays = _stub_sleep(monkeypatch)
     feed = _otx_feed()
     with pytest.raises(RuntimeError, match="JSON parse failed"):
-        FeedIngestor(db).fetch_feed(feed)
+        FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     assert len(calls) == 1
     assert delays == []  # JSON error is not retried
 
@@ -1818,7 +1832,7 @@ def test_otx_pulses_sends_auth_header_on_every_page(db, monkeypatch):
     page2 = _pulse_page([[("2.2.2.2", "IPv4")]])
     calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1), _FakeResponse(200, {}, page2)])
     feed = _otx_feed()
-    FeedIngestor(db).fetch_feed(feed)
+    FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     assert calls[0]["headers"]["X-OTX-API-KEY"] == "test-key-123"
     assert calls[1]["headers"]["X-OTX-API-KEY"] == "test-key-123"
 
@@ -1828,7 +1842,7 @@ def test_otx_pulses_304_short_circuits_before_pagination(db, monkeypatch):
     monkeypatch.setenv("OTX_API_KEY", "test-key-123")
     calls = _stub_get(monkeypatch, [_FakeResponse(304)])
     feed = _otx_feed()
-    assert FeedIngestor(db).fetch_feed(feed) is NOT_MODIFIED
+    assert FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed) is NOT_MODIFIED
     assert len(calls) == 1
 
 
@@ -2802,10 +2816,17 @@ def test_load_env_file_fills_empty_env_var(tmp_path, monkeypatch):
 # --------------------------------------------------- HoneyDB scraper ----
 
 class _FakeHoneyDBResponse:
+    """Stands in for a stream=True response: the scraper reads it through the
+    capped reader (iter_content), exactly like the real fetch path."""
     def __init__(self, body):
         self.text = body
         self.status_code = 200
+        self.encoding = "utf-8"
     def raise_for_status(self):
+        pass
+    def iter_content(self, chunk_size=65536, decode_unicode=False):
+        yield self.text.encode("utf-8")
+    def close(self):
         pass
 
 
@@ -2826,7 +2847,7 @@ def test_honeydb_scraper_sends_both_headers_and_flattens(db, monkeypatch):
             '[{"remote_host": "45.13.2.9", "count": "4"},'
             ' {"remote_host": "91.92.242.236", "count": "1"}]')
 
-    ing = FeedIngestor(db)
+    ing = FeedIngestor(db, key_policy=_SHIPPED_KEYS)
     monkeypatch.setattr(ing, "_get_with_retries", fake_get)
     parsed = ing.fetch_feed(_honeydb_feed())
     assert seen["headers"] == {"X-HoneyDb-ApiId": "id-123",
@@ -2850,7 +2871,7 @@ def test_honeydb_empty_window_is_not_an_error(db, monkeypatch):
     from threatfeedme.feed_ingestor import NOT_MODIFIED
     monkeypatch.setenv("HONEYDB_API_ID", "id-123")
     monkeypatch.setenv("HONEYDB_API_KEY", "key-456")
-    ing = FeedIngestor(db)
+    ing = FeedIngestor(db, key_policy=_SHIPPED_KEYS)
     monkeypatch.setattr(ing, "_get_with_retries",
                         lambda url, headers: _FakeHoneyDBResponse("[]"))
     assert ing.fetch_feed(_honeydb_feed("honeydb_mydata")) is NOT_MODIFIED
@@ -2859,7 +2880,7 @@ def test_honeydb_empty_window_is_not_an_error(db, monkeypatch):
 def test_honeydb_rejects_non_list_response(db, monkeypatch):
     monkeypatch.setenv("HONEYDB_API_ID", "id-123")
     monkeypatch.setenv("HONEYDB_API_KEY", "key-456")
-    ing = FeedIngestor(db)
+    ing = FeedIngestor(db, key_policy=_SHIPPED_KEYS)
     monkeypatch.setattr(ing, "_get_with_retries",
                         lambda url, headers: _FakeHoneyDBResponse('{"status": "error"}'))
     with pytest.raises(RuntimeError, match="response shape"):
