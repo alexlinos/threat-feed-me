@@ -104,12 +104,45 @@ def test_feed_base_does_not_double_port():
     assert ":8080:8080" not in base
 
 
-def test_feed_base_loopback_swapped_for_lan_ip():
+def test_feed_base_loopback_swapped_for_lan_ip(monkeypatch):
     # A loopback host is unreachable from the firewall; it must be swapped out.
-    from threatfeedme.feed_helpers import _feed_base
-    base = _feed_base(_fake_request(headers={"Host": "127.0.0.1:8080"}))
-    assert "127.0.0.1" not in base
-    assert base.endswith(":8080")
+    # _lan_ip is stubbed: this tests the swap, not the test machine's network
+    # (it used to fail on any host whose hostname didn't resolve).
+    from threatfeedme import feed_helpers
+    monkeypatch.setattr(feed_helpers, "_lan_ip", lambda: "192.168.1.50")
+    for loopback in ("127.0.0.1:8080", "localhost:8080", "0.0.0.0:8080"):
+        base = feed_helpers._feed_base(_fake_request(headers={"Host": loopback}))
+        assert base == "http://192.168.1.50:8080", loopback
+
+
+def test_lan_ip_prefers_the_default_route_source(monkeypatch):
+    # hostname lookup alone returned 127.0.0.1 where the hostname doesn't
+    # resolve; the route's source address answers without DNS
+    from threatfeedme import feed_helpers
+
+    class _Sock:
+        def __init__(self, *a): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def connect(self, addr): pass
+        def getsockname(self): return ("10.20.30.40", 54321)
+
+    monkeypatch.setattr(feed_helpers.socket, "socket", _Sock)
+    monkeypatch.setattr(feed_helpers.socket, "getaddrinfo",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no dns")))
+    assert feed_helpers._lan_ip() == "10.20.30.40"
+
+
+def test_lan_ip_last_resort_is_loopback(monkeypatch):
+    from threatfeedme import feed_helpers
+
+    def _no_socket(*a):
+        raise OSError("no route")
+
+    monkeypatch.setattr(feed_helpers.socket, "socket", _no_socket)
+    monkeypatch.setattr(feed_helpers.socket, "getaddrinfo",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no dns")))
+    assert feed_helpers._lan_ip() == "127.0.0.1"
 
 
 def test_feed_base_honors_reverse_proxy_without_port():

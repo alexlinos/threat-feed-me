@@ -48,7 +48,11 @@ makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent
 headers. The provider therefore sees your server's public IP address, the
 User-Agent and the request time. For feeds that require a key (AlienVault
 OTX, HoneyDB, the auth-walled abuse.ch export), the key you saved is sent in
-the request headers. The Talos Snort.org scraper is the one exception to
+the request headers — and only to that feed's own host: a built-in key is
+never sent to any other host (even if the feed's URL is edited), and no key
+is forwarded when a provider redirects to a different host or downgrades
+HTTPS to HTTP. Keys for your own custom feeds (named `TFM_FEED_*`) go to the
+feed URL you configured. The Talos Snort.org scraper is the one exception to
 the plain GET: it uses a browser User-Agent and accepts Snort.org's terms
 form on your behalf, because the list is gated behind that form. Each
 provider's own privacy policy governs what they do with the request.
@@ -56,8 +60,10 @@ provider's own privacy policy governs what they do with the request.
 **To your UniFi gateway, only if you enable the push.** The pusher sends
 the block lists and your UniFi credentials (from `UNIFI_USER` and
 `UNIFI_PASSWORD`) to the gateway address you configured, on your own
-network. Certificate verification is off by default because UDM
-certificates are self-signed; turn it on if your gateway has a real one.
+network. Changing the gateway address clears the saved login, so it is
+never sent to a host other than the one it was entered for. Certificate
+verification is off by default because UDM certificates are self-signed;
+turn it on if your gateway has a real one.
 
 **To nobody else.** The software does not contact the project, the
 maintainer, a licensing server, an analytics endpoint or an update service.

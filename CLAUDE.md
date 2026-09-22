@@ -421,9 +421,10 @@ was called nowhere):
   daily predict passes (438k→457k IPs scored, distribution stable at
   0.17/0.70/0.99), the factor now shifts within-tier ranking. Tiers are still
   pure vote math (effective_votes), so this reorders inside a tier and never
-  moves an IP between High/Medium/Low. A config-only scoring change does NOT
-  move the rescore-gate corpus key, so the roll was followed by a forced recalc
-  (POST /api/recalculate-scores) — do that after any future scoring-config edit.
+  moves an IP between High/Medium/Low. At the time a config-only scoring change
+  did NOT move the rescore gate, so the roll was followed by a forced recalc
+  (POST /api/recalculate-scores). Fixed in v2.4.19 — the gate now hashes the
+  scoring config, so no forced recalc is needed after a scoring-config edit.
 - **Lock-hardening (v2.4.16, 2026-09-21)**: the daily predict pass crashed once
   on `sqlite3.OperationalError: database is locked` — at ~552k IPs a live
   rescore holds the single WAL writer lock longer than Database's 5s
@@ -483,6 +484,68 @@ Zero-code option for later: subscribe the OTX account to romainmarcoux's
 AlienVault pulses (banking/dropbox/googledocs/microsoft/paypal phishtank,
 phishing-scam) — they'd flow through the existing otx_pulses scraper.
 
+## v2.4.19: fixes from the 2026-09-22 full review
+
+A three-reviewer pass (security / architecture / usability), every
+high-impact claim re-verified against code before acting. Shipped:
+
+- **Safety filter supernet bypass** (`safety.py`): `is_private` on a network
+  needs BOTH ends private, so `10.0.0.0/7` etc. passed. Now: overlap against
+  explicit IANA special-purpose v4+v6 registries, a prefix floor (default /10 —
+  the widest legit prod entries are /12; /16 would have dropped Spamhaus DROP
+  blocks), and `purge_unsafe_indicators` re-applies the filter to the store on
+  every refresh. Prod had 0 stored offenders.
+- **Credential exfiltration** (`credentials.py`, new): `auth_env` was taken
+  verbatim, so a feed could name `UNIFI_PASSWORD`/`DASHBOARD_PASSWORD` and send
+  it anywhere, or name `HTTPS_PROXY` and poison every request. KeyPolicy: keys
+  are shipped vars or `TFM_FEED_*` only; shipped keys bound to their shipped
+  host; no key crosses a redirect origin; OTX `next` must stay on-origin; `.env`
+  can't set proxy/TLS/interpreter/dashboard vars. Ingestor fails closed without
+  a roster. UniFi: host change clears the saved login; site id validated.
+- **Retention was a no-op for ETag feeds**: a 304 touched every IP a feed EVER
+  listed (add-only attribution). Now touches `source_state` (true current
+  membership), attribution fallback only for never-seeded feeds. Expect a
+  one-time purge wave ~14 days after rollout. This corrects the 2026-09-22
+  growth profile's "eviction is healthy" — that reading was the bug's symptom.
+- **Disabled feeds kept voting**; the scorer now ignores them.
+- **Rescore gate** = `pipeline.scoring_input_key`: corpus counts + max(rowid)
+  per table + a hash of scoring config, predictor state/model mtime, the feed
+  catalog (weight/enabled/type), the whitelist, and a predict-pass stamp. The
+  "config-only scoring change needs a forced recalc" gotcha is gone.
+- **Predictor inert without a model file** (`scorer.predictor_live`). The
+  v2.4.15 enable had turned it on for every install; fresh installs paid a ~9%
+  renormalization for nothing. `predictor.sh` now rebuilds the tools image
+  whenever the app image changes (label `tfm.app_image_id`).
+- **Published-image auth**: setting both `DASHBOARD_USER`/`DASHBOARD_PASSWORD`
+  enables auth (config is baked in, so pull-image users had no way before);
+  constant-time byte compare of both fields. Compose has an optional,
+  commented-out config mount (a missing file would become a directory).
+- Shrink guard (collapsed fetch held out of the churn log, accepted after 3),
+  loud logging where scoring used to fail open silently, atomic export writes,
+  CIDR-correct on-disk CSV, capped reads on every fetch path, `_lan_ip` via the
+  default route (the host-coupled test now passes), push/PR CI workflow, and a
+  test that the two dependency pin lists agree.
+
+**Test-isolation traps hit this release** (don't repeat): reading
+`core.config` in a test lazily INITIALIZES core from the repo's real
+config.yaml + `./data` DB and leaks into every later test (it once wrote test
+data into a developer's local `data/` and did live feed fetches) — patch a
+seam (`auth._dashboard_config`) instead. The csrf fixture must restore
+`DASHBOARD_*` at teardown. Tests using `dashboard.db` must sit ABOVE the
+module-reloading csrf tests in `test_dashboard_feeds.py`.
+
+**Still open from the review (tracked for v2.5.0)**: Host-header allowlist
+(`TrustedHostMiddleware`) against DNS rebinding; SSRF resolve-then-connect
+gap (pin the checked address); request-body size cap before auth; grant
+domain authority by seeded feed + URL, not name; `.env` temp-file mode 0600
+at creation; runtime user owning only `data/` + `output/`; cached, ETag'd
+feed bodies (a `/feeds/low.txt` poll peaks ~1.6 GB); a single writer lock
+plus a chunked, changed-rows-only rescore; the predictor training-population
+leakage (evicted IPs read `source_count=0` — re-backtest before quoting AUROC
+externally); `?limit=N` on served feeds. Usability items (High-vs-Medium
+recommendation conflict, FP-default whitelist reason, add-feed overwrite,
+pulse-row false green / double-counted "new in 24h") also queued.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
@@ -511,8 +574,9 @@ domain HIGH; this is deliberate layering, don't "fix" it. Open decision:
 promotion criteria for drb_ra_c2 into authoritative_domain_feeds (proposed:
 ~2 weeks live, zero FP flags, stable fetches) — its live C2s currently sit
 in low/medium, below urlhaus commodity malware, until promoted.
-Gotcha: a config-only scoring change doesn't move the rescore gate's corpus
-key — force a recalc (dashboard button) after editing scoring config.
+(Historical gotcha, fixed in v2.4.19: a config-only scoring change used to
+leave the rescore gate unmoved and needed a forced recalc via
+POST /api/recalculate-scores — there is no dashboard button for it.)
 
 ## soc-grfna01 prod host: DNS resolver (2026-08-18)
 

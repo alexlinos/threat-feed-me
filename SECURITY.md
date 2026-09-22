@@ -34,7 +34,8 @@ What the software stores, sends and logs, and to whom, is documented in
 
 ## Hardening measures in place
 
-Verified in code review (adversarial pass, 2026-08):
+Verified in code review (adversarial passes, 2026-08 and 2026-09; the
+2026-09 review's fixes shipped in v2.4.19):
 
 - **Container runs as a non-root user** (`appuser`), single process, no shell
   services.
@@ -49,20 +50,39 @@ Verified in code review (adversarial pass, 2026-08):
   address space are refused (`safety.allow_private_feed_urls: false` by
   default), so a dashboard user cannot point a "feed" at cloud metadata or
   internal hosts.
-- **Output safety filters**: RFC1918/reserved/bogon space and well-known
-  public infrastructure (major DNS resolvers) are dropped from served block
-  lists so a poisoned upstream feed cannot trick your firewall into
-  blocking its own network.
+- **Output safety filters**: any entry that *overlaps* IANA special-purpose
+  space (RFC1918, CGNAT, loopback, link-local, multicast, documentation,
+  IPv4-mapped/NAT64/ULA and other IPv6 special ranges) is refused, as are
+  netblocks wider than a configurable floor (default /10, below the widest
+  legitimate entries observed) and well-known public infrastructure (major
+  DNS resolvers, a curated known-good domain floor). Overlap, not
+  containment, is the rule: before v2.4.19 a supernet such as `10.0.0.0/7`
+  passed because it is only partly private. The filter runs at ingest and is
+  re-applied to everything already stored on every refresh, so a filter fix
+  or a new operator known-good entry takes effect within one refresh.
+- **Feed API keys are bound**: a feed's key variable must be one a built-in
+  feed declares or an operator `TFM_FEED_*` name — never another secret
+  (`UNIFI_*`, `DASHBOARD_*`) or a process setting (`*PROXY*`, TLS, interpreter
+  variables). A built-in key is only ever sent to its built-in feed's host,
+  keys are stripped from any redirect that changes origin (including
+  https→http), and the data-volume `.env` cannot set proxy, TLS, interpreter
+  or dashboard variables.
+- **UniFi credentials are bound to their gateway**: changing the gateway host
+  clears the saved login rather than carrying it to the new host; the site id
+  is validated before it is used in gateway API paths.
+- **Basic auth** compares credentials as bytes in constant time and always
+  checks both fields.
 - **CSRF**: all mutating endpoints require the `X-Requested-With` header the
   dashboard JS always sends, independent of whether Basic auth is enabled.
 - **XSS**: server-side rendering uses Jinja2 autoescape; client-side row
   rendering HTML-escapes all feed-derived values.
 - **Secrets**: feed API keys are stored server-side in the data volume's
   `.env`, applied immediately, and never displayed back to the browser.
-- **Supply chain**: images are built multi-arch in GitHub Actions from a
-  tagged commit, gated on the full test suite and version-consistency
-  checks; every image ships with an **SBOM and provenance attestation**
-  (see below).
+- **Supply chain**: the test suite runs on every push and pull request;
+  images are built multi-arch in GitHub Actions from a tagged commit, gated
+  on the full test suite and version-consistency checks (including that the
+  two dependency pin lists agree); every image ships with an **SBOM and
+  provenance attestation** (see below).
 
 ## SBOM & provenance
 

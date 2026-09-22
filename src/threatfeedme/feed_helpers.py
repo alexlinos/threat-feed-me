@@ -109,8 +109,24 @@ def _indicators_for(tier=None, kind: str = "ip"):
 
 
 def _lan_ip() -> str:
-    """Best-effort LAN-facing IP of this host. Returns 127.0.0.1 when the
-    hostname resolves to nothing useful (Docker, no network, etc.)."""
+    """Best-effort LAN-facing IP of this host, for swapping into a feed URL
+    the operator reached via localhost.
+
+    First asks the kernel which source address its default route would use:
+    connect() on a UDP socket sends no packet, and works even when the
+    hostname doesn't resolve — hostname-only lookup returned 127.0.0.1 on such
+    hosts, handing the operator the one address a firewall can't reach. Falls
+    back to hostname resolution, then 127.0.0.1. (Inside a Docker bridge
+    network both answers are the container's address; the dashboard is
+    normally reached via the host's real IP there, so the swap rarely runs.)"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1; no packet is sent
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+                return ip
+    except OSError:
+        pass
     try:
         hostname = socket.gethostname()
         addrs = socket.getaddrinfo(hostname, None, family=socket.AF_INET)
