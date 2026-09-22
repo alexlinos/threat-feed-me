@@ -7,5 +7,5 @@ pyyaml==6.0.3
 fastapi==0.133.1
 jinja2==3.1.6              # dashboard templates (not a FastAPI base dependency)
 uvicorn==0.41.0
-python-multipart==0.0.30   # required by FastAPI for custom-list file uploads (>=0.0.30: GHSA-5rvq-cxj2-64vf malformed-multipart DoS)
+python-multipart==0.0.32   # required by FastAPI for custom-list file uploads (>=0.0.30: GHSA-5rvq-cxj2-64vf; >=0.0.31: GHSA-v9pg-7xvm-68hf)
 pydantic==2.13.4

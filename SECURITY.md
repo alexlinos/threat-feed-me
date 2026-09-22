@@ -113,6 +113,7 @@ total (and the Critical count in particular) is misleading without this split:
 |---|---|
 | **App dependencies** (`requests`, `fastapi`, `python-multipart`, …) | Pinned in `requirements.txt` **and** `pyproject.toml`, bumped promptly when an advisory affects a version we ship. This is the surface we own. |
 | **Base OS packages with a fix available** (openssl, util-linux, …) | The Dockerfile runs `apt-get upgrade` at build, so a freshly built or pulled image carries the current Debian security fixes — rebuild/repull to refresh them. |
+| **The Python interpreter** (`python` 3.11.x in the base image) | Built into `python:3.11-slim`, not installed by apt, so `apt-get upgrade` can't patch it. Grype may report a fix that exists only in a newer 3.11 patch release; it arrives when the upstream image publishes that release, and the Dockerfile's floating `python:3.11-slim` tag picks it up on the next build. (v2.4.19 was scanned against 3.11.16, then the newest published.) |
 | **Base OS packages marked `wont-fix` / `not-fixed`** (perl-base, libc, …) | Debian's decision, present in essentially every Debian-based image. Several — e.g. all the perl CVEs — are **not reachable**: perl is never invoked by the application. Driving these to zero requires a different base image (distroless/alpine), a trade-off we have not taken. |
 | **Build tooling** (pip, setuptools, wheel) | Present in the image but not part of the runtime attack surface — the service never installs packages at runtime. |
 
