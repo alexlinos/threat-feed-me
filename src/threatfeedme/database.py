@@ -624,6 +624,52 @@ class Database:
             )
             return [self._row_to_indicator(r) for r in cur.fetchall()]
 
+    def iter_served_rows(self, kind: str, tiers, batch: int = 5000):
+        """Lean stream for the firewall feed URLs: plain tuples
+        (ip, cidr, sources, confidence_score, tier, first_seen, last_seen) in
+        score order — no ThreatIndicator object and no json.loads of every
+        row's metadata. Building a model per row made a /feeds/low.txt poll
+        over ~560k IPs peak around 1.6 GB, so two overlapping polls could
+        exceed the container's memory cap (review 2026-09-22). `ip` breaks
+        score ties so ?limit=N is deterministic."""
+        values = [t.value for t in tiers]
+        marks = ",".join("?" * len(values))
+        conn = self._get_connection()
+        try:
+            cur = conn.execute(
+                "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
+                "(SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                " WHERE indicator_id = i.id), "
+                "i.confidence_score, i.tier, i.first_seen, i.last_seen "
+                f"FROM indicators i WHERE i.kind = ? AND i.tier IN ({marks}) "
+                "ORDER BY i.confidence_score DESC, i.ip",
+                [kind] + values)
+            while True:
+                rows = cur.fetchmany(batch)
+                if not rows:
+                    return
+                for ip, cidr, srcs, score, tier, first, last in rows:
+                    yield (ip, cidr, srcs.split(",") if srcs else [],
+                           score, tier, first, last)
+        finally:
+            conn.close()
+
+    def serve_fingerprint(self) -> str:
+        """Cheap version of everything a served feed contains, so a cached
+        body is reused until something it depends on changes: indicator rows
+        (count + max rowid catch adds, purges and sweeps), the rescore stamp
+        (tiers and scores change in place), and the live whitelist."""
+        with self._cursor() as cur:
+            n, top = cur.execute(
+                "SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM indicators").fetchone()
+            stamp = cur.execute(
+                "SELECT value FROM settings WHERE key = 'serve_stamp'").fetchone()
+            wl = cur.execute(
+                "SELECT COUNT(*), COALESCE(MAX(rowid), 0), "
+                "COALESCE(MIN(expires_at), '') FROM whitelist "
+                "WHERE expires_at IS NULL OR expires_at > ?", (_utcnow_iso(),)).fetchone()
+        return f"{n}:{top}:{stamp[0] if stamp else ''}:{wl[0]}:{wl[1]}:{wl[2]}"
+
     def get_indicators_by_kind_and_tiers(self, kind: str, tiers,
                                          batch: int = 5000) -> List[ThreatIndicator]:
         """Indicators of a specific kind in one or more tiers (cumulative

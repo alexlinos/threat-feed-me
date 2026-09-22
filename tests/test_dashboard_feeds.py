@@ -849,6 +849,21 @@ def test_host_check_api_lock_and_unlock(client):
     assert client.get("/api/host-check").json()["mode"] == "report-only"
 
 
+def test_feed_etag_304_and_limit_over_http(client):
+    """Firewalls re-polling an unchanged list get a 304; ?limit=N serves the
+    top N by score (for entry-capped firewalls)."""
+    r = client.get("/feeds/all.txt")
+    assert r.status_code == 200 and r.headers["etag"]
+    again = client.get("/feeds/all.txt", headers={"if-none-match": r.headers["etag"]})
+    assert again.status_code == 304 and again.content == b""
+    top1 = client.get("/feeds/all.txt?limit=1")
+    assert top1.text.splitlines() == r.text.splitlines()[:1]
+    assert client.get("/feeds/all.txt?limit=0").status_code == 422
+    assert client.get("/feeds/all.csv?limit=1").text.count("\n") == 2   # header + 1
+    doc = client.get("/feeds/all.json?limit=1").json()
+    assert doc["total_count"] == 1 and len(doc["indicators"]) == 1
+
+
 def test_ops_pulse_row(client):
     """The pulse row answers health/freshness/velocity/overrides at a glance
     and must NOT duplicate matrix sizes. UniFi card renders only when the

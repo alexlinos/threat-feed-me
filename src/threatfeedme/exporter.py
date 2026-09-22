@@ -21,7 +21,15 @@ def is_included(indicator: ThreatIndicator, whitelist_map: dict, tier: Confidenc
     (feed_name starting with 'tier:') that exclude the indicator from that
     specific tier's output while allowing it in others.
     """
-    eff = effective_sources(indicator.ip, indicator.sources, whitelist_map)
+    return row_included(indicator.ip, indicator.sources, whitelist_map, tier)
+
+
+def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = None) -> bool:
+    """is_included on raw fields — the ONE implementation of the rule. The
+    lean feed-serving path (feed_cache) works on plain row tuples rather than
+    ThreatIndicator objects, and must never disagree with the object-based
+    callers (UniFi push, stats, exports) about what a feed contains."""
+    eff = effective_sources(ip, sources, whitelist_map)
     if eff is None:
         return False
     if tier and len(eff) > 0:
@@ -29,10 +37,10 @@ def is_included(indicator: ThreatIndicator, whitelist_map: dict, tier: Confidenc
         # "exclude from high tier output only".
         tier_scope = f"tier:{tier.value}"
         if hasattr(whitelist_map, "scoped_feeds"):
-            scoped = whitelist_map.scoped_feeds(indicator.ip)
+            scoped = whitelist_map.scoped_feeds(ip)
             if scoped and tier_scope in scoped:
                 return False
-        elif whitelist_map.get(indicator.ip) and tier_scope in whitelist_map.get(indicator.ip, set()):
+        elif whitelist_map.get(ip) and tier_scope in whitelist_map.get(ip, set()):
             return False
     return len(eff) > 0
 

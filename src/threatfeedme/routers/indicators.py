@@ -4,9 +4,10 @@ import io
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import PlainTextResponse, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
+from threatfeedme import feed_cache
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
@@ -28,85 +29,73 @@ router = APIRouter()
 # One shared body builder per format so the two kinds can never drift apart.
 
 
-def _feed_txt(name: str, kind: str) -> PlainTextResponse:
+# Rendering lives in feed_cache: lean row tuples instead of a model object per
+# indicator, a reused .txt body with an ETag, and streamed .csv/.json. The
+# optional ?limit=N serves the top N by score, for firewalls with an entry cap.
+_LIMIT = Query(None, ge=1, le=10_000_000,
+               description="Serve only the top N entries by confidence score")
+
+
+def _known(name: str) -> None:
     if name not in _FEEDS_BY_NAME:
         raise HTTPException(status_code=404, detail="Unknown feed")
-    body = "".join(f"{firewall_value(i)}\n" for i in _indicators_for(name, kind=kind))
-    return PlainTextResponse(body, headers={"Cache-Control": "no-cache"})
 
 
-def _feed_csv(name: str, kind: str) -> Response:
-    if name not in _FEEDS_BY_NAME:
-        raise HTTPException(status_code=404, detail="Unknown feed")
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    # The first column is the indicator value; the header keeps the historical
-    # name "ip" for both kinds so existing SIEM column mappings don't break.
-    writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
-    for i in _indicators_for(name, kind=kind):
-        writer.writerow([
-            firewall_value(i), i.confidence_score, i.tier.value,
-            i.first_seen, i.last_seen, ";".join(i.sources),
-        ])
-    return Response(buf.getvalue(), media_type="text/csv")
+def _feed_txt(request: Request, name: str, kind: str, limit: Optional[int]) -> Response:
+    _known(name)
+    body, etag = feed_cache.txt(core.db, name, kind, limit)
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="text/plain; charset=utf-8", headers=headers)
 
 
-def _feed_json(name: str, kind: str) -> dict:
-    if name not in _FEEDS_BY_NAME:
-        raise HTTPException(status_code=404, detail="Unknown feed")
-    indicators = _indicators_for(name, kind=kind)
-    return {
-        "feed": name if kind == "ip" else f"domains/{name}",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "total_count": len(indicators),
-        "indicators": [
-            {
-                "value": firewall_value(i),
-                "ip": i.ip,
-                "confidence_score": i.confidence_score,
-                "tier": i.tier.value,
-                "sources": i.sources,
-                "last_seen": i.last_seen,
-            }
-            for i in indicators
-        ],
-    }
+def _feed_csv(name: str, kind: str, limit: Optional[int]) -> StreamingResponse:
+    _known(name)
+    return StreamingResponse(feed_cache.stream_csv(core.db, name, kind, limit),
+                             media_type="text/csv; charset=utf-8")
+
+
+def _feed_json(name: str, kind: str, limit: Optional[int]) -> StreamingResponse:
+    _known(name)
+    return StreamingResponse(feed_cache.stream_json(core.db, name, kind, limit),
+                             media_type="application/json")
 
 
 @router.get("/feeds/{name}.txt", response_class=PlainTextResponse)
-def feed_txt(name: str):
+def feed_txt(name: str, request: Request, limit: Optional[int] = _LIMIT):
     """Plain-text block list, one IP/CIDR per line — the firewall feed format."""
-    return _feed_txt(name, kind="ip")
+    return _feed_txt(request, name, "ip", limit)
 
 
 @router.get("/feeds/{name}.csv")
-def feed_csv(name: str):
+def feed_csv(name: str, limit: Optional[int] = _LIMIT):
     """CSV with metadata (for SIEM / spreadsheet use)."""
-    return _feed_csv(name, kind="ip")
+    return _feed_csv(name, "ip", limit)
 
 
 @router.get("/feeds/{name}.json")
-def feed_json(name: str):
+def feed_json(name: str, limit: Optional[int] = _LIMIT):
     """JSON with full details (for programmatic / SIEM ingestion)."""
-    return _feed_json(name, kind="ip")
+    return _feed_json(name, "ip", limit)
 
 
 @router.get("/feeds/domains/{name}.txt", response_class=PlainTextResponse)
-def domain_feed_txt(name: str):
+def domain_feed_txt(name: str, request: Request, limit: Optional[int] = _LIMIT):
     """Plain-text domain block list, one domain per line (DNS filter / RPZ)."""
-    return _feed_txt(name, kind="domain")
+    return _feed_txt(request, name, "domain", limit)
 
 
 @router.get("/feeds/domains/{name}.csv")
-def domain_feed_csv(name: str):
+def domain_feed_csv(name: str, limit: Optional[int] = _LIMIT):
     """Domain CSV with metadata (for SIEM / spreadsheet use)."""
-    return _feed_csv(name, kind="domain")
+    return _feed_csv(name, "domain", limit)
 
 
 @router.get("/feeds/domains/{name}.json")
-def domain_feed_json(name: str):
+def domain_feed_json(name: str, limit: Optional[int] = _LIMIT):
     """Domain JSON with full details (for programmatic / SIEM ingestion)."""
-    return _feed_json(name, kind="domain")
+    return _feed_json(name, "domain", limit)
 
 
 # ==================== JSON API (authenticated when auth enabled) ============

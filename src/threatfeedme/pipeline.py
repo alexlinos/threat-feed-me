@@ -100,7 +100,12 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
 def recalculate(db: Database, config: Dict) -> int:
     """Recalculate confidence scores for all indicators."""
     scorer = ConfidenceScorer(db, scorer_config(db, config))
-    return scorer.recalculate_all_scores()
+    count = scorer.recalculate_all_scores()
+    # Tiers and scores changed in place — invisible to row counts — so tell
+    # the feed cache its bodies are stale (feed_cache.serve_fingerprint).
+    from threatfeedme.feed_cache import mark_scores_changed
+    mark_scores_changed(db)
+    return count
 
 
 # ---- Export (inlined from the Exporter class) ----
