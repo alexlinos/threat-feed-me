@@ -295,6 +295,16 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     # window so a leave-then-return WITHIN that window stays observable; floor
     # at 30d so a disabled/short retention still leaves usable churn history.
     db.prune_sightings(max(2 * max_age_days, 30) if max_age_days > 0 else 30)
+    # Re-apply the safety filter to what is already stored: a filter fix or a
+    # new operator known-good entry must take effect now, not when the rows age
+    # out. A non-empty sweep changes the corpus key, so it forces the rescore.
+    try:
+        from threatfeedme.safety import SafetyFilter
+        unsafe = db.purge_unsafe_indicators(SafetyFilter.from_config(config))
+        if unsafe:
+            logger.warning(f"[safety] removed stored indicators the filter now refuses: {unsafe}")
+    except Exception:
+        logger.exception("[safety] retroactive sweep failed (refresh continues)")
     if max_age_days > 0:
         # Pass the whitelist map so operator-whitelisted IPs are never aged
         # out — whitelist is operator intent, not feed state.

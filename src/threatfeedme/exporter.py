@@ -5,6 +5,9 @@ is_included and firewall_value without pulling in the full pipeline.
 """
 import csv
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import List
 
@@ -41,19 +44,44 @@ def firewall_value(indicator: ThreatIndicator) -> str:
 
 # ---- Low-level format writers (no DB dependency) ----
 
+@contextmanager
+def _atomic_open(filepath: str, newline=None):
+    """Write to a temp file in the same directory, then os.replace() it over
+    the target. A reader (a firewall polling the export, or a second export
+    that overlaps this one) sees either the old complete file or the new
+    complete file — never a truncated one mid-write. Same-directory temp keeps
+    the rename on one filesystem, which is what makes it atomic."""
+    directory = os.path.dirname(os.path.abspath(filepath))
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=directory)
+    try:
+        with os.fdopen(fd, 'w', newline=newline) as f:
+            yield f
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, filepath)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _write_text(indicators, filepath: str) -> None:
-    with open(filepath, 'w') as f:
+    with _atomic_open(filepath) as f:
         for ind in indicators:
             f.write(f"{firewall_value(ind)}\n")
 
 
 def _write_csv(indicators, filepath: str) -> None:
-    with open(filepath, 'w', newline='') as f:
+    with _atomic_open(filepath, newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
         for ind in indicators:
+            # firewall_value, not ind.ip: the store keeps only a netblock's
+            # network address, so ind.ip silently turned 42.128.0.0/12 into a
+            # single host. Matches the HTTP CSV (routers/indicators.py).
             writer.writerow([
-                ind.ip, ind.confidence_score, ind.tier.value,
+                firewall_value(ind), ind.confidence_score, ind.tier.value,
                 ind.first_seen, ind.last_seen, ";".join(ind.sources),
             ])
 
@@ -66,7 +94,7 @@ def _write_json(indicators, tier: ConfidenceTier, filepath: str) -> None:
     AFTER the indicators array — key order carries no meaning in JSON, and
     the count isn't known until the stream is exhausted.
     """
-    with open(filepath, 'w') as f:
+    with _atomic_open(filepath) as f:
         f.write('{\n')
         f.write(f'  "tier": {json.dumps(tier.value)},\n')
         f.write(f'  "generated_at": {json.dumps(datetime.now(timezone.utc).isoformat())},\n')
@@ -74,6 +102,7 @@ def _write_json(indicators, tier: ConfidenceTier, filepath: str) -> None:
         count = 0
         for i in indicators:
             entry = {
+                "value": firewall_value(i),  # what to block (CIDR-aware), as in the HTTP JSON
                 "ip": i.ip,
                 "confidence_score": i.confidence_score,
                 "tier": i.tier.value,

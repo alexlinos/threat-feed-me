@@ -3,7 +3,11 @@ Safety guards so a non-expert operator can't accidentally feed their firewall
 something harmful — internal/reserved space, or well-known good infrastructure.
 
 Applied at the write boundaries (feed ingestion and manual "add indicator"),
-never at the low-level store, and fully toggleable from config.yaml.
+never at the low-level store, and fully toggleable from config.yaml. Every
+refresh also re-applies it retroactively to what is already stored
+(Database.purge_unsafe_indicators), so a filter fix or a new operator
+known-good entry takes effect within one refresh instead of waiting for the
+offending rows to age out.
 """
 import ipaddress
 from typing import Optional, Dict, List
@@ -45,16 +49,64 @@ KNOWN_GOOD_DOMAINS = [
     "office.com", "office365.com", "protection.outlook.com",
 ]
 
-_CGNAT = ipaddress.ip_network("100.64.0.0/10")  # RFC 6598, not flagged is_private on 3.11
+# IANA special-purpose address registries (RFC 6890 and successors), as an
+# explicit list checked by OVERLAP. ipaddress's is_private on a *network* is
+# true only when both its first and last address are private, so a supernet
+# straddling private and public space (10.0.0.0/7, 172.16.0.0/11,
+# 192.168.0.0/15) used to pass — one poisoned upstream line would have made a
+# firewall block its own LAN (found in review 2026-09-22). Overlap, not
+# containment, is the rule: any entry touching this space is refused.
+_SPECIAL_V4 = [ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8",        # "this network"
+    "10.0.0.0/8",       # RFC 1918
+    "100.64.0.0/10",    # RFC 6598 shared/CGNAT
+    "127.0.0.0/8",      # loopback
+    "169.254.0.0/16",   # link-local
+    "172.16.0.0/12",    # RFC 1918
+    "192.0.0.0/24",     # IETF protocol assignments
+    "192.0.2.0/24",     # TEST-NET-1
+    "192.88.99.0/24",   # deprecated 6to4 relay anycast
+    "192.168.0.0/16",   # RFC 1918
+    "198.18.0.0/15",    # benchmarking
+    "198.51.100.0/24",  # TEST-NET-2
+    "203.0.113.0/24",   # TEST-NET-3
+    "224.0.0.0/4",      # multicast
+    "240.0.0.0/4",      # reserved + limited broadcast
+)]
+_SPECIAL_V6 = [ipaddress.ip_network(n) for n in (
+    "::/128", "::1/128",          # unspecified, loopback
+    "::ffff:0:0/96",              # IPv4-mapped (would smuggle v4 private space)
+    "64:ff9b::/96", "64:ff9b:1::/48",  # NAT64 — blocking breaks v6-only clients
+    "100::/64",                   # discard-only
+    "2001::/23",                  # IETF protocol assignments (incl. Teredo)
+    "2001:db8::/32",              # documentation
+    "2002::/16",                  # 6to4
+    "fc00::/7",                   # unique-local
+    "fe80::/10",                  # link-local
+    "ff00::/8",                   # multicast
+)]
+
+# Widest netblock a block list may carry. A poisoned upstream serving
+# 64.0.0.0/3 is an eighth of IPv4, a self-inflicted outage even though it
+# touches no private space. Measured on the live corpus (2026-09-22) the widest
+# LEGITIMATE entries are /12 (Spamhaus DROP hijacked blocks, bbcan177, ET) —
+# a /16 floor would have silently dropped real protection — so the default
+# refuses /0-/9 and keeps a margin under real data. 0 disables.
+DEFAULT_MIN_PREFIX_V4 = 10
+DEFAULT_MIN_PREFIX_V6 = 24
 
 
 class SafetyFilter:
     def __init__(self, drop_private_reserved: bool = True,
                  protect_known_good: bool = True,
                  known_good: Optional[List[str]] = None,
-                 known_good_domains: Optional[List[str]] = None):
+                 known_good_domains: Optional[List[str]] = None,
+                 min_prefix_v4: int = DEFAULT_MIN_PREFIX_V4,
+                 min_prefix_v6: int = DEFAULT_MIN_PREFIX_V6):
         self.drop_private_reserved = drop_private_reserved
         self.protect_known_good = protect_known_good
+        self.min_prefix_v4 = int(min_prefix_v4 or 0)
+        self.min_prefix_v6 = int(min_prefix_v6 or 0)
         names = list(KNOWN_GOOD) + list(known_good or [])
         self._known_good = []
         for g in names:
@@ -80,6 +132,8 @@ class SafetyFilter:
             protect_known_good=s.get("protect_known_good", True),
             known_good=s.get("known_good"),
             known_good_domains=s.get("known_good_domains"),
+            min_prefix_v4=s.get("min_prefix_ipv4", DEFAULT_MIN_PREFIX_V4),
+            min_prefix_v6=s.get("min_prefix_ipv6", DEFAULT_MIN_PREFIX_V6),
         )
 
     def excluded_reason(self, value: str) -> Optional[str]:
@@ -90,19 +144,47 @@ class SafetyFilter:
             net = ipaddress.ip_network(value, strict=False)
         except ValueError:
             return self._domain_excluded_reason(value)
+        return self._net_excluded_reason(net)
 
+    def _net_excluded_reason(self, net) -> Optional[str]:
         if self.protect_known_good:
             for g in self._known_good:
                 if g in net:
                     return f"protected public infrastructure ({g})"
 
         if self.drop_private_reserved:
-            if (net.is_private or net.is_loopback or net.is_link_local
-                    or net.is_multicast or net.is_reserved or net.is_unspecified
-                    or net.overlaps(_CGNAT)):
-                return "private / reserved / bogon address"
+            for special in (_SPECIAL_V4 if net.version == 4 else _SPECIAL_V6):
+                if net.overlaps(special):
+                    return f"private / reserved / bogon address (overlaps {special})"
+
+        floor = self.min_prefix_v4 if net.version == 4 else self.min_prefix_v6
+        if floor and net.prefixlen < floor:
+            return f"netblock too wide (/{net.prefixlen}; minimum /{floor})"
 
         return None
+
+    def stored_value_reason(self, value: str, kind: str,
+                            cidr: Optional[str] = None) -> Optional[str]:
+        """excluded_reason for a value ALREADY in the store, used by the
+        retroactive sweep. Stored domains are canonical already, so this skips
+        the IDNA re-normalization that dominates excluded_reason's cost on a
+        ~200k-domain corpus; IPs are checked on their served CIDR when one
+        exists (the stored value is only the network address)."""
+        if kind == "domain":
+            if self.drop_private_reserved:
+                reason = reserved_reason(value)
+                if reason:
+                    return reason
+            if self.protect_known_good:
+                for g in self._known_good_domains:
+                    if value == g or value.endswith('.' + g):
+                        return f"protected known-good domain ({g})"
+            return None
+        try:
+            net = ipaddress.ip_network(cidr or value, strict=False)
+        except ValueError:
+            return None
+        return self._net_excluded_reason(net)
 
     def _domain_excluded_reason(self, value: str) -> Optional[str]:
         """Domain arm of excluded_reason, same toggles as the IP arm:

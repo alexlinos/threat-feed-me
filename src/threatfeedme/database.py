@@ -915,16 +915,73 @@ class Database:
             cur.execute(sql, params)
             return cur.rowcount
 
+    def purge_unsafe_indicators(self, safety, chunk: int = 5000) -> Dict[str, int]:
+        """Delete stored indicators the safety filter now refuses; returns
+        {reason_prefix: count}. The filter normally runs only at the write
+        boundaries, which left two gaps: a filter FIX never reached rows stored
+        before it (e.g. a supernet that slipped past the old is_private check),
+        and an operator's new known-good entry kept being served until the rows
+        aged out. The store is meant to never hold a value the filter refuses,
+        so this re-establishes that invariant on every refresh. Streams the
+        table and deletes in chunked transactions (FK cascade clears
+        indicator_sources)."""
+        doomed: List[int] = []
+        reasons: Dict[str, int] = {}
+        conn = self._get_connection()
+        try:
+            for row in conn.execute(
+                    "SELECT id, ip, kind, json_extract(metadata, '$.cidr') AS cidr "
+                    "FROM indicators"):
+                reason = safety.stored_value_reason(
+                    row["ip"], row["kind"] or "ip", row["cidr"])
+                if reason:
+                    doomed.append(row["id"])
+                    key = reason.split(" (")[0]
+                    reasons[key] = reasons.get(key, 0) + 1
+        finally:
+            conn.close()
+        for i in range(0, len(doomed), chunk):
+            batch = doomed[i:i + chunk]
+            with self._cursor() as cur:
+                cur.execute("DELETE FROM indicators WHERE id IN ({0})".format(
+                    ",".join("?" * len(batch))), batch)
+        return reasons
+
     def touch_feed_indicators(self, feed_name: str) -> int:
-        """Refresh last_seen on every indicator attributed to a feed."""
+        """Refresh last_seen on the indicators a feed CURRENTLY lists, for a
+        304 (content unchanged) fetch.
+
+        This used to touch every indicator ATTRIBUTED to the feed, but
+        indicator_sources is add-only — it never forgets an IP the feed has
+        since dropped. So one 304 inside the retention window kept every IP the
+        feed ever listed alive indefinitely, and kept that feed's stale vote on
+        it; "0 indicators past the window" was a symptom, not evidence retention
+        worked (found in review 2026-09-22). source_state is the feed's true
+        membership as of its last clean fetch (synced for every feed, including
+        churn_log_exclude ones), and a 304 means that membership is unchanged,
+        so it is exactly the set to keep current.
+
+        Fallback: a feed with no source_state rows (never cleanly fetched since
+        the transition log shipped) keeps the old attribution-based touch —
+        refreshing nothing would age out everything it still serves."""
         now = _utcnow_iso()
         with self._cursor() as cur:
-            cur.execute(
-                "UPDATE indicators SET last_seen = ? "
-                "WHERE id IN (SELECT indicator_id FROM indicator_sources "
-                "WHERE source_name = ?)",
-                (now, feed_name),
-            )
+            seeded = cur.execute(
+                "SELECT 1 FROM source_state WHERE source_name = ? LIMIT 1",
+                (feed_name,)).fetchone()
+            if seeded:
+                cur.execute(
+                    "UPDATE indicators SET last_seen = ? WHERE ip IN "
+                    "(SELECT ip FROM source_state WHERE source_name = ?)",
+                    (now, feed_name),
+                )
+            else:
+                cur.execute(
+                    "UPDATE indicators SET last_seen = ? "
+                    "WHERE id IN (SELECT indicator_id FROM indicator_sources "
+                    "WHERE source_name = ?)",
+                    (now, feed_name),
+                )
             return cur.rowcount
 
     # ==================== WHITELIST OPERATIONS ====================
