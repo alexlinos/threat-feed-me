@@ -1430,6 +1430,17 @@ class Database:
             row = cur.fetchone()
             return self._row_to_feed(row) if row else None
 
+    def local_file_feed_names(self) -> set:
+        """Names of static (uploaded) feeds. A local_file feed is re-read from
+        an operator-uploaded file, not fetched from a changing source, so it
+        has no organic churn — its only 'transitions' are re-uploads, which are
+        operator edits, not indicator recidivism. The recurrence predictor
+        excludes these (features + labels) the same way it excludes
+        churn_log_exclude feeds; we cannot predict churn we don't observe."""
+        with self._cursor() as cur:
+            cur.execute("SELECT name FROM feeds WHERE local_file = 1")
+            return {r['name'] for r in cur.fetchall()}
+
     def add_feed(self, feed: FeedSource, added_by: str = "dashboard",
                  seed_fingerprint: Optional[str] = None) -> None:
         """Add or update a configured feed source (keyed by name).

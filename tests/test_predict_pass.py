@@ -104,6 +104,21 @@ def test_builder_excludes_churn_log_feeds(tmp_path):
     assert p.builder.exclude_sources == ["cins_army", "foo"]
 
 
+def test_builder_excludes_static_uploaded_feeds(tmp_path):
+    # A local_file (uploaded) feed has no organic churn, so it must be excluded
+    # from the predictor's feature/label stream — and via the SAME set the
+    # trainer uses, or train/serve skew reopens.
+    from threatfeedme.models import FeedSource, FeedType
+    db = Database(str(tmp_path / "x.db"))
+    db.add_feed(FeedSource(name="custom_honeypot", url="uploads/custom_honeypot.txt",
+                           feed_type=FeedType.CUSTOM, local_file=True))
+    assert db.local_file_feed_names() == {"custom_honeypot"}
+    p = Predictor(db, {"retention": {"churn_log_exclude": ["cins_army"]},
+                       "predictor": {"enabled": True}})
+    # union of config churn_log_exclude + static feeds, sorted by FeatureBuilder
+    assert p.builder.exclude_sources == ["cins_army", "custom_honeypot"]
+
+
 def _seed_corpus(db):
     churners = [f"203.0.{i // 50}.{i % 50 + 1}" for i in range(60)]
     stayers = [f"198.18.{i // 50}.{i % 50 + 1}" for i in range(120)]

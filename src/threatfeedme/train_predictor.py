@@ -108,7 +108,10 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     from .predictor import FeatureBuilder
     from .pipeline import churn_log_exclude
 
-    exclude = churn_log_exclude(config)
+    # churn_log_exclude names PLUS static (uploaded) feeds: neither carries
+    # predictable churn, and both must drop from labels AND features or the
+    # dataset would train on transitions serving won't see (train/serve skew).
+    exclude = churn_log_exclude(config) | db.local_file_feed_names()
     first_event, churn_returns, t_min, t_max = collect_labels(db, exclude, min_gap_h)
     if t_min is None or t_max is None:
         raise SystemExit("sightings log is empty; nothing to train on")

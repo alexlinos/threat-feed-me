@@ -324,19 +324,20 @@ class Predictor:
     @property
     def builder(self) -> FeatureBuilder:
         if self._builder is None:
-            # Match the trainer: build_dataset drops churn_log_exclude feeds
-            # from the event stream (train_predictor.build_dataset ->
-            # FeatureBuilder(exclude_sources=churn_log_exclude(config))). If
-            # scoring did NOT exclude the same feeds, features would count
-            # transitions the labels never saw — train/serve skew that silently
-            # invalidates the backtest the model was certified against. Read the
-            # same config path directly (no pipeline import: predictor must stay
-            # importable without the app's fetch stack).
-            excl = (self.config.get("retention", {}) or {}).get(
-                "churn_log_exclude", []) or []
+            # Match the trainer EXACTLY: build_dataset drops churn_log_exclude
+            # feeds AND static (local_file) feeds from the event stream. If
+            # scoring excluded a different set, features would count transitions
+            # the labels never saw — train/serve skew that silently invalidates
+            # the backtest the model was certified against. Read churn_log_exclude
+            # from config directly (no pipeline import: predictor must stay
+            # importable without the app's fetch stack) and union the static
+            # feeds from the DB, mirroring train_predictor.build_dataset.
+            excl = {str(n) for n in
+                    (self.config.get("retention", {}) or {}).get(
+                        "churn_log_exclude", []) or []}
+            excl |= self.db.local_file_feed_names()
             self._builder = FeatureBuilder(
-                self.db, self.config,
-                exclude_sources={str(n) for n in excl})
+                self.db, self.config, exclude_sources=excl)
         return self._builder
 
     def model_ready(self) -> bool:

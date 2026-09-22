@@ -441,6 +441,18 @@ was called nowhere):
   the noise is gone). The growth itself was benign — a real arrival surge (09-14→18,
   ~40k new IPs/day vs ~10k baseline) already receding; eviction is healthy (0 IPs
   past the 14d window); box cap raised 2g→3g for headroom.
+- **Static (uploaded) feeds excluded from the predictor (v2.4.18, 2026-09-22)**:
+  a `local_file=True` feed is re-read from an operator upload, not fetched from a
+  changing source, so it has no organic churn — its only "transitions" are
+  re-uploads (operator edits, not recidivism). `Database.local_file_feed_names()`
+  is unioned into the exclusion set at BOTH read paths — `train_predictor.build_dataset`
+  and `Predictor.builder` — so uploads drop from labels and features identically
+  (same set, or train/serve skew reopens). This is by feed *shape* (local_file),
+  NOT the `custom` threat-*category*: an operator-added REMOTE feed is categorized
+  custom but does churn and stays predictable. Preventive — the only custom feed on
+  prod (`custom_honeypot`) is disabled, so the live model is unchanged; a no-op
+  backtest wasn't run. Logging path (run_refresh) is left keyed on churn_log_exclude
+  names only — static uploads barely churn, so no log-bloat reason to touch it.
 
 ### Ratified (maintainer, 2026-08-20) — go direct to primaries, not aggregates
 
