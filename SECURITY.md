@@ -23,7 +23,7 @@ boundaries are deliberate and worth understanding:
 |---|---|---|
 | Feed URLs (`/feeds/*`) | **Unauthenticated, by design** | Firewalls polling a block list cannot present credentials. Treat the feed content as non-secret. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
-| Dashboard + mutating API | Optional HTTP Basic auth (`DASHBOARD_USER`/`DASHBOARD_PASSWORD` + `dashboard.auth_required: true`) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
+| Dashboard + mutating API | Optional HTTP Basic auth — setting both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
 | TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
 | Rate limiting | **None** | The service assumes a LAN with well-behaved clients. Do not expose it to the internet. |
 

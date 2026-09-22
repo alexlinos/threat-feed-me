@@ -12,6 +12,12 @@ services:
     volumes:
       - threat-data:/app/data
       - threat-output:/app/output
+      # Optional: use YOUR config.yaml instead of the one baked into the image
+      # (needed for scoring/safety/known-good-domain edits when you run the
+      # published image). Uncomment ONLY if ./config.yaml exists next to this
+      # file — if it doesn't, Docker creates an empty directory by that name
+      # and the app can't start.
+      # - ./config.yaml:/app/config.yaml:ro
     environment:
       # Optional. Leave blank for the out-of-box free feeds. For keyed feeds
       # (e.g. AlienVault OTX) the easiest path is the dashboard's "Set key"
@@ -23,8 +29,11 @@ services:
       - OTX_API_KEY
       - HONEYDB_API_ID
       - HONEYDB_API_KEY
-      # Optional dashboard Basic auth (leave blank to keep the dashboard open on
-      # a trusted LAN). If set, also set dashboard.auth_required: true.
+      # Optional dashboard Basic auth. Setting BOTH turns auth on (leave both
+      # unset to keep the dashboard open on a trusted LAN). Feed URLs stay
+      # open either way so firewalls can poll them. Set these here or in the
+      # host environment — never in the data-volume .env, which is ignored for
+      # dashboard credentials.
       - DASHBOARD_USER
       - DASHBOARD_PASSWORD
     restart: unless-stopped

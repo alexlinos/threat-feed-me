@@ -307,6 +307,39 @@ def churn_log_exclude(config: Dict) -> set:
     return {str(n) for n in names}
 
 
+# Shrink guard. A plain feed that serves an HTML error page, an empty body, or
+# a truncated file still parses "successfully" — to a handful of stray matches
+# or nothing — and diffing that against its membership records a MASS LEAVE,
+# then a mass return when the feed recovers. Past the 6h gap floor those are
+# exactly the leave->return labels the predictor learns from. A collapse below
+# _COLLAPSE_FRACTION of a membership of at least _COLLAPSE_MIN_PRIOR is held
+# back from the churn log; if it persists _COLLAPSE_ACCEPT_AFTER fetches in a
+# row it is accepted as the feed's real new size, so a genuine permanent
+# shrink can't freeze the state forever.
+_COLLAPSE_FRACTION = 0.05
+_COLLAPSE_MIN_PRIOR = 100
+_COLLAPSE_ACCEPT_AFTER = 3
+
+
+def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
+    key = f"shrink_guard:{name}"
+    prior = db.source_state_count(name)
+    if prior >= _COLLAPSE_MIN_PRIOR and n_values < _COLLAPSE_FRACTION * prior:
+        streak = int(db.get_setting(key) or 0) + 1
+        if streak < _COLLAPSE_ACCEPT_AFTER:
+            db.set_setting(key, str(streak))
+            logger.warning(
+                f"[churn] {name}: list collapsed {prior} -> {n_values} "
+                f"({streak}/{_COLLAPSE_ACCEPT_AFTER}); treating as a bad fetch, "
+                f"churn NOT recorded")
+            return True
+        logger.warning(f"[churn] {name}: collapse persisted {streak} fetches; "
+                       f"accepting {n_values} as its real size")
+    if db.get_setting(key) not in (None, "", "0"):
+        db.set_setting(key, "0")
+    return False
+
+
 def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) -> Dict:
     """Full refresh: fetch -> score -> export -> push. Returns per-feed fetch
     results."""
@@ -323,6 +356,10 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     # makes leaves observable at all — attribution never shrinks.
     for name, values in fetched_values.items():
         if fetched.get(name, {}).get("status") != "success":
+            continue
+        if _collapsed_fetch(db, name, len(values)):
+            fetched[name]["warning"] = (
+                "list collapsed to %d entries; churn not recorded" % len(values))
             continue
         stats = db.update_source_sightings(
             name, values, tick, record=name not in churn_log_exclude(config))

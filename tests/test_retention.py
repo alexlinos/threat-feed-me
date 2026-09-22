@@ -56,3 +56,29 @@ def test_304_touch_does_not_touch_other_feeds_ips(tmp_path):
     db.touch_feed_indicators("feedA")
 
     assert _last_seen(db, "185.3.3.9").startswith("2026-01-01")
+
+
+def test_shrink_guard_holds_back_a_collapsed_fetch(tmp_path):
+    """An HTML error page or empty body parses to ~nothing; recording that as
+    churn fakes a mass leave, then a mass return (= fake predictor labels)."""
+    from threatfeedme.pipeline import _collapsed_fetch, _COLLAPSE_ACCEPT_AFTER
+    db = Database(str(tmp_path / "t.db"))
+    members = {f"185.4.{i // 250}.{i % 250 + 1}" for i in range(400)}
+    db.update_source_sightings("feedA", members, "2026-01-01T00:00:00+00:00")
+
+    # a collapse is held back for the first few fetches...
+    for _ in range(_COLLAPSE_ACCEPT_AFTER - 1):
+        assert _collapsed_fetch(db, "feedA", 3) is True
+    # ...and accepted once it persists, so a real shrink can't freeze state
+    assert _collapsed_fetch(db, "feedA", 3) is False
+
+
+def test_shrink_guard_ignores_normal_and_small_feeds(tmp_path):
+    from threatfeedme.pipeline import _collapsed_fetch
+    db = Database(str(tmp_path / "t.db"))
+    db.update_source_sightings("big", {f"185.5.0.{i}" for i in range(1, 201)},
+                               "2026-01-01T00:00:00+00:00")
+    assert _collapsed_fetch(db, "big", 150) is False       # ordinary churn
+    db.update_source_sightings("tiny", {"185.6.0.1", "185.6.0.2"},
+                               "2026-01-01T00:00:00+00:00")
+    assert _collapsed_fetch(db, "tiny", 0) is False        # too small to judge

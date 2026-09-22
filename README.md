@@ -53,9 +53,10 @@ on-prem; feeds are pulled inbound only.
   server-side in the data volume's `.env`, applies them immediately, and
   never displays them back.
 
-To protect the dashboard on an untrusted network, set `DASHBOARD_USER` /
-`DASHBOARD_PASSWORD` and `dashboard.auth_required: true`. Feed URLs stay open so
-firewalls can poll them.
+To protect the dashboard on an untrusted network, set `DASHBOARD_USER` and
+`DASHBOARD_PASSWORD` in the environment (e.g. in `docker-compose.yml`); setting
+both turns auth on — no config edit needed, so it works with the published
+image. Feed URLs stay open so firewalls can poll them.
 
 ## Features
 
@@ -333,7 +334,8 @@ all feeds (searchable and paginated). You can:
 
 Feed endpoints are unauthenticated by design (a firewall polling a block list
 can't present credentials); the dashboard/API can be protected with optional
-Basic auth (`auth_required: true` plus `DASHBOARD_USER`/`DASHBOARD_PASSWORD`).
+Basic auth (set `DASHBOARD_USER` and `DASHBOARD_PASSWORD`; `auth_required: true`
+in config also forces it, and fails closed if the credentials are missing).
 
 ### Backups
 

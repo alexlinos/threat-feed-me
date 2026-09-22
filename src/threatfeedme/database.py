@@ -919,6 +919,12 @@ class Database:
             cur.execute(sql, params)
             return cur.rowcount
 
+    def source_state_count(self, source_name: str) -> int:
+        """Size of a feed's membership as of its last clean fetch."""
+        with self._cursor() as cur:
+            return cur.execute("SELECT COUNT(*) FROM source_state WHERE source_name = ?",
+                               (source_name,)).fetchone()[0]
+
     def purge_unsafe_indicators(self, safety, chunk: int = 5000) -> Dict[str, int]:
         """Delete stored indicators the safety filter now refuses; returns
         {reason_prefix: count}. The filter normally runs only at the write

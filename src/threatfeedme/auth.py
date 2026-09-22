@@ -1,7 +1,8 @@
 """
-Optional HTTP Basic auth on the dashboard/API, enabled via config and
-configured entirely through environment variables so no credentials live in
-the repo. Feed endpoints (/feeds/*) are intentionally NOT gated: a firewall
+Optional HTTP Basic auth on the dashboard/API, configured entirely through
+environment variables so no credentials live in the repo: setting both
+DASHBOARD_USER and DASHBOARD_PASSWORD turns it on (config's
+dashboard.auth_required can also force it). Feed endpoints (/feeds/*) are intentionally NOT gated: a firewall
 polling a block list generally cannot present credentials, and the lists
 contain only known-bad IPs, not secrets.
 
@@ -33,6 +34,13 @@ _AUTH_PASSWORD = None
 _security = HTTPBasic(auto_error=False)
 
 
+def _dashboard_config() -> dict:
+    """The dashboard config block. A seam, so tests can supply one without
+    touching core.config — reading that attribute lazily INITIALIZES core from
+    the repo's real config.yaml, which then leaks into every later test."""
+    return core.config.get('dashboard', {}) or {}
+
+
 def _ensure_auth_config():
     """Read auth config from core.config on first call rather than at import
     time. This lets tests set env vars before calling a function that triggers
@@ -40,10 +48,19 @@ def _ensure_auth_config():
     global _AUTH_REQUIRED, _AUTH_USER, _AUTH_PASSWORD
     if _AUTH_REQUIRED is not None:
         return
-    cfg = core.config.get('dashboard', {})
-    _AUTH_REQUIRED = bool(cfg.get('auth_required', False))
+    cfg = _dashboard_config()
     _AUTH_USER = os.environ.get("DASHBOARD_USER", "")
     _AUTH_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+    # Setting both credentials turns auth ON. config.yaml is baked into the
+    # published image, so anyone running `docker compose pull` could not flip
+    # dashboard.auth_required at all — the environment was the only lever, and
+    # it did nothing (review 2026-09-22). Providing credentials is an
+    # unambiguous request for auth; config can still require it with creds
+    # unset (that fails closed with a 503 below). Never read from the
+    # data-volume .env (credentials.env_file_may_set refuses DASHBOARD_*), so
+    # an API-writable file can't switch auth on with attacker-chosen creds.
+    _AUTH_REQUIRED = (bool(cfg.get('auth_required', False))
+                      or bool(_AUTH_USER and _AUTH_PASSWORD))
 
 
 def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security)):
@@ -56,9 +73,18 @@ def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Dashboard auth is enabled but DASHBOARD_USER/DASHBOARD_PASSWORD are not set",
         )
-    valid = credentials is not None and secrets.compare_digest(
-        credentials.username, _AUTH_USER
-    ) and secrets.compare_digest(credentials.password, _AUTH_PASSWORD)
+    # Compare bytes, and always evaluate BOTH: compare_digest raises TypeError
+    # on non-ASCII str (a non-ASCII password turned every request into a 500),
+    # and the old `a and b` short-circuit skipped the password check for a
+    # wrong username, leaking which usernames are valid through timing.
+    if credentials is None:
+        valid = False
+    else:
+        user_ok = secrets.compare_digest(credentials.username.encode("utf-8"),
+                                         _AUTH_USER.encode("utf-8"))
+        pass_ok = secrets.compare_digest(credentials.password.encode("utf-8"),
+                                         _AUTH_PASSWORD.encode("utf-8"))
+        valid = user_ok and pass_ok
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

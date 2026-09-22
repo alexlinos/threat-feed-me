@@ -865,6 +865,10 @@ def csrf_client(tmp_path_factory):
         "safety: {drop_private_reserved: false, protect_known_good: true}\n"
         "dashboard: {auth_required: true}\n"
     )
+    # Restored at teardown: leaking the credentials into os.environ made every
+    # LATER module-reloading fixture (test_domains, test_unifi) come up with
+    # auth on, since setting both credentials now enables auth.
+    saved = {v: os.environ.get(v) for v in ("DASHBOARD_USER", "DASHBOARD_PASSWORD")}
     os.environ["CONFIG_PATH"] = str(cfg_path)
     os.environ["DASHBOARD_USER"] = "admin"
     os.environ["DASHBOARD_PASSWORD"] = "testpass"
@@ -877,7 +881,14 @@ def csrf_client(tmp_path_factory):
     from starlette.testclient import TestClient
     from threatfeedme import dashboard
 
-    return TestClient(dashboard.app)
+    try:
+        yield TestClient(dashboard.app)
+    finally:
+        for var, value in saved.items():
+            if value is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = value
 
 
 def _auth_headers():
