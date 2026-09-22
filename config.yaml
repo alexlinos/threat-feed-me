@@ -480,6 +480,13 @@ retention:
   # still syncs for excluded feeds, so re-enabling diffs cleanly later.
   churn_log_exclude:
     - cins_army
+    # honeydb_bad_hosts: a 24h-window wholesale-rotator, measured on prod
+    # 2026-09-22 — 11.8k members but 222k distinct IPs touched in 7d (18.8x
+    # rotation), contributing 24% of ALL predictor leave->return positives.
+    # Its "returns" are list cycling, not IP recidivism (same pathology as
+    # cins_army). Excluded so it stops poisoning the predictor's positive class
+    # and inflating the sightings log (~140k transitions/3d).
+    - honeydb_bad_hosts
 
 # Recurrence predictor (ships DARK: enabled=false until the Task 9 backtest
 # passes on real accumulated churn). The scoring factor reads the stored

@@ -431,6 +431,16 @@ was called nowhere):
   sets a 120s per-connection busy_timeout and retries a chunk on lock (chunks
   are atomic, so a retry re-applies idempotently). If this recurs, the corpus
   has grown enough that the rescore itself needs attention, not the timeout.
+- **honeydb_bad_hosts added to churn_log_exclude (v2.4.17, 2026-09-22)**: profiling
+  the corpus growth found honeydb is a 24h-window wholesale-rotator (11.8k members
+  but 222k distinct IPs touched in 7d = 18.8x rotation) contributing 24% of all
+  predictor leave→return positives — rotation artifacts, not recidivism (same
+  pathology as cins_army). A same-snapshot comparison backtest confirmed excluding
+  it SHARPENS the model: lift over the source_count baseline grew +0.108 → +0.149,
+  recall-lift doubled, and training went 58→236 rounds (real signal to learn once
+  the noise is gone). The growth itself was benign — a real arrival surge (09-14→18,
+  ~40k new IPs/day vs ~10k baseline) already receding; eviction is healthy (0 IPs
+  past the 14d window); box cap raised 2g→3g for headroom.
 
 ### Ratified (maintainer, 2026-08-20) — go direct to primaries, not aggregates
 
