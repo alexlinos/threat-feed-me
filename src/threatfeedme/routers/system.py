@@ -2,9 +2,11 @@
 import json
 import os
 from datetime import datetime, timezone
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
@@ -475,6 +477,55 @@ def update_settings(request: SettingsRequest, _=Depends(require_auth), _csrf=Dep
         "refresh_interval_minutes": _refresh_interval_minutes(),
         "retention_max_age_days": retention_max_age_days(core.db, core.config),
     }
+
+
+class HostCheckRequest(BaseModel):
+    allowed: List[str] = []
+
+
+def _host_check_status(request: Request) -> dict:
+    from threatfeedme import middleware as mw
+    env = sorted(mw.env_allowed_hosts())
+    configured = mw.configured_hosts(core.db)
+    current = mw.host_of_header(request.headers.get("host"))
+    return {
+        "mode": "enforcing" if (env or configured) else "report-only",
+        "env": env,                  # TFM_ALLOWED_HOSTS (read-only here)
+        "configured": configured,    # the dashboard-managed list
+        "seen": [s for s in mw.seen_hosts()
+                 if s["host"] not in env and s["host"] not in configured],
+        "current_host": current,
+        "current_is_ip": mw.always_allowed(current),
+    }
+
+
+@router.get("/api/host-check")
+def host_check_status(request: Request, _=Depends(require_auth)):
+    """Host-header allowlist state: mode, allowed names, and the hostnames
+    that have reached the dashboard (so the operator locks to real ones)."""
+    return _host_check_status(request)
+
+
+@router.post("/api/host-check")
+def host_check_update(body: HostCheckRequest, request: Request,
+                      _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Replace the dashboard-managed allowlist. A non-empty list (or
+    TFM_ALLOWED_HOSTS) turns enforcement on; an empty one returns to
+    report-only. The hostname this request arrived on is always kept, so
+    enabling enforcement can never lock out the page doing it."""
+    from threatfeedme import middleware as mw
+    names = []
+    for value in body.allowed:
+        name = mw.normalize_hostname(value)
+        if name is None:
+            raise HTTPException(status_code=400, detail=f"Not a valid hostname: {value!r}")
+        names.append(name)
+    current = mw.host_of_header(request.headers.get("host"))
+    if names and not mw.always_allowed(current):
+        names.append(current)
+    core.db.set_setting(mw.ALLOWED_HOSTS_SETTING, json.dumps(sorted(set(names))))
+    mw.invalidate_allowlist_cache()
+    return _host_check_status(request)
 
 
 @router.post("/api/recalculate-scores")

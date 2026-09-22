@@ -2,6 +2,16 @@
 {% block subtitle %}Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.{% endblock %}
 
 {% block content %}
+    {# Host-check banner, filled by app.js from /api/host-check. Shown only
+       while the dashboard answers to ANY hostname (report-only mode) and at
+       least one name has reached it: the operator locks to the names they
+       actually use. Feed URLs are never affected by the host check. #}
+    <div class="callout" id="host-check-banner" role="status" hidden>
+        <b>This dashboard answers to any hostname.</b>
+        <span id="host-check-text"></span>
+        <button type="button" class="mini-btn" id="host-check-lock">Lock to these names</button>
+    </div>
+
     {# Ops pulse row: health / freshness / velocity / overrides / push. No
        corpus sizes here — the matrix owns those (the old tiles died for
        duplicating them). UniFi card renders only when push is configured. #}

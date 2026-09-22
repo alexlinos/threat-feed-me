@@ -36,6 +36,12 @@ services:
       # dashboard credentials.
       - DASHBOARD_USER
       - DASHBOARD_PASSWORD
+      # Optional: hostnames the DASHBOARD may be reached by, comma-separated
+      # (e.g. threatfeedme.corp.example). Blocks DNS-rebinding attacks. When
+      # unset the dashboard answers to any name and shows which names reached
+      # it, with a one-click lock. The server's IP always works, and feed URLs
+      # (/feeds/...) are never checked.
+      - TFM_ALLOWED_HOSTS
     restart: unless-stopped
     # Small-box hosts (Synology/QNAP NAS, Raspberry Pi): cap the container so
     # a rescore/export burst can never starve the rest of the box. v1.8.3+

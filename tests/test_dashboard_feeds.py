@@ -821,6 +821,34 @@ def test_api_key_endpoint_refuses_a_stored_process_knob(client):
         os.environ.pop("HTTPS_PROXY", None)
 
 
+def test_host_check_api_lock_and_unlock(client):
+    """Report-only -> lock to the seen names -> enforcing; the host the
+    request arrived on is always kept, so locking can't lock out the page."""
+    from threatfeedme import middleware as mw
+    mw._seen.clear(); mw.invalidate_allowlist_cache()
+    try:
+        client.get("/api/stats")                       # arrives as "testserver"
+        s = client.get("/api/host-check").json()
+        assert s["mode"] == "report-only"
+        assert "testserver" in [e["host"] for e in s["seen"]]
+
+        r = client.post("/api/host-check", json={"allowed": ["threatfeedme.tnh.local"]})
+        assert r.status_code == 200
+        s = r.json()
+        assert s["mode"] == "enforcing"
+        assert s["configured"] == ["testserver", "threatfeedme.tnh.local"]
+
+        assert client.get("/api/stats", headers={"host": "attacker.example"}).status_code == 400
+        # feeds stay open to any Host, even while enforcing
+        assert client.get("/feeds/high.txt", headers={"host": "attacker.example"}).status_code == 200
+
+        assert client.post("/api/host-check", json={"allowed": ["bad_name!"]}).status_code == 400
+    finally:
+        client.post("/api/host-check", json={"allowed": []})   # back to report-only
+        mw._seen.clear(); mw.invalidate_allowlist_cache()
+    assert client.get("/api/host-check").json()["mode"] == "report-only"
+
+
 def test_ops_pulse_row(client):
     """The pulse row answers health/freshness/velocity/overrides at a glance
     and must NOT duplicate matrix sizes. UniFi card renders only when the

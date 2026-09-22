@@ -751,3 +751,39 @@ async function unifiPush(btn) {
         } else { el.textContent = 'Push failed: ' + (j.detail || r.status); }
     } finally { btn.disabled = false; }
 }
+
+// ---- Host check (DNS-rebinding allowlist) ----------------------------------
+// Report-only until an allowlist exists: the banner lists the hostnames that
+// actually reached this dashboard so the operator can lock to exactly those.
+// Hostnames come from request headers (attacker-influenced) -> esc() always.
+async function loadHostCheck() {
+    const banner = document.getElementById('host-check-banner');
+    if (!banner) return;
+    let s;
+    try {
+        const r = await apiFetch('/api/host-check');
+        if (!r.ok) return;
+        s = await r.json();
+    } catch (e) { return; }
+    if (s.mode !== 'report-only' || !s.seen.length) { banner.hidden = true; return; }
+    const names = s.seen.map(e => e.host);
+    document.getElementById('host-check-text').innerHTML =
+        ' Reached as: ' + s.seen.map(e =>
+            '<code>' + esc(e.host) + '</code> (' + esc(e.count) + ')').join(', ') +
+        '. Locking it to these names stops other websites from reaching it through' +
+        ' DNS rebinding. The server\'s IP address always works, and feed URLs are' +
+        ' never affected.';
+    const btn = document.getElementById('host-check-lock');
+    btn.onclick = async () => {
+        if (!confirm('Only allow these hostnames for the dashboard?\n\n  ' + names.join('\n  ') +
+                     '\n\nAny other name will be refused (the IP address still works).')) return;
+        const r = await apiFetch('/api/host-check', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({allowed: names})});
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) { banner.hidden = true; alert('Dashboard locked to: ' + j.configured.join(', ')); }
+        else alert('Could not save: ' + (j.detail || r.status));
+    };
+    banner.hidden = false;
+}
+document.addEventListener('DOMContentLoaded', loadHostCheck);
