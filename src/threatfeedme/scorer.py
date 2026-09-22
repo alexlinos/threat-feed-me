@@ -121,12 +121,34 @@ class ConfidenceScorer:
         # reported them — gone from the higher tiers at the next rescore — and
         # retention ages out whatever it alone listed.
         self.disabled_sources = set()
+        # Domain authority (force-HIGH on one feed's word) is granted by
+        # PROVENANCE, not by name. It used to key on the feed name alone, so a
+        # custom upload named "urlhaus_hostfile", or the real one re-pointed at
+        # another URL, inherited force-HIGH for every domain it listed (review
+        # 2026-09-22). The operator's config is the trust anchor: a configured
+        # authoritative feed counts only while its stored row still matches the
+        # same-named feed in config.feeds — same URL, and not an upload.
+        auth_cfg = set(((scoring.get('high_confidence') or {})
+                        .get('authoritative_domain_feeds')) or [])
+        config_urls = {f.get('name'): f.get('url')
+                       for f in config.get('feeds', []) or [] if isinstance(f, dict)}
+        self.authoritative_sources = set(auth_cfg)   # no DB (unit tests): trust config
         if self.db is not None:
             try:
+                verified = set()
                 for feed in self.db.get_feed_sources():
                     self.source_types[feed.name] = feed.feed_type.value
                     if not feed.enabled:
                         self.disabled_sources.add(feed.name)
+                    if (feed.name in auth_cfg and not feed.local_file
+                            and config_urls.get(feed.name) == feed.url):
+                        verified.add(feed.name)
+                for name in sorted(auth_cfg - verified):
+                    logger.warning(
+                        f"[score] {name} is listed as authoritative but its stored "
+                        f"feed no longer matches the configured one (URL changed, "
+                        f"an upload, or not configured); it gets no force-HIGH")
+                self.authoritative_sources = verified
             except Exception:
                 logger.exception("[score] could not load the feed roster; "
                                  "feed types and enabled state unknown this rescore")
@@ -577,7 +599,7 @@ class ConfidenceScorer:
         high_require_intel = bool(high_cfg.get('require_threat_intel', False))
         intel_ok = (not high_require_intel) or self._has_intel_source(sources)
         if kind == 'domain':
-            auth_feeds = set(high_cfg.get('authoritative_domain_feeds') or [])
+            auth_feeds = self.authoritative_sources   # provenance-verified names
             if intel_ok and auth_feeds and any(
                     s in auth_feeds
                     and self.feed_penalty.get(s, 1.0) >= FP_DEGRADED_FACTOR

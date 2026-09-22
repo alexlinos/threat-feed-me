@@ -6,6 +6,7 @@ import io
 import os
 import re
 import socket
+import threading
 import time
 import ipaddress
 import json
@@ -15,6 +16,7 @@ from urllib.parse import urljoin, urlsplit
 import logging
 
 import requests
+import urllib3.util.connection as _u3_connection
 
 # Maximum bytes to accept from a single feed HTTP fetch. Beyond this the
 # connection is closed and the response is treated as an error to prevent
@@ -70,11 +72,29 @@ def _host_addresses(host: str) -> List[str]:
     return [info[4][0] for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
 
 
+def _assert_public(host: str, addresses: List[str]) -> None:
+    """The SSRF rule, shared by the early URL check and the connect-time
+    guard so the two can never disagree."""
+    for addr in addresses:
+        ip = ipaddress.ip_address(addr.split('%', 1)[0])
+        if not ip.is_global:
+            raise RuntimeError(
+                f"feed URL host '{host}' resolves to non-public address {ip}; "
+                "refusing to fetch (set safety.allow_private_feed_urls: true "
+                "to permit internal feed URLs)"
+            )
+
+
 def _require_public_url(url: str) -> None:
     """SSRF guard: reject a URL whose host is (or resolves to) a non-public
     address. Feed URLs can be added at runtime from the dashboard, so without
     this an operator-facing page could be pointed at cloud metadata services
-    or internal hosts and use the stored fetch errors as a port-scan oracle."""
+    or internal hosts and use the stored fetch errors as a port-scan oracle.
+
+    This is the EARLY check (clear error before any request). It is not the
+    enforcing one: requests resolves the host again to connect, so a
+    DNS-rebinding host could answer public here and private there. The
+    connect-time guard below closes that gap."""
     host = urlsplit(url).hostname
     if not host:
         raise RuntimeError(f"feed URL has no host: {url!r}")
@@ -85,14 +105,37 @@ def _require_public_url(url: str) -> None:
         raise requests.exceptions.ConnectionError(
             f"could not resolve feed host '{host}': {e}"
         )
+    _assert_public(host, addresses)
+
+
+# ---- Connect-time SSRF guard -------------------------------------------------
+# Every urllib3 connection is opened through util.connection.create_connection.
+# While a feed fetch runs on this thread, the wrapper resolves the host ONCE,
+# validates those addresses, and connects to exactly the address it validated —
+# there is no second lookup a rebinding DNS server could answer differently
+# (review 2026-09-22). It applies to every hop, so it also covers redirects the
+# Talos scraper's session follows on its own. Thread-local on purpose: the
+# UniFi pusher (other threads/requests) must still reach its LAN gateway.
+_ssrf_guard = threading.local()
+_original_create_connection = _u3_connection.create_connection
+
+
+def _guarded_create_connection(address, *args, **kwargs):
+    if not getattr(_ssrf_guard, "active", False):
+        return _original_create_connection(address, *args, **kwargs)
+    host, port = address[0], address[1]
+    addresses = _host_addresses(host)   # gaierror propagates -> retryable
+    _assert_public(host, addresses)
+    last_error = None
     for addr in addresses:
-        ip = ipaddress.ip_address(addr.split('%', 1)[0])
-        if not ip.is_global:
-            raise RuntimeError(
-                f"feed URL host '{host}' resolves to non-public address {ip}; "
-                "refusing to fetch (set safety.allow_private_feed_urls: true "
-                "to permit internal feed URLs)"
-            )
+        try:
+            return _original_create_connection((addr, port), *args, **kwargs)
+        except OSError as e:
+            last_error = e
+    raise last_error or OSError(f"no address to connect to for '{host}'")
+
+
+_u3_connection.create_connection = _guarded_create_connection
 
 
 class _NotModified:
@@ -275,6 +318,10 @@ class FeedIngestor:
         logger.info(f"Fetching feed: {feed.name}")
 
         self._pending_validators = None
+        # Arm the connect-time SSRF guard for every connection this fetch
+        # opens on this thread (generic GET, scrapers, pagination, redirects).
+        guard_was = getattr(_ssrf_guard, "active", False)
+        _ssrf_guard.active = not self.allow_private_urls
         try:
             if feed.scraper:
                 scraper_fn = self._SCRAPERS.get(feed.scraper)
@@ -294,6 +341,8 @@ class FeedIngestor:
         except Exception as e:
             logger.error(f"Failed to fetch {feed.name}: {e}")
             raise
+        finally:
+            _ssrf_guard.active = guard_was
 
         parsed = self._parse_feed_content(content, kind=feed.indicator_kind)
         # A scraper feed that yields zero indicators means the scrape returned

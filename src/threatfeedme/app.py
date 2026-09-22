@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 # Importing `core` triggers lazy init on first attribute access — no work is
 # done at import time. The lifespan below explicitly warms the singletons.
 from threatfeedme import core  # noqa: F401  (module-level __getattr__ lazy init)
+from threatfeedme.middleware import BodyLimitMiddleware
 from threatfeedme.scheduler import _scheduler_loop, _scheduler_stop
 from threatfeedme.routers import feeds, indicators, integrations, system, whitelist
 
@@ -33,6 +34,11 @@ app = FastAPI(title="Threat Feed Me! Dashboard", lifespan=lifespan)
 # plain-text feeds a firewall polls (a 50k-line block list is mostly digits and
 # compresses ~4x). Below 1 KB the header overhead is not worth it.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# Cap request bodies before any route (or its auth dependency) reads them.
+# Added last so it runs outermost: an oversized body is refused before the
+# app — including FastAPI's own body parsing — touches it.
+app.add_middleware(BodyLimitMiddleware)
 
 # Static assets (extracted dashboard CSS/JS). Anchored to this module's
 # directory so it works regardless of the process CWD (tests use a temp CWD).

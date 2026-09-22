@@ -257,7 +257,15 @@ def _write_env_var(path: str, var: str, value: Optional[str]) -> None:
     if value is not None:
         lines.append(f"{var}={value}")
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+    # Create the temp file 0600 from the first byte. It used to be created
+    # with the umask default (often world-readable) and only chmod'ed after
+    # the rename, leaving a window in which the secrets file was readable.
+    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.chmod(tmp, 0o600)   # O_CREAT's mode is ignored if tmp pre-existed
+    except OSError:
+        pass
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
     os.replace(tmp, path)
     try:

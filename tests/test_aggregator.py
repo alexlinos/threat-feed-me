@@ -2603,6 +2603,16 @@ def test_domain_witness_gate_is_domain_only(db):
         == ConfidenceTier.HIGH
 
 
+def _seeded_scorer(db, cfg):
+    """Authority is granted by provenance (the stored feed must match the
+    configured one), so seed the configured feeds into the DB exactly as the
+    app does at startup before scoring."""
+    for f in cfg.get("feeds", []):
+        f.setdefault("url", f"https://{f['name']}.example/list.txt")
+    db.seed_feeds_from_config(cfg)
+    return ConfidenceScorer(db, cfg)
+
+
 def test_domain_authoritative_feed_forces_high(db):
     """Provenance-first domain HIGH: one designated authoritative source is
     enough, regardless of votes or the k-means boundary."""
@@ -2610,7 +2620,7 @@ def test_domain_authoritative_feed_forces_high(db):
            "scoring": {"tiering": {"method": "effective_votes"},
                        "high_confidence": {
                            "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
-    scorer = ConfidenceScorer(db, cfg)
+    scorer = _seeded_scorer(db, cfg)
     t = scorer._tier_from_votes
     # single authoritative source, ~1 vote, break far above -> HIGH
     assert t(1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='domain') == ConfidenceTier.HIGH
@@ -2644,7 +2654,7 @@ def test_domain_authoritative_revoked_when_degraded(db):
            "scoring": {"tiering": {"method": "effective_votes"},
                        "high_confidence": {
                            "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
-    scorer = ConfidenceScorer(db, cfg)
+    scorer = _seeded_scorer(db, cfg)
     scorer.feed_penalty = {"urlhaus_hostfile": 0.59}  # degraded
     assert scorer._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0,
                                    kind='domain') == ConfidenceTier.LOW
@@ -2664,10 +2674,46 @@ def test_domain_authoritative_second_healthy_source_still_forces_high(db):
            "scoring": {"tiering": {"method": "effective_votes"},
                        "high_confidence": {
                            "authoritative_domain_feeds": ["urlhaus_hostfile", "cert_pl"]}}}
-    scorer = ConfidenceScorer(db, cfg)
+    scorer = _seeded_scorer(db, cfg)
     scorer.feed_penalty = {"urlhaus_hostfile": 0.3}  # degraded; cert_pl healthy
     assert scorer._tier_from_votes(1.5, ["urlhaus_hostfile", "cert_pl"], 1.1, 10.0,
                                    kind='domain') == ConfidenceTier.HIGH
+
+
+def _authority_cfg():
+    return {"feeds": [{"name": "urlhaus_hostfile", "feed_type": "threat_intel",
+                       "url": "https://urlhaus.abuse.ch/downloads/hostfile/"}],
+            "scoring": {"tiering": {"method": "effective_votes"},
+                        "high_confidence": {
+                            "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
+
+
+def _is_authoritative(db, cfg):
+    return ConfidenceScorer(db, cfg)._tier_from_votes(
+        1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='domain') == ConfidenceTier.HIGH
+
+
+def test_domain_authority_survives_for_the_genuine_seeded_feed(db):
+    cfg = _authority_cfg()
+    db.seed_feeds_from_config(cfg)
+    assert _is_authoritative(db, cfg)
+
+
+def test_domain_authority_is_not_inherited_by_an_impostor_upload(db):
+    """Authority used to key on the NAME: an upload called urlhaus_hostfile
+    forced HIGH on every domain it listed (review 2026-09-22)."""
+    cfg = _authority_cfg()
+    db.add_feed(FeedSource(name="urlhaus_hostfile", url="uploads/urlhaus_hostfile.txt",
+                           feed_type=FeedType.THREAT_INTEL, local_file=True))
+    assert not _is_authoritative(db, cfg)
+
+
+def test_domain_authority_is_lost_when_the_feed_is_repointed(db):
+    cfg = _authority_cfg()
+    db.seed_feeds_from_config(cfg)
+    db.add_feed(FeedSource(name="urlhaus_hostfile", url="https://attacker.example/list.txt",
+                           feed_type=FeedType.THREAT_INTEL))
+    assert not _is_authoritative(db, cfg)
 
 
 def test_domain_authoritative_honors_require_threat_intel(db):

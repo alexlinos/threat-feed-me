@@ -25,10 +25,17 @@ COPY . .
 # uvicorn threatfeedme.app:app, etc.).
 RUN pip install --no-cache-dir -e .
 
-# Create directories for data persistence and make the entrypoint executable
+# Create directories for data persistence and make the entrypoint executable.
+# The runtime user owns ONLY what the app writes: data/ (DB, .env, uploads,
+# backups) and output/ (exports). It used to own all of /app, so anything
+# running as appuser could rewrite the application code or config.yaml.
 RUN mkdir -p /app/data /app/output && \
     chmod +x /app/entrypoint.sh && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /app/data /app/output
+
+# The source tree is now read-only to appuser; don't let Python try (and
+# silently fail) to write __pycache__ into it.
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Switch to non-root user
 USER appuser
