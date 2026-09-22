@@ -2708,6 +2708,25 @@ def test_domain_authority_is_not_inherited_by_an_impostor_upload(db):
     assert not _is_authoritative(db, cfg)
 
 
+def test_domain_authority_survives_the_production_rescore_path(db):
+    """Through pipeline.recalculate — the path the app actually uses — not a
+    hand-built scorer. scorer_config rebuilds 'feeds' from the DB without
+    URLs, so an early cut of the provenance check verified against nothing
+    and dropped every genuine authoritative domain to LOW."""
+    from threatfeedme import pipeline
+    cfg = _authority_cfg()
+    cfg["feeds"][0]["indicator_kind"] = "domain"
+    db.seed_feeds_from_config(cfg)
+    db.add_indicators_bulk([("malware-drop.top", {})], source="urlhaus_hostfile", kind="domain")
+    pipeline.recalculate(db, cfg)
+    assert db.get_indicator("malware-drop.top").tier == ConfidenceTier.HIGH
+    # ...and an impostor still gets nothing through the same path
+    db.add_feed(FeedSource(name="urlhaus_hostfile", url="https://attacker.example/list.txt",
+                           feed_type=FeedType.THREAT_INTEL, indicator_kind="domain"))
+    pipeline.recalculate(db, cfg)
+    assert db.get_indicator("malware-drop.top").tier != ConfidenceTier.HIGH
+
+
 def test_domain_authority_is_lost_when_the_feed_is_repointed(db):
     cfg = _authority_cfg()
     db.seed_feeds_from_config(cfg)

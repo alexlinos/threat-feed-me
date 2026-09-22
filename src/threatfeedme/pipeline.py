@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from threatfeedme import jobs
 from threatfeedme.database import Database
 from threatfeedme.feed_ingestor import FeedIngestor
 from threatfeedme.scorer import ConfidenceScorer
@@ -34,6 +35,13 @@ def scorer_config(db: Database, config: Dict) -> Dict:
             {'name': f.name, 'weight': f.weight}
             for f in db.get_feed_sources()
         ],
+        # The CONFIGURED feed URLs: the trust anchor domain authority is
+        # verified against (scorer.authoritative_sources). 'feeds' above is
+        # rebuilt from the DB and carries no URL, so without this every
+        # authoritative feed failed verification and live domain HIGH would
+        # have silently emptied (caught before release, v2.5.0).
+        'config_feed_urls': {f.get('name'): f.get('url')
+                             for f in config.get('feeds', []) or [] if isinstance(f, dict)},
     }
 
 
@@ -98,14 +106,17 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
 
 
 def recalculate(db: Database, config: Dict) -> int:
-    """Recalculate confidence scores for all indicators."""
-    scorer = ConfidenceScorer(db, scorer_config(db, config))
-    count = scorer.recalculate_all_scores()
-    # Tiers and scores changed in place — invisible to row counts — so tell
-    # the feed cache its bodies are stale (feed_cache.serve_fingerprint).
-    from threatfeedme.feed_cache import mark_scores_changed
-    mark_scores_changed(db)
-    return count
+    """Recalculate confidence scores for all indicators. Serialized with every
+    other heavy writer (jobs.write_lock): a request-triggered rescore waits
+    for a running one instead of racing it with stale reads."""
+    with jobs.write_lock:
+        scorer = ConfidenceScorer(db, scorer_config(db, config))
+        count = scorer.recalculate_all_scores()
+        # Tiers and scores changed in place — invisible to row counts — so tell
+        # the feed cache its bodies are stale (feed_cache.serve_fingerprint).
+        from threatfeedme.feed_cache import mark_scores_changed
+        mark_scores_changed(db)
+        return count
 
 
 # ---- Export (inlined from the Exporter class) ----
@@ -200,13 +211,14 @@ def export_tiers(db: Database, config: Dict) -> Dict:
     output_dir = config.get('output', {}).get('base_dir', './output')
     formats = config.get('output', {}).get('formats', ['text'])
     results = {}
-    for fmt in formats:
-        tier_results = {}
-        for tier in ConfidenceTier:
-            tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt, kind="ip")
-            tier_results[f"{tier.value}_domains"] = _export_tier(
-                db, tier, output_dir, format=fmt, kind="domain")
-        results[fmt] = tier_results
+    with jobs.write_lock:   # never interleave with a rescore rewriting tiers
+        for fmt in formats:
+            tier_results = {}
+            for tier in ConfidenceTier:
+                tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt, kind="ip")
+                tier_results[f"{tier.value}_domains"] = _export_tier(
+                    db, tier, output_dir, format=fmt, kind="domain")
+            results[fmt] = tier_results
     return results
 
 
@@ -350,6 +362,15 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     results."""
     fetched_values: Dict = {}
     fetched = fetch_feeds(db, config, only=only, collect_values=fetched_values)
+    # Network fetching stays outside the write lock (a slow feed must never
+    # block a rescore or a whitelist export); everything from here rewrites
+    # scoring state, so it runs serialized with the other heavy writers.
+    with jobs.write_lock:
+        return _after_fetch(db, config, fetched, fetched_values)
+
+
+def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict) -> Dict:
+    """run_refresh's post-fetch phase (caller holds jobs.write_lock)."""
     tick = datetime.now(timezone.utc).isoformat()
     # Churn ground truth, transition format: diff each cleanly-fetched
     # source's ACTUAL ingested values against its last snapshot and record

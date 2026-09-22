@@ -370,7 +370,17 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
     """Push the configured tier into UniFi firewall groups. Returns the sync
     summary, or None when the integration is disabled. Raises on failure —
     the refresh pipeline wraps this so a push error never breaks a refresh.
-    Outcomes (success AND failure) are recorded for the dashboard."""
+    Outcomes (success AND failure) are recorded for the dashboard.
+
+    Serialized (jobs.write_lock): the refresh, the whitelist export worker,
+    the API and the CLI all push, and two concurrent syncs could interleave
+    their group edits on the gateway."""
+    from threatfeedme import jobs
+    with jobs.write_lock:
+        return _push_to_unifi(db, config)
+
+
+def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
     pusher = UniFiPusher.from_config(config, db=db)
     if pusher is None:
         return None

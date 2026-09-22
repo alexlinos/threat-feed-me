@@ -27,6 +27,24 @@ def predictor_live(config: Dict) -> bool:
     return os.path.exists(pcfg.get('model_path', 'data/predictor_model.txt'))
 
 
+def _differs(update, previous, eps: float = 1e-6) -> bool:
+    """Whether a rescore result (score, tier, votes, ip) changes what is
+    stored (score, tier, votes). Never-scored rows (votes None) always count.
+
+    eps is set by what a score is USED for, not float precision: recency
+    decays continuously, so every row's score drifts a hair between any two
+    rescores — even milliseconds apart — and at 1e-9 every row counted as
+    changed, defeating the point. Scores are shown to 2-3 decimals and order
+    the served list; drift under 1e-6 is invisible to both. A tier or vote
+    change is always written, and the error can't accumulate: the next
+    rescore compares against the stored value, so drift past eps is written."""
+    score, tier, votes, _ip = update
+    old_score, old_tier, old_votes = previous
+    if tier != old_tier or old_votes is None or old_score is None:
+        return True
+    return abs(score - old_score) > eps or abs(votes - old_votes) > eps
+
+
 # False-positive penalty tuning. A feed's reputation weight is multiplied by
 # max(FP_MIN_FACTOR, 1 - FP_PENALTY_K * fp_rate), where fp_rate is the fraction
 # of the feed's reported IPs that users flagged as false positives. At K=10, a
@@ -130,8 +148,12 @@ class ConfidenceScorer:
         # same-named feed in config.feeds — same URL, and not an upload.
         auth_cfg = set(((scoring.get('high_confidence') or {})
                         .get('authoritative_domain_feeds')) or [])
-        config_urls = {f.get('name'): f.get('url')
-                       for f in config.get('feeds', []) or [] if isinstance(f, dict)}
+        # pipeline.scorer_config passes the configured URLs explicitly (its
+        # 'feeds' list is rebuilt from the DB, without URLs); direct callers
+        # pass a config whose 'feeds' carry them.
+        config_urls = config.get('config_feed_urls') or {
+            f.get('name'): f.get('url')
+            for f in config.get('feeds', []) or [] if isinstance(f, dict)}
         self.authoritative_sources = set(auth_cfg)   # no DB (unit tests): trust config
         if self.db is not None:
             try:
@@ -203,10 +225,11 @@ class ConfidenceScorer:
     def recalculate_all_scores(self) -> int:
         """Recalculate scores for all indicators.
 
-        Data is loaded once and written back in a single transaction. With
-        effective-votes tiering this is a two-pass computation: evidence for
-        every indicator first, then tier boundaries from the resulting vote
-        distribution (natural breaks over the floors), then tiers.
+        Data is loaded once. With effective-votes tiering this is a two-pass
+        computation: evidence for every indicator first, then tier boundaries
+        from the resulting vote distribution (natural breaks over the floors),
+        then tiers. Only rows whose score, tier or votes actually changed are
+        written, in short chunked transactions (_write_changes).
         """
         whitelist_map = self.db.get_whitelist_map()
         netblocks = self._load_netblock_sources()
@@ -216,11 +239,14 @@ class ConfidenceScorer:
         # the largest allocation in the process, which starved 2 GB hosts
         # (small Synology/NAS deployments) during the hourly rescore.
         evidence = []
+        previous = []   # (score, tier, votes) as stored, aligned with evidence
         count = 0
         for indicator in self.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
             count += 1
             score, votes, sources = self._evidence(indicator, netblocks, whitelist_map)
             evidence.append((indicator.ip, score, votes, sources, indicator.kind))
+            previous.append((indicator.confidence_score, indicator.tier.value,
+                             indicator.effective_votes))
 
         if self.tier_method == 'legacy':
             updates = [
@@ -264,19 +290,30 @@ class ConfidenceScorer:
                 for ip, score, votes, sources, kind in evidence
             ]
 
-        if updates:
-            conn = self.db._get_connection()
-            try:
-                conn.executemany(
+        changed = [u for u, prev in zip(updates, previous) if _differs(u, prev)]
+        self._write_changes(changed)
+        logger.info(f"[score] rescored {count} indicators; {len(changed)} changed")
+        return count
+
+    # Rows per write transaction, and how long one waits on a busy writer.
+    _WRITE_CHUNK = 5000
+    _WRITE_BUSY_TIMEOUT_MS = 120000
+
+    def _write_changes(self, changed) -> None:
+        """Write rescore results in short transactions. This used to be ONE
+        executemany over every row — 10-20 s at ~760k indicators — which held
+        SQLite's single writer lock past the 5 s busy_timeout, so any other
+        writer (an API edit, the offline predict pass) could fail with
+        "database is locked" (review 2026-09-22). Most rows don't move between
+        rescores, so writing only the changed ones also shrinks the work."""
+        for i in range(0, len(changed), self._WRITE_CHUNK):
+            with self.db._cursor() as cur:
+                cur.execute(f"PRAGMA busy_timeout = {self._WRITE_BUSY_TIMEOUT_MS}")
+                cur.executemany(
                     "UPDATE indicators SET confidence_score = ?, tier = ?, "
                     "effective_votes = ? WHERE ip = ?",
-                    updates,
+                    changed[i:i + self._WRITE_CHUNK],
                 )
-                conn.commit()
-            finally:
-                conn.close()
-
-        return count
 
     # ==================== SCORING INTERNALS ====================
 
