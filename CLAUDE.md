@@ -546,6 +546,50 @@ externally); `?limit=N` on served feeds. Usability items (High-vs-Medium
 recommendation conflict, FP-default whitelist reason, add-feed overwrite,
 pulse-row false green / double-counted "new in 24h") also queued.
 
+## v2.5.0 (branch release/2.5.0; "the release that gets us noticed")
+
+Work happens on `release/2.5.0` until tested; main stays the released
+version (maintainer's call, 2026-09-23). Positioning: **the open-source
+MineMeld replacement** (README + site lead with it; MineMeld hosted EOL
+2021-08-01, archived 2023-03). What landed, with the decisions behind it:
+
+- **Vote grace, 3 days (maintainer-ratified after measurement)**: a feed's vote
+  lasts while it lists an indicator and `scoring.vote_grace_days` after
+  (`source_left`, pruned before every rescore; `source_seeded` marks
+  baselines). Prod snapshot: hard cut IP HIGH 36.8k -> 5.0k (rejected: most
+  feeds are short windows, cross-day corroboration is real); 3d -> ~10.7k at
+  rollout, 10.7-17k steady. The HIGH drop at rollout is the fix working.
+- **Predictor leak fixed**: point-in-time features (`live_source_count`, first
+  seen as of T, density excluding self), corpus-at-T population, IPs only.
+  Honest AUROC **0.82** (was quoted 0.86-0.88; baseline 0.737 -> 0.598). Old
+  models are refused by feature name: run `scripts/predictor.sh both` right
+  after rolling 2.5.0.
+- **CrowdSec both ways** (`crowdsec.py`): publish = generation-swapped ban
+  decisions (post new, then expire old by scenario; never a gap), 24h
+  duration, re-published at half-duration even on the skip-rescore path;
+  pull = `crowdsec_local/community/lists` split by origin, own decisions
+  excluded server- AND client-side. LAPI treated like the UniFi gateway
+  (SSRF-exempt for that host only, creds bound + cleared on host change).
+  Live-verified against CrowdSec 1.8.1 (`tests/test_crowdsec_live.py`,
+  opt-in via TFM_CS_*). Never publish into a honeypot's CrowdSec.
+- **TAXII 2.1** (`taxii.py`, read-only, 6 collections = the 6 feed URLs, same
+  row_included rules, exempt from the host check like /feeds). Verified with
+  the OASIS taxii2-client + stix2-validator (341k objects, 0 invalid).
+  Discovery must use `_feed_base(..., swap_loopback=False)`.
+- Also: Host-header allowlist (report-only until set), connect-time SSRF
+  pinning, body caps, least-privilege image, lean cached feed serving with
+  ETag + `?limit=N`, single heavy-writer lock + changed-rows-only rescore,
+  "last polled by" per URL (`polls.py`, no IPs stored), System panel,
+  first-run card, masked key dialog, recommend Medium, 409 on duplicate feed
+  names.
+
+**Test-isolation trap, third time**: core initializes lazily from
+./config.yaml + ./data, and `monkeypatch.setattr(core, "db", ...)` READS the old
+value (a lazy init). conftest now defaults CONFIG_PATH to a temp config AND
+fails the run if anything under data/ changes. In tests, patch
+`module.__dict__` via `monkeypatch.setitem`, on the live module (suites purge
+and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
