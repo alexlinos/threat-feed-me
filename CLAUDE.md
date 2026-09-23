@@ -546,7 +546,7 @@ externally); `?limit=N` on served feeds. Usability items (High-vs-Medium
 recommendation conflict, FP-default whitelist reason, add-feed overwrite,
 pulse-row false green / double-counted "new in 24h") also queued.
 
-## v2.5.0 (branch release/2.5.0; "the release that gets us noticed")
+## v2.5.0 "Flytrap" (branch release/2.5.0; "the release that gets us noticed")
 
 Work happens on `release/2.5.0` until tested; main stays the released
 version (maintainer's call, 2026-09-23). Positioning: **the open-source

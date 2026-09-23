@@ -29,6 +29,11 @@ always hungry.
 - **Knows when something's wrong.** Per-feed health, uniqueness and overlap,
   "last polled by FortiGate" beside every URL, and nothing phones home.
 
+**New in 2.5 "Flytrap":** a TAXII 2.1 server, CrowdSec in both directions,
+votes that expire when a feed drops an indicator, "last polled by" proof on
+every URL, and a MineMeld migration path. See
+[Upgrading to 2.5](#upgrading) before you pull it: High gets smaller on purpose.
+
 ### Coming from MineMeld?
 
 Palo Alto Networks retired MineMeld (the hosted version reached end of life on
@@ -532,7 +537,7 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
-**Upgrading to 2.5.** Two changes you will notice:
+**Upgrading to 2.5 ("Flytrap").** Two changes you will notice:
 
 - **High gets smaller, on purpose.** A feed's vote now expires 3 days after the
   feed drops an indicator, where before it lasted until the indicator aged out.
