@@ -605,6 +605,33 @@ obvious from the code:
   use. A missing flag is off, not "legacy locked" (no release ever saved a
   list before the flag).
 
+**TAXII 2.1 as a feed (2.5, `stix_ingest.py` + the `taxii21` scraper)**:
+operator adds a collection URL with format `taxii21` (a closed map in
+routers/feeds.py; clients never name scrapers). Indicators only (bare SCOs are
+context, blocking them takes down victims); only unconditional patterns (AND
+binds tighter than OR: a chain with two value comparisons, e.g. IP AND port,
+is skipped, never widened; `*_ref.type` annotations are dropped first so
+MISP's dst_ref shape works); revoked / expired / `benign` drop out. Every
+refresh reads the WHOLE collection (added_after would only see arrivals, so
+nothing would ever leave); a read cut short by the page cap FAILS instead of
+recording mass leaves. One kind per feed. Verified by a TFM->TAXII->TFM round
+trip (tests) and live over HTTP: 24,118 IPs / 81,798 domains, exact match.
+
+**MineMeld claims (research 2026-09-23; Reddit was unreachable, sources are
+LIVEcommunity, the archived GitHub repos/issues, blogs)**: we cover its core
+job (open feeds -> confidence-tiered EDLs), whitelists, TAXII 2.1 in/out and
+non-PAN firewalls. We do NOT cover its most visible job, the O365 and
+AWS/Azure/GCP allow-lists (2.6, `ROADMAP.md`), nor DAG push, syslog miners,
+TAXII 1.x or per-entry aging of manual lists. Say "replaces MineMeld's
+threat-feed pipeline", not a blanket "replaces MineMeld"; the coverage table
+in `docs/minemeld.html` is the source of truth for claims. Palo Alto's own
+successors are Cortex XSOAR TIM and the EDL Hosting Service: name them
+fairly. MineMeld/PAN-OS names are used nominatively, with the
+not-affiliated line on the site, README and video end card.
+
+**Parked (maintainer, 2026-09-23)**: 2.5 is complete on `release/2.5.0` and
+parked. Nothing is merged, tagged or rolled until the maintainer says so.
+
 **Test-isolation trap, third time**: core initializes lazily from
 ./config.yaml + ./data, and `monkeypatch.setattr(core, "db", ...)` READS the old
 value (a lazy init). conftest now defaults CONFIG_PATH to a temp config AND

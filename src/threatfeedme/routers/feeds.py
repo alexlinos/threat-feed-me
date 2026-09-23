@@ -57,6 +57,11 @@ def get_feeds(_=Depends(require_auth)):
 
 # ---------------------- Feed source management ----------------------
 
+# Formats an operator may pick for a feed they add, and the scraper each maps
+# to. Deliberately a closed list: scraper names are never taken from a client.
+_FORMAT_SCRAPERS = {"list": None, "taxii21": "taxii21"}
+
+
 @router.get("/api/feed-sources")
 def get_feed_sources(_=Depends(require_auth)):
     """List configured feed sources."""
@@ -80,6 +85,17 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
         raise HTTPException(status_code=400, detail="Feed URL must start with http:// or https://")
     if request.indicator_kind not in ("ip", "domain"):
         raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
+    scraper = _FORMAT_SCRAPERS.get(request.format, "unknown")
+    if scraper == "unknown":
+        raise HTTPException(status_code=400, detail="format must be 'list' or 'taxii21'")
+    if scraper == "taxii21":
+        if request.local_file:
+            raise HTTPException(status_code=400, detail="A TAXII feed must be a URL")
+        from threatfeedme.feed_ingestor import taxii_objects_url
+        try:
+            taxii_objects_url(url)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     # auth_env names the env var whose VALUE is sent as this feed's key, so it
     # must never name someone else's secret (UNIFI_PASSWORD, DASHBOARD_*) or a
     # process knob (HTTPS_PROXY). See credentials.py.
@@ -102,6 +118,7 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
             local_file=request.local_file,
             enabled=request.enabled,
             indicator_kind=request.indicator_kind,
+            scraper=scraper,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid feed: {e}")

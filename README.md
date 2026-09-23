@@ -52,11 +52,16 @@ hand it to firewalls and SIEMs, with less to maintain:
 | Aggregator processors (dedupe, merge) | Dedupe across feeds, then overlap-discounted consensus scoring into confidence tiers |
 | Whitelist miners | Whitelist by IP, CIDR, domain or `*.wildcard`, scoped globally, per feed or per tier |
 | EDL feed outputs (PAN-OS) | `/feeds/{high,medium,all}.txt` and `/feeds/domains/...`: plain one-per-line lists that PAN-OS External Dynamic Lists and every other firewall accept |
+| TAXII miners (TAXII 1.x feeds) | TAXII **2.1** collections as feeds: MISP, OpenCTI or any TAXII 2.1 server |
 | TAXII DataFeed output (TAXII 1.1 / STIX 1.x) | TAXII **2.1** / STIX **2.1**, read-only, six collections |
+| Office 365 / AWS / Azure / GCP miners (allow-lists) | Not yet: application lists are on the [2.6 roadmap](ROADMAP.md) |
 | Node graph you wire and maintain | Nothing to wire: add a feed, it votes |
 
-What it doesn't do: build arbitrary processing graphs, speak TAXII 1.x, or
-accept writes over TAXII. If you need a full threat-intel platform with case
+What it doesn't do (yet): the Office 365 and cloud IP-range allow-lists (2.6),
+arbitrary processing graphs, TAXII 1.x, writes over TAXII, syslog-driven lists,
+or pushing PAN-OS Dynamic Address Groups. The
+[migration guide](https://alexlinos.github.io/threat-feed-me/minemeld.html)
+goes through every common MineMeld use. If you need a full threat-intel platform with case
 management, look at OpenCTI or MISP; Threat Feed Me is the lightweight piece
 that turns public intel into lists your devices enforce.
 
@@ -213,8 +218,10 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
 - **Votes that expire** *(v2.5)*: a feed's vote on an indicator lasts while
   it lists it and for 3 days after (`scoring.vote_grace_days`), so a feed that
   dropped an IP long ago stops corroborating it
-- **TAXII 2.1 server** *(v2.5)*: the same six lists as STIX 2.1 Indicators for
-  SIEMs and TIPs (Sentinel, QRadar, Splunk, MISP, OpenCTI); see
+- **TAXII 2.1 in both directions** *(v2.5)*: a server with the same six lists
+  as STIX 2.1 Indicators for SIEMs and TIPs (Sentinel, QRadar, Splunk, MISP,
+  OpenCTI), and TAXII 2.1 collections as feeds, so a MISP, OpenCTI or ISAC
+  collection votes like any other source; see
   [TAXII 2.1](#taxii-21-for-siems-and-tips)
 - **CrowdSec, both directions** *(v2.5)*: publish a tier to your CrowdSec
   bouncers, and pull your CrowdSec detections, the community blocklist and
@@ -508,6 +515,31 @@ in place. `added_after` and paging are supported. Point Microsoft Sentinel's
 discovery URL; the dashboard's Connect view shows it with a Copy button. Like the feed
 URLs, it's unauthenticated by design, so restrict who can reach the port.
 
+**Reading a TAXII 2.1 collection as a feed.** Add a feed with format *TAXII 2.1
+collection* and paste the collection URL (`…/collections/<id>/`). Tick *needs a
+key* if the server wants one, then use the feed's **Set key** to paste the
+whole `Authorization` value: `Bearer <token>` for OpenCTI, the API key for
+MISP, or `Basic <base64 of user:password>`. The key goes only to that server.
+What is read, on purpose:
+
+- **Indicators only.** Bare observables in a collection are usually context
+  (a victim, an analyst's host, a sinkhole), so they never become blocks.
+- **Only patterns that name a value outright**:
+  `[ipv4-addr:value = '…']`, domains, URLs (the host is kept), `ISSUBSET` CIDRs,
+  OR lists, and MISP's `dst_ref.type … AND dst_ref.value …` shape. A pattern
+  that makes the value conditional, such as an IP *and* a port, or anything
+  with `WITHIN`, `FOLLOWEDBY` or `NOT`, is skipped and counted, never widened
+  into a full block.
+- **Current indicators only.** Revoked ones, ones past `valid_until`, and ones
+  typed `benign` drop out, so an indicator leaves the feed when its source
+  withdraws it. Every refresh reads the whole collection; a read cut short
+  fails the refresh instead of recording mass removals.
+- **One kind per feed.** A collection that mixes IPs and domains is added
+  twice, once as an IP feed and once as a domain feed.
+
+A threat-feed-me can read another one's TAXII server this way, which is how
+the round trip is tested.
+
 ### Custom lists
 
 Add your own feeds from the dashboard: a remote **URL feed**, or **upload a list**
@@ -679,6 +711,10 @@ TAXII) are spelled out, component by component, in [PRIVACY.md](PRIVACY.md).
 ## License
 
 MIT
+
+MineMeld, PAN-OS, AutoFocus and Cortex XSOAR are trademarks of Palo Alto Networks,
+Inc. Threat Feed Me is an independent open-source project, not affiliated with or
+endorsed by Palo Alto Networks; product names are used only to describe compatibility.
 
 ## Geo attribution
 

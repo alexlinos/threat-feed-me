@@ -78,7 +78,13 @@ async function addFeed(e) {
         feed_type: document.getElementById('f-type').value,
         weight: isNaN(w) ? 1.0 : w,
         indicator_kind: document.getElementById('f-kind').value,
+        format: document.getElementById('f-format').value,
     };
+    // A keyed TAXII feed gets its own TFM_FEED_<NAME> variable (the only kind
+    // of custom key the server accepts, credentials.py); Set key fills it in.
+    if (body.format === 'taxii21' && document.getElementById('f-needs-key').checked) {
+        body.auth_env = 'TFM_FEED_' + body.name.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    }
     const post = () => apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     let r = await post();
     let j = await r.json().catch(() => ({}));
@@ -130,13 +136,27 @@ async function toggleFeed(el, name) {
         el.disabled = false;
     }
 }
+function feedFormatChanged(sel) {
+    const taxii = sel.value === 'taxii21';
+    document.getElementById('f-key-wrap').hidden = !taxii;
+    document.getElementById('f-url').placeholder = taxii
+        ? 'https://taxii.example.org/api/collections/<id>/' : 'https://example.com/blocklist.txt';
+}
 // API keys go through a masked modal. They used to be typed into prompt(),
 // which echoes the secret in plain text on screen and in screen shares.
 // auth_env may declare several credentials (comma-separated, e.g. HoneyDB's
 // id + key): one password field each; Cancel saves nothing.
 let keyModalFeed = null;
-function setApiKey(name, envVar) {
+function setApiKey(name, envVar, taxii) {
     keyModalFeed = name;
+    // TAXII servers differ in how they take a key, and the value is sent
+    // verbatim as the Authorization header, so say what to paste.
+    const hint = document.getElementById('key-modal-hint');
+    if (hint) {
+        hint.hidden = !taxii;
+        hint.textContent = taxii ? 'Paste the whole Authorization header value: "Bearer <token>" for OpenCTI, ' +
+            'the API key for MISP, or "Basic <base64 of user:password>".' : '';
+    }
     const box = document.getElementById('key-modal-fields');
     box.replaceChildren();
     envVar.split(',').map(v => v.trim()).filter(Boolean).forEach((v, i) => {

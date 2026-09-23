@@ -55,7 +55,10 @@ the request headers — and only to that feed's own host: a built-in key is
 never sent to any other host (even if the feed's URL is edited), and no key
 is forwarded when a provider redirects to a different host or downgrades
 HTTPS to HTTP. Keys for your own custom feeds (named `TFM_FEED_*`) go to the
-feed URL you configured. The Talos Snort.org scraper is the one exception to
+feed URL you configured. A TAXII 2.1 collection you add as a feed is read the
+same way: an HTTPS GET of the collection's objects, page by page, carrying
+the key you saved for it in the `Authorization` header, to that server
+only. The Talos Snort.org scraper is the one exception to
 the plain GET: it uses a browser User-Agent and accepts Snort.org's terms
 form on your behalf, because the list is gated behind that form. Each
 provider's own privacy policy governs what they do with the request.

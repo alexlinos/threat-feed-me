@@ -359,7 +359,9 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "url": fsrc.url,
             "feed_type": fsrc.feed_type.value,
             "kind": fsrc.indicator_kind or "ip",
-            "source_kind": "file" if fsrc.local_file else "url",
+            "source_kind": ("file" if fsrc.local_file
+                            else "taxii 2.1" if fsrc.scraper == "taxii21" else "url"),
+            "taxii": fsrc.scraper == "taxii21",
             "weight": fsrc.weight,
             "enabled": fsrc.enabled,
             "status": st.status if st else None,          # None = never run

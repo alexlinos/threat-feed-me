@@ -22,6 +22,7 @@
 <meta name="twitter:description" content="Consensus-scored block lists for firewalls and DNS filters, TAXII 2.1 for SIEMs, publishing to CrowdSec and UniFi. On-prem, one container, no API keys.">
 <meta name="twitter:image" content="https://alexlinos.github.io/threat-feed-me/assets/social-preview.png">
 
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Threat Feed Me", "applicationCategory": "SecurityApplication", "operatingSystem": "Linux (Docker), amd64 and arm64", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://opensource.org/licenses/MIT", "url": "https://alexlinos.github.io/threat-feed-me/", "codeRepository": "https://github.com/alexlinos/threat-feed-me", "description": "Open-source, on-prem threat-intelligence aggregator: free threat feeds scored by independent votes into firewall block lists (EDLs), TAXII 2.1 in and out, and publishing to CrowdSec and UniFi."}</script>
 <style>
   :root{
     --bg:#0e131a; --panel:#141b24; --panel-2:#10161e; --raised:#17202b;
@@ -179,7 +180,7 @@
 <nav class="nav" aria-label="Site">
   <div class="wrap">
     <a class="brand" href="#top"><svg viewBox="0 0 128 128" aria-hidden="true"><path d="M22 74 C12 90 27 102 19 120" stroke="#0c9064" stroke-width="7" fill="none" stroke-linecap="round"/><path d="M24 101 C13 95 6 99 3 107 C13 111 20 108 24 101 Z" fill="#0c9064"/><g transform="translate(24 60)"><g transform="rotate(-10)"><path d="M0 0 C-7 -10 -1 -24 14 -30 C40 -40 70 -32 84 -8 L86 0 L79 8 L72 0 L65 8 L58 0 L51 8 L44 0 L37 8 L30 0 L23 7 L16 0 Z" fill="#10b981"/></g><g transform="rotate(10)"><path d="M0 0 C-7 10 -1 24 14 30 C40 40 70 32 84 8 L86 0 L80 0 L73 -8 L66 0 L59 -8 L52 0 L45 -8 L38 0 L31 -8 L24 0 L16 0 Z" fill="#0c9064"/></g></g><circle cx="117" cy="60" r="6.5" fill="#f87171"/></svg><span>Threat Feed Me<span class="bang">!</span></span></a>
-    <div class="links"><a href="#walkthrough">Walkthrough</a><a href="#minemeld">From MineMeld</a><a href="#deploy">Deploy</a><a href="#tiers">Tiers</a><a href="#delivery">Integrations</a></div>
+    <div class="links"><a href="#walkthrough">Walkthrough</a><a href="minemeld.html">From MineMeld</a><a href="#deploy">Deploy</a><a href="#tiers">Tiers</a><a href="#delivery">Integrations</a></div>
     <a class="gh" href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">GitHub →</a>
   </div>
 </nav>
@@ -281,12 +282,15 @@
           <tr><td>Aggregator processors</td><td>Dedupe across feeds, then overlap-discounted consensus scoring into High / Medium / Everything</td></tr>
           <tr><td>Whitelist miners</td><td>Whitelist IPs, CIDRs, domains or <code>*.wildcards</code>, globally, per feed or per tier</td></tr>
           <tr><td>EDL feed outputs</td><td>Plain one-per-line lists at <code>/feeds/…</code> that PAN-OS External Dynamic Lists (and every other firewall) take as-is</td></tr>
+          <tr><td>TAXII miners</td><td><b>TAXII 2.1</b> collections as feeds (MISP, OpenCTI, ISACs on 2.1)</td></tr>
           <tr><td>TAXII DataFeed (TAXII 1.1 / STIX 1.x)</td><td>A read-only <b>TAXII 2.1</b> server of <b>STIX 2.1</b> Indicators</td></tr>
+          <tr><td>Office 365 and cloud IP-range miners</td><td>Not yet: application allow-lists are planned for 2.6</td></tr>
           <tr><td>A node graph you build and maintain</td><td>Nothing to wire: add a feed and it votes</td></tr>
         </tbody>
       </table>
       </div>
-      <p class="note">Not included: arbitrary processing graphs, TAXII 1.x, or writes over TAXII. Need a full
+      <p class="note"><a href="minemeld.html">The full migration guide</a> covers every common MineMeld use, what carries
+        over and what doesn't. Not included: arbitrary processing graphs, TAXII 1.x, or writes over TAXII. Need a full
         threat-intel platform with case management? Pair it with OpenCTI or MISP; Threat Feed Me is the light
         piece that turns public intel into lists your devices enforce.</p>
     </div>
@@ -421,6 +425,8 @@
       <a href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">github.com/alexlinos/threat-feed-me</a>
     </div>
     <div style="margin-top:8px">Feed it threats. It's always hungry.</div>
+    <p style="color:var(--dim);font-size:.82rem;margin-top:10px">MineMeld and PAN-OS are trademarks of Palo Alto Networks, Inc.
+      Threat Feed Me is independent and not affiliated with or endorsed by Palo Alto Networks.</p>
   </div>
 </footer>
 

@@ -35,6 +35,11 @@ class FeedRequest(BaseModel):
     # 'ip' (default) or 'domain' — what the feed's lines parse as (D8: feeds
     # declare their kind; domains are never sniffed out of IP feeds).
     indicator_kind: str = "ip"
+    # How the URL's body is read: 'list' (one entry per line, CSV, hosts
+    # file, URLs) or 'taxii21' (a TAXII 2.1 collection of STIX indicators).
+    # Maps to a scraper server-side; a client can never name a scraper
+    # directly (the crowdsec_* ones carry integration credentials).
+    format: str = "list"
     # A name that already exists is refused (409) unless this is set: adding a
     # feed used to replace a same-named one silently, shipped defaults included.
     overwrite: bool = False

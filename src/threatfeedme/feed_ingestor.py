@@ -996,3 +996,117 @@ def _scrape_phishtank_urls(self: FeedIngestor, feed: FeedSource):
 
 FeedIngestor.register_scraper("drb_ra_domains")(_scrape_drb_ra_domains)
 FeedIngestor.register_scraper("phishtank_urls")(_scrape_phishtank_urls)
+
+
+# =============================================================================
+# TAXII 2.1 collection (v2.5.0): a MISP, OpenCTI or commercial TAXII server
+# as a feed. Parsing lives in stix_ingest.py (indicators only, unconditional
+# patterns only; see its docstring for why so little is read).
+# =============================================================================
+#
+# Membership semantics: every refresh reads the WHOLE collection and keeps
+# what is current (not revoked, not past valid_until). An incremental
+# added_after read would only ever see arrivals, so a withdrawn indicator
+# would never leave; the churn log and vote grace need true membership. For
+# the same reason a read cut short by the page cap FAILS the fetch rather
+# than recording the partial set as a mass leave (the OTX rule).
+#
+# The feed URL is the collection (…/collections/<id>/) or its objects
+# endpoint. Paging uses the TAXII 2.1 `next` token as a query parameter on
+# that same URL, so a hostile server can't steer the key to another origin
+# (redirects are handled by _get_following_redirects, which drops the auth
+# header across origins).
+_TAXII_ACCEPT = "application/taxii+json;version=2.1"
+_TAXII_PAGE_LIMIT = 1000
+_TAXII_MAX_PAGES = 250
+_TAXII_MAX_OBJECTS = 250_000
+
+
+def taxii_objects_url(url: str) -> str:
+    """The objects endpoint for a collection URL, or ValueError if the URL
+    isn't one (the add-feed API uses this to reject a discovery/api-root URL
+    with a useful message instead of failing on every refresh)."""
+    parts = urlsplit(url.strip())
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        raise ValueError("TAXII collection URL must be http(s)://host/…/collections/<id>/")
+    path = parts.path if parts.path.endswith("/") else parts.path + "/"
+    if not path.endswith("/objects/"):
+        segs = [s for s in path.split("/") if s]
+        if len(segs) < 2 or segs[-2] != "collections":
+            raise ValueError("Paste a TAXII 2.1 collection URL ending in /collections/<id>/ "
+                             "(not the discovery or API-root URL)")
+        path += "objects/"
+    return f"{parts.scheme.lower()}://{parts.netloc}{path}"
+
+
+def _scrape_taxii21(self: FeedIngestor, feed: FeedSource):
+    from urllib.parse import urlencode
+    from threatfeedme.stix_ingest import indicator_values
+    try:
+        base = taxii_objects_url(feed.url)
+    except ValueError as e:
+        raise RuntimeError(f"{feed.name}: {e}")
+    headers = {"User-Agent": "ThreatFeedMe/1.0", "Accept": _TAXII_ACCEPT}
+    if feed.requires_auth:
+        env_vars = [v.strip() for v in (feed.auth_env or "").split(",") if v.strip()]
+        if len(env_vars) != 1 or not os.environ.get(env_vars[0]):
+            raise RuntimeError(f"{feed.name}: set the TAXII key with Set key "
+                               f"({feed.auth_env or 'no key variable'})")
+        if not self.key_policy.may_send(env_vars[0], base):
+            raise RuntimeError(self.key_policy.send_refusal(env_vars[0], base))
+        headers[feed.auth_header or "Authorization"] = os.environ[env_vars[0]]
+
+    objects: List[dict] = []
+    token = None
+    for _ in range(_TAXII_MAX_PAGES):
+        params = {"limit": str(_TAXII_PAGE_LIMIT)}
+        if token:
+            params["next"] = token
+        response = self._get_with_retries(f"{base}?{urlencode(params)}", headers)
+        if response.status_code in (401, 403):
+            raise RuntimeError(f"{feed.name}: the TAXII server refused the credentials "
+                               f"(HTTP {response.status_code})")
+        if response.status_code == 406:
+            raise RuntimeError(f"{feed.name}: the server doesn't speak TAXII 2.1 (HTTP 406)")
+        response.raise_for_status()
+        try:
+            envelope = json.loads(_read_capped(response, feed.name))
+        except ValueError:
+            raise RuntimeError(f"{feed.name}: response is not TAXII JSON")
+        page = envelope.get("objects") if isinstance(envelope, dict) else None
+        if page is None:
+            page = []
+        if not isinstance(page, list):
+            raise RuntimeError(f"{feed.name}: malformed TAXII envelope")
+        objects.extend(o for o in page if isinstance(o, dict))
+        if len(objects) > _TAXII_MAX_OBJECTS:
+            raise RuntimeError(f"{feed.name}: collection has more than {_TAXII_MAX_OBJECTS:,} "
+                               "objects; point the feed at a narrower collection")
+        if not envelope.get("more"):
+            break
+        token = envelope.get("next")
+        if not isinstance(token, str) or not token or len(token) > 4096:
+            raise RuntimeError(f"{feed.name}: TAXII server said more=true without a next token")
+    else:
+        raise RuntimeError(f"{feed.name}: collection is longer than {_TAXII_MAX_PAGES} pages; "
+                           "refusing a partial read (it would look like mass removals)")
+
+    values, stats = indicator_values(objects, feed.indicator_kind)
+    logger.info(f"{feed.name}: TAXII {stats['indicators']} indicators, {len(values)} "
+                f"{feed.indicator_kind} values; skipped revoked={stats['revoked']} "
+                f"expired={stats['expired']} benign={stats['benign']} "
+                f"conditional={stats['conditional']} other-kind={stats['other_kind']} "
+                f"non-STIX={stats['not_stix']}")
+    if not values:
+        # Surface WHY instead of the generic "scraper returned nothing": the
+        # usual cause is a collection of the other kind, or every indicator
+        # being conditional (IP-and-port) patterns.
+        raise RuntimeError(
+            f"{feed.name}: no current {feed.indicator_kind} indicators in the collection "
+            f"({stats['indicators']} indicators; {stats['other_kind']} of another kind, "
+            f"{stats['conditional']} conditional, {stats['revoked'] + stats['expired']} "
+            "revoked or expired)")
+    return "\n".join(values)
+
+
+FeedIngestor.register_scraper("taxii21")(_scrape_taxii21)

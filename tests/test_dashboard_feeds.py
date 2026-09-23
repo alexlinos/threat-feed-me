@@ -1020,6 +1020,32 @@ def test_host_check_resolve(client, monkeypatch):
         assert client.post("/api/host-check/resolve", json={"name": bad}).status_code == 400
 
 
+def test_add_a_taxii_collection_feed(client):
+    """format=taxii21 maps to the taxii21 scraper; the URL must be a collection
+    (a discovery or API-root URL fails every refresh, so it's refused here);
+    a client can never name a scraper directly."""
+    from threatfeedme import dashboard
+    base = {"name": "misp_ips", "feed_type": "threat_intel", "indicator_kind": "ip"}
+    r = client.post("/api/feeds", json={**base, "url": "https://misp.example.org/taxii2/", "format": "taxii21"})
+    assert r.status_code == 400 and "collections" in r.json()["detail"]
+    r = client.post("/api/feeds", json={**base, "url": "https://misp.example.org/taxii2/root/collections/abc/",
+                                        "format": "taxii21", "auth_env": "TFM_FEED_MISP_IPS"})
+    assert r.status_code == 200, r.text
+    feed = dashboard.db.get_feed_source("misp_ips")
+    assert feed.scraper == "taxii21" and feed.requires_auth and feed.auth_env == "TFM_FEED_MISP_IPS"
+    assert "taxii 2.1" in client.get("/").text
+    try:
+        r = client.post("/api/feeds", json={**base, "name": "sneaky", "url": "https://x.example/list.txt",
+                                            "format": "crowdsec_lapi"})
+        assert r.status_code == 400
+        r = client.post("/api/feeds", json={**base, "name": "sneaky", "url": "https://x.example/list.txt",
+                                            "scraper": "crowdsec_lapi"})   # unknown field: ignored
+        assert r.status_code == 200 and dashboard.db.get_feed_source("sneaky").scraper is None
+    finally:
+        client.delete("/api/feeds/misp_ips")
+        client.delete("/api/feeds/sneaky")
+
+
 def test_feed_etag_304_and_limit_over_http(client):
     """Firewalls re-polling an unchanged list get a 304; ?limit=N serves the
     top N by score (for entry-capped firewalls)."""
