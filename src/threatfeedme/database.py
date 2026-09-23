@@ -118,8 +118,15 @@ class Database:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._init_schema()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+    def _get_connection(self, any_thread: bool = False) -> sqlite3.Connection:
+        """any_thread=True is for connections owned by a GENERATOR (the
+        streaming iterators below): the web server resumes a streamed
+        response on whichever worker thread is free and may finalize it on
+        another, so SQLite's same-thread check made a resumed stream fail and
+        an abandoned one leak its connection and read snapshot (v2.5.0
+        canary). A generator is consumed strictly sequentially, never
+        concurrently, which is all that check protects."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=not any_thread)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
@@ -778,7 +785,7 @@ class Database:
         score ties so ?limit=N is deterministic."""
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
-        conn = self._get_connection()
+        conn = self._get_connection(any_thread=True)
         try:
             cur = conn.execute(
                 "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
@@ -809,7 +816,7 @@ class Database:
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
         seen, ip = after if after else ("", "")
-        conn = self._get_connection()
+        conn = self._get_connection(any_thread=True)
         try:
             cur = conn.execute(
                 "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
@@ -936,7 +943,7 @@ class Database:
         kind_sql = " AND i.kind = ?" if kind is not None else ""
         if kind is not None:
             values = values + [kind]
-        conn = self._get_connection()
+        conn = self._get_connection(any_thread=True)
         try:
             cur = conn.cursor()
             cur.execute(
