@@ -216,8 +216,8 @@ walled list.
 
 Community-grounded (Firebog ticked tier, live-probed keyless):
 
-1. `phishing_army` ON — the extended blocklist (~156k, 6h updates, CC BY
-   4.0). Aggregates PhishTank + urlscan.io + Phishunt + OpenPhish +
+1. `phishing_army` ON — the extended blocklist (~156k, 6h updates, CC BY-NC
+   4.0, non-commercial). Aggregates PhishTank + urlscan.io + Phishunt + OpenPhish +
    CERT.PL, with upstream FP-scrubbing against curated whitelists.
 2. `hagezi_fake` OFF — ratified ON, then live-measured 100% contained in
    TIF mini (0% unique, twin-flagged; TIF aggregates hagezi's own Fake

@@ -93,7 +93,7 @@ feeds:
   # Phishunt + OpenPhish + CERT.PL — the first three otherwise key-walled —
   # and scrubs false positives against curated whitelists upstream. Overlap
   # with openphish_community is by design (openphish refreshes 15-min, this
-  # 6-hourly); the discounting prices their agreement. CC BY 4.0.
+  # 6-hourly); the discounting prices their agreement. CC BY-NC 4.0 (non-commercial).
   - name: phishing_army
     url: https://phishing.army/download/phishing_army_blocklist_extended.txt
     feed_type: "phishing"
