@@ -14,6 +14,12 @@ RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser
 
+# The base image's own build tooling (pip, setuptools with its vendored
+# jaraco.context, wheel) lags its advisories; the service never installs
+# packages at runtime, but a scan of the image should come back clean on
+# everything with a fix, so bring them current first.
+RUN pip install --no-cache-dir --upgrade "pip>=26.2" "setuptools>=83" "wheel>=0.46.2"
+
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
