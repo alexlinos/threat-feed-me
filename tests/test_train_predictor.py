@@ -101,7 +101,9 @@ class TestDataset:
 
     def test_negative_stride_caps_cohort(self, tmp_path):
         db = _db(tmp_path)
-        stayers = {f"198.18.{i}.1" for i in range(1, 31)}
+        # 29 stayers + the baseline sentinel (in the corpus throughout, so in
+        # the population since v2.5.0) = a 30-ip cohort
+        stayers = {f"198.18.{i}.1" for i in range(1, 30)}
         db.update_source_sightings("talos", {tp_sentinel()}, _tick(0))
         db.update_source_sightings("talos", {tp_sentinel()} | stayers, _tick(5))
         # one SUB-FLOOR pair (3h gap): logs events advancing the timeline past
@@ -145,7 +147,9 @@ class TestDataset:
         # and returned at 260 (10h gap), so the last snapshot reads 60
         # positives. A lexicographic-sort regression stalls obs_i far below
         # 60 and this collapses.
-        assert npos + nkeep == 60 and npos == 60, \
+        # + the baseline sentinel: listed since before the log, in the corpus
+        # at every snapshot, never churned -> the one negative
+        assert npos == 60 and nkeep == 1, \
             f"cohort wrong at {last_T}: {npos}p/{nkeep}n of 60 staggered IPs"
 
     def test_empty_log_exits_cleanly(self, tmp_path):
@@ -163,3 +167,78 @@ class TestAUC:
     def test_single_class_is_nan(self):
         import math
         assert math.isnan(tp._auc([1, 1], [0.6, 0.4]))
+
+
+class TestPointInTime:
+    """v2.5.0: features and population as of T, never read from today's
+    tables. The old trainer let an ip evicted since T read zeros, which is
+    what an eventual non-returner looks like: the features encoded the label."""
+
+    def _history(self, tmp_path):
+        db = _db(tmp_path)
+        a, gone = "198.18.5.1", "198.18.5.2"
+        for src in ("talos", "et"):
+            db.update_source_sightings(src, {tp_sentinel()}, _tick(0))
+            db.update_source_sightings(src, {tp_sentinel(), a, gone}, _tick(10))
+        db.add_indicators_bulk([(a, {}), (gone, {})], source="talos")
+        db.add_indicators_bulk([(a, {}), (gone, {})], source="et")
+        for src in ("talos", "et"):                     # gone leaves both lists
+            db.update_source_sightings(src, {tp_sentinel(), a}, _tick(100))
+        with db._cursor() as cur:                       # ...and is evicted
+            cur.execute("DELETE FROM indicators WHERE ip = ?", (gone,))
+        return db, a, gone
+
+    def test_an_evicted_ip_reads_its_features_as_they_were(self, tmp_path):
+        from threatfeedme.predictor import FEATURE_NAMES, FeatureBuilder
+        db, a, gone = self._history(tmp_path)
+        fb = FeatureBuilder(db, now=BASE + timedelta(hours=50))
+        va = dict(zip(FEATURE_NAMES, fb.build(a)))
+        vg = dict(zip(FEATURE_NAMES, fb.build(gone)))
+        # at hour 50 both were on both lists and 40h old; eviction came later
+        assert va["live_source_count"] == vg["live_source_count"] == 2.0
+        assert vg["first_seen_age_h"] == pytest.approx(40.0)
+        assert va["first_seen_age_h"] == pytest.approx(40.0)
+
+    def test_a_readded_row_does_not_leak_its_later_first_seen(self, tmp_path):
+        from threatfeedme.predictor import FEATURE_NAMES, FeatureBuilder
+        db, a, _gone = self._history(tmp_path)
+        with db._cursor() as cur:       # evicted then re-added after hour 50
+            cur.execute("UPDATE indicators SET first_seen = ? WHERE ip = ?",
+                        (_tick(200), a))
+        fb = FeatureBuilder(db, now=BASE + timedelta(hours=50))
+        v = dict(zip(FEATURE_NAMES, fb.build(a)))
+        assert v["first_seen_age_h"] == pytest.approx(40.0)   # from history
+
+    def test_population_is_the_corpus_at_t(self, tmp_path):
+        from threatfeedme.predictor import FeatureBuilder
+        db, a, gone = self._history(tmp_path)
+        db.update_source_sightings("talos", {tp_sentinel(), a, "bad.example.com"}, _tick(20))
+        fb = FeatureBuilder(db)
+        day = 86400.0
+        cands = fb.candidate_ips()
+        assert "bad.example.com" not in cands            # serving scores IPs only
+        assert tp_sentinel() in cands                    # baseline-only, no events
+        t = lambda h: (BASE + timedelta(hours=h)).timestamp()
+        assert not fb.in_corpus_at(gone, t(5), 14 * day)       # not listed yet
+        assert fb.in_corpus_at(gone, t(50), 14 * day)          # listed
+        assert fb.in_corpus_at(gone, t(100 + 24 * 13), 14 * day)   # dropped 13d ago
+        assert not fb.in_corpus_at(gone, t(100 + 24 * 15), 14 * day)  # aged out
+        assert fb.in_corpus_at(tp_sentinel(), t(1), 14 * day)
+
+
+class TestModelFeatureGuard:
+    def test_a_model_trained_on_other_features_is_refused(self, tmp_path):
+        lgb = pytest.importorskip("lightgbm")
+        import numpy as np
+        from threatfeedme.predictor import FEATURE_NAMES, Predictor
+        rng = np.random.default_rng(1)
+        X = rng.random((64, len(FEATURE_NAMES)))
+        y = (X[:, 5] > 0.5).astype(int)
+        old = ["source_count"] + list(FEATURE_NAMES[1:])     # the 2.4.x set
+        booster = lgb.train({"verbose": -1, "num_leaves": 4, "min_data_in_leaf": 5},
+                            lgb.Dataset(X, label=y, feature_name=old), num_boost_round=2)
+        path = tmp_path / "old.txt"
+        booster.save_model(str(path))
+        p = Predictor(_db(tmp_path), {"predictor": {"enabled": True, "model_path": str(path)}})
+        assert p._load() is None
+        assert p.score("198.18.5.1") is None

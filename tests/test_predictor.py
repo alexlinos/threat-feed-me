@@ -88,7 +88,7 @@ class TestFeatureBuilder:
         fb = FeatureBuilder(db, now=datetime(2026, 8, 1, tzinfo=timezone.utc))
         vec = fb.build("203.0.113.250")
         assert len(vec) == 14
-        assert vec[FEATURE_NAMES.index("source_count")] == 0.0
+        assert vec[FEATURE_NAMES.index("live_source_count")] == 0.0
 
     def test_domain_value_does_not_crash_geo_features(self, tmp_path):
         db = _db(tmp_path)
@@ -105,7 +105,9 @@ class TestFeatureBuilder:
         db.add_indicator("198.18.0.7", "talos")
         fb = FeatureBuilder(db, now=datetime(2026, 8, 1, tzinfo=timezone.utc))
         vec = dict(zip(FEATURE_NAMES, fb.build("203.0.113.1")))
-        assert vec["prefix_density"] == 3.0  # all three share 203.0.0.0/16
+        # the two NEIGHBOURS in 203.0.0.0/16; the ip itself doesn't count
+        # (it did, and a still-present ip counting itself leaked eviction)
+        assert vec["prefix_density"] == 2.0
 
     def test_multi_source_history_aggregates(self, tmp_path):
         db = _db(tmp_path)
@@ -117,7 +119,8 @@ class TestFeatureBuilder:
         # now past every seeded tick: the builder clamps out future events
         fb = FeatureBuilder(db, now=datetime(2026, 8, 2, tzinfo=timezone.utc))
         vec = dict(zip(FEATURE_NAMES, fb.build("203.0.113.40")))
-        assert vec["source_count"] == 2.0
+        # talos listed it and left; only proofpoint lists it now
+        assert vec["live_source_count"] == 1.0
         # events: arrive t0, leave t6 (talos); arrive t12, leave t18, return
         # t24 (proofpoint) -> two churn cycles (t12 return closes the t6
         # leave cross-source; t24 closes t18), gaps 6h
@@ -197,7 +200,8 @@ class TestPredictor:
         X = rng.random((64, len(FEATURE_NAMES)))
         y = (X[:, 5] + rng.random(64) * 0.1 > 0.5).astype(int)
         booster = lgb.train({"verbose": -1, "num_leaves": 5, "min_data_in_leaf": 5},
-                            lgb.Dataset(X, label=y), num_boost_round=3)
+                            lgb.Dataset(X, label=y, feature_name=list(FEATURE_NAMES)),
+                            num_boost_round=3)
         model = tmp_path / "m.txt"
         booster.save_model(str(model))
 
