@@ -437,8 +437,12 @@
                 <option value="medium" selected>Medium tier (recommended)</option>
                 <option value="low">Everything</option>
             </select>
-            <input id="cs-duration" type="number" min="2" max="168" value="24" style="width:80px"
-                   title="Decision lifetime in hours: if threat-feed-me stops, its bans lapse after this" aria-label="Decision duration hours">
+            <label class="unifi-enable-label" title="Decision lifetime: if threat-feed-me stops, its bans lapse after this">
+                Bans last
+                <input id="cs-duration" type="number" min="2" max="168" value="24" style="width:70px"
+                       aria-label="Ban lifetime in hours">
+                hours
+            </label>
             <input id="cs-console" type="text" placeholder="Console integration id (optional)" style="width:230px"
                    title="For the crowdsec_console feed: the id of a Raw IP List integration in the CrowdSec Console" aria-label="Console integration id">
             <button type="button" onclick="csSave()">Save</button>
