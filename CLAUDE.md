@@ -576,12 +576,34 @@ MineMeld replacement** (README + site lead with it; MineMeld hosted EOL
   row_included rules, exempt from the host check like /feeds). Verified with
   the OASIS taxii2-client + stix2-validator (341k objects, 0 invalid).
   Discovery must use `_feed_base(..., swap_loopback=False)`.
-- Also: Host-header allowlist (report-only until set), connect-time SSRF
+- Also: Host-header allowlist (off until switched on; see below), connect-time SSRF
   pinning, body caps, least-privilege image, lean cached feed serving with
   ETag + `?limit=N`, single heavy-writer lock + changed-rows-only rescore,
   "last polled by" per URL (`polls.py`, no IPs stored), System panel,
   first-run card, masked key dialog, recommend Medium, 409 on duplicate feed
   names.
+
+**Interface redesign (maintainer-ratified 2026-09-23, from 10 mockups)**:
+direction 08 "Slate Pro" (icon rail + top bar, block lists as cards) with
+direction 10 "Guided" as the first-run view. Mark **A** (side-on chomper on a
+stem, red prey in front) everywhere; mark **D** (the chomper eating the red
+dots of `203.0.113.7`, RFC 5737 space, never a real IP) for heroes, banner,
+site and social card. Geometry lives in `templates/_mark.html`; the jaws are
+separate groups so CSS chomps them during a refresh. Decisions that aren't
+obvious from the code:
+- One page, five hash-routed views (guide/lists/feeds/integrations/system);
+  an inline script sets `html[data-view]` before paint so the wrong view
+  never flashes, and `reloadPage()` carries the view across in
+  sessionStorage (a same-URL+hash navigation is a fragment jump, not a
+  reload). The guide is the default until any IP list has been polled.
+- No web fonts, CDNs or external images: the dashboard runs air-gapped.
+- **Host check is OFF on upgrade and by default** (maintainer): enforcing
+  needs the explicit switch (`allowed_hosts_enforce` = "1") or
+  `TFM_ALLOWED_HOSTS`. Saving names is separate from enforcing: the guide's
+  "Name this server" saves a DNS name (enforce untouched) and
+  `/api/host-check/resolve` reports whether it resolves to the address in
+  use. A missing flag is off, not "legacy locked" (no release ever saved a
+  list before the flag).
 
 **Test-isolation trap, third time**: core initializes lazily from
 ./config.yaml + ./data, and `monkeypatch.setattr(core, "db", ...)` READS the old

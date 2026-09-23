@@ -2,7 +2,7 @@
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -460,6 +460,14 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "age_min": push_age_min,
             "tier": pusher_unifi.effective_block(core.db, core.config).get("tier", "high"),
         }
+    crowdsec_pulse = None
+    from threatfeedme import crowdsec
+    if crowdsec.push_ready(core.db, core.config):
+        cs_last = crowdsec._last(core.db)
+        crowdsec_pulse = {
+            "ok": (not cs_last.get("error")) if cs_last else None,
+            "tier": crowdsec.effective_block(core.db, core.config).get("tier", "medium"),
+        }
     system_info = _system_info(request, poll_log)
     new24 = core.db.get_new_indicator_counts(
         (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat())
@@ -477,11 +485,37 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "whitelist_count": len(core.db.get_whitelist()),
         "fp_total": fp_total,
         "unifi": unifi_pulse,
+        "crowdsec": crowdsec_pulse,
+    }
+
+    # ---- First-run guide (v2.5 "Guided" view) ----
+    # Each step is answered from facts the page already has: a firewall has
+    # "pulled" once any IP URL was polled, DNS is covered once a domain URL
+    # was. The guide is the default view until the first IP poll, after
+    # which the block lists are (the operator can reopen the guide any time).
+    def _latest_poll(kind):
+        polled = [(row, row[kind]["polled"]) for row in matrix_rows if row[kind]["polled"]]
+        if not polled:
+            return None
+        row, p = min(polled, key=lambda rp: rp[1]["age_min"] if rp[1]["age_min"] >= 0 else 10**9)
+        return {"tier": row["label"].replace(" Confidence", ""), **p}
+    medium = next((r for r in matrix_rows if r["name"] == "medium"), matrix_rows[0] if matrix_rows else None)
+    high = next((r for r in matrix_rows if r["name"] == "high"), None)
+    ip_poll, dom_poll = _latest_poll("ip"), _latest_poll("domain")
+    guide = {
+        "feeds_in": (total_inds["ip"] + total_inds["domain"]) > 0,
+        "ip_poll": ip_poll,
+        "dom_poll": dom_poll,
+        "integrations": bool(unifi_pulse or crowdsec_pulse or system_info["taxii_polls"]),
+        "medium": medium,
+        "high": high,
+        "default": ip_poll is None,
     }
 
     return core.templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
         "pulse": pulse,
+        "guide": guide,
         "system": system_info,
         "first_run": (total_inds["ip"] + total_inds["domain"]) == 0,
         "telemetry": telemetry,
@@ -606,6 +640,16 @@ def update_settings(request: SettingsRequest, _=Depends(require_auth), _csrf=Dep
 
 class HostCheckRequest(BaseModel):
     allowed: List[str] = []
+    # None keeps the current lock state; the first-run guide sends False so a
+    # name the operator is about to create never starts refusing anything.
+    enforce: Optional[bool] = None
+
+
+class HostResolveRequest(BaseModel):
+    name: str
+
+
+_RESOLVE_TIMEOUT_S = 3.0
 
 
 def _host_check_status(request: Request) -> dict:
@@ -613,10 +657,12 @@ def _host_check_status(request: Request) -> dict:
     env = sorted(mw.env_allowed_hosts())
     configured = mw.configured_hosts(core.db)
     current = mw.host_of_header(request.headers.get("host"))
+    enforcing = bool(mw.effective_allowlist(core.db))
     return {
-        "mode": "enforcing" if (env or configured) else "report-only",
+        "mode": "enforcing" if enforcing else "report-only",
         "env": env,                  # TFM_ALLOWED_HOSTS (read-only here)
         "configured": configured,    # the dashboard-managed list
+        "locked": bool(configured) and mw.enforce_configured(core.db),
         "seen": [s for s in mw.seen_hosts()
                  if s["host"] not in env and s["host"] not in configured],
         "current_host": current,
@@ -634,13 +680,14 @@ def host_check_status(request: Request, _=Depends(require_auth)):
 @router.post("/api/host-check")
 def host_check_update(body: HostCheckRequest, request: Request,
                       _=Depends(require_auth), _csrf=Depends(csrf_check)):
-    """Replace the dashboard-managed allowlist. A non-empty list (or
-    TFM_ALLOWED_HOSTS) turns enforcement on; an empty one returns to
-    report-only. The hostname this request arrived on is always kept, so
-    enabling enforcement can never lock out the page doing it."""
+    """Replace the dashboard-managed allowlist and, optionally, switch the
+    host check on or off. `enforce` omitted keeps the current switch; the
+    switch is OFF by default (upgrades and fresh installs refuse nothing).
+    An empty list is always off. The hostname this request arrived on is
+    always kept, so switching on can never lock out the page doing it."""
     from threatfeedme import middleware as mw
     names = []
-    for value in body.allowed:
+    for value in body.allowed[:64]:
         name = mw.normalize_hostname(value)
         if name is None:
             raise HTTPException(status_code=400, detail=f"Not a valid hostname: {value!r}")
@@ -648,9 +695,53 @@ def host_check_update(body: HostCheckRequest, request: Request,
     current = mw.host_of_header(request.headers.get("host"))
     if names and not mw.always_allowed(current):
         names.append(current)
+    enforce = mw.enforce_configured(core.db) if body.enforce is None else body.enforce
     core.db.set_setting(mw.ALLOWED_HOSTS_SETTING, json.dumps(sorted(set(names))))
+    core.db.set_setting(mw.ENFORCE_SETTING, "1" if (enforce and names) else "0")
     mw.invalidate_allowlist_cache()
     return _host_check_status(request)
+
+
+@router.post("/api/host-check/resolve")
+def host_check_resolve(body: HostResolveRequest, request: Request,
+                       _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Does a name the operator wants to use resolve, and to this server?
+
+    A DNS lookup only (no connection is made), of a syntactically valid
+    hostname, bounded by a short timeout. The answer is compared with the
+    address the operator is using right now when that is an IP: a name that
+    resolves elsewhere would hand firewalls a URL pointing at another box.
+    """
+    import concurrent.futures
+    import ipaddress
+    import socket
+    from threatfeedme import middleware as mw
+    name = mw.normalize_hostname(body.name)
+    if name is None or mw.always_allowed(name):
+        raise HTTPException(status_code=400, detail="Enter a DNS name, e.g. threatfeedme.lan")
+    current = mw.host_of_header(request.headers.get("host"))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(socket.getaddrinfo, name, None, 0, socket.SOCK_STREAM)
+    addresses, error = [], None
+    try:
+        infos = fut.result(timeout=_RESOLVE_TIMEOUT_S)
+        addresses = sorted({i[4][0] for i in infos})[:8]
+    except concurrent.futures.TimeoutError:
+        error = "timed out"
+    except socket.gaierror:
+        error = "does not resolve"
+    except (OSError, UnicodeError):
+        error = "does not resolve"
+    finally:
+        pool.shutdown(wait=False)
+    matches = None
+    try:
+        cur_ip = ipaddress.ip_address(current)
+        matches = any(ipaddress.ip_address(a) == cur_ip for a in addresses)
+    except ValueError:
+        pass
+    return {"name": name, "resolves": bool(addresses), "addresses": addresses,
+            "error": error, "current_host": current, "matches_current": matches}
 
 
 @router.post("/api/recalculate-scores")

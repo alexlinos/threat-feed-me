@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Threat Feed Me! A carnivorous blocklist for your firewall" width="100%">
+  <img src="assets/banner.svg" alt="Threat Feed Me! The flytrap eating the dots of an IP address: the open-source MineMeld replacement" width="100%">
 </p>
 
 # Threat Feed Me!
@@ -29,10 +29,15 @@ always hungry.
 - **Knows when something's wrong.** Per-feed health, uniqueness and overlap,
   "last polled by FortiGate" beside every URL, and nothing phones home.
 
-**New in 2.5 "Flytrap":** a TAXII 2.1 server, CrowdSec in both directions,
-votes that expire when a feed drops an indicator, "last polled by" proof on
-every URL, and a MineMeld migration path. See
-[Upgrading to 2.5](#upgrading) before you pull it: High gets smaller on purpose.
+<p align="center">
+  <img src="docs/assets/screens/lists.png" alt="The Block lists view: High, Medium and Everything lists for IPs and domains, each with its URL, live count and last-polled line" width="100%">
+</p>
+
+**New in 2.5 "Flytrap":** a redesigned dashboard with a guided first-run set-up,
+a TAXII 2.1 server, CrowdSec in both directions, votes that expire when a feed
+drops an indicator, "last polled by" proof on every URL, and a MineMeld
+migration path. See [Upgrading to 2.5](#upgrading) before you pull it: High
+gets smaller on purpose.
 
 ### Coming from MineMeld?
 
@@ -76,9 +81,11 @@ docker compose pull      # use the published image ...
 docker compose up -d     # ... or `up -d --build` to build from source instead
 ```
 
-Then open the dashboard and copy the **"Medium confidence"** feed URL into your
-firewall's threat-feed setting (FortiGate, Sophos, SonicWall, Palo Alto, Cisco,
-pfSense, ...).
+Then open the dashboard. A fresh install opens on the **set-up guide**: copy
+the **Medium** URL into your firewall's threat-feed setting (FortiGate, Sophos,
+SonicWall, Palo Alto, Cisco, pfSense, ...) and the checklist ticks itself off as
+your firewall starts polling. The [walkthrough](#walkthrough) below shows every
+screen.
 
 That's it. On first start it fetches **22 free, keyless threat feeds** (16 IP
 feeds and 6 domain feeds: URLhaus, OpenPhish, Phishing Army, HaGeZi TIF,
@@ -89,7 +96,8 @@ on-prem; feeds are pulled inbound only.
 
 - **No accounts or keys required** for the default feeds.
 - The dashboard shows the exact URLs to paste, per confidence tier, with a
-  Copy button and firewall-specific instructions.
+  Copy button, firewall-specific instructions, and proof that your firewall is
+  actually polling each one.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
   a refresh, all from the dashboard, no config editing.
 - A few feeds ship **disabled**, opt-in from the dashboard once configured:
@@ -106,6 +114,59 @@ To protect the dashboard on an untrusted network, set `DASHBOARD_USER` and
 `DASHBOARD_PASSWORD` in the environment (e.g. in `docker-compose.yml`); setting
 both turns auth on — no config edit needed, so it works with the published
 image. Feed URLs stay open so firewalls can poll them.
+
+## Walkthrough
+
+The dashboard is one page with five views in the left rail (Guide, Lists,
+Feeds, Connect, System), plus the Indicators page. Press <kbd>/</kbd> anywhere
+to look up an IP or domain.
+
+**1. Guide (first run).** Until a firewall has polled one of your IP lists, the
+dashboard opens here. The left side is the one URL most people need (the
+Medium IP list) with a Copy button; the right side is a checklist that answers
+itself from what the server can see: feeds fetched, a firewall pulling the IP
+list, a DNS filter pulling the domain list. **Name this server** is optional:
+if you'll reach the box by a DNS name (say `threatfeedme.lan`), add it and the
+server checks whether the name resolves, and to this machine. Saving a name
+never blocks anything; the host check stays off until you switch it on.
+Click **I'm set up** when you're done, and the Lists view becomes the default
+(the guide stays one click away).
+
+<p align="center"><img src="docs/assets/screens/guide.png" alt="The Guide view: the Medium IP URL to paste, and a set-up checklist" width="100%"></p>
+
+**2. Lists.** Six cards, one per URL: High, Medium and Everything, for IPs and
+for domains. Each shows how many entries it serves right now, the URL with a
+Copy button, CSV and JSON variants, and the last poll (*polled 3m ago by
+FortiGate*). A mistyped URL fails silently on most firewalls; *not polled yet*
+is how you find out. The line under the title is the ops pulse: last refresh,
+what arrived in 24 hours, your overrides, and push status for CrowdSec and
+UniFi when they're configured. The top bar says how many feeds are healthy and
+names the first one that isn't.
+
+**3. Feeds.** Every source in one table, IP feeds and domain feeds grouped
+apart, with problems floated to the top. Per feed: entries, the share nobody
+else reports (*unique*), how often it saw a threat first, what's new in 24
+hours, health, and false-positive flags. Add a URL feed or upload a list at the
+bottom; the overlap map, country heatmap and problem-TLD panel sit under
+*Insights*.
+
+<p align="center"><img src="docs/assets/screens/feeds.png" alt="The Feeds view: per-feed entries, uniqueness, first reports, health and actions" width="100%"></p>
+
+**4. Connect.** Step-by-step placement for every supported firewall and DNS
+filter, the TAXII 2.1 discovery URL for your SIEM, and the CrowdSec and UniFi
+panels (both push after every refresh, because neither can poll).
+
+**5. System.** Refresh interval and retention, database size, backups (with
+**Back up now**), vote grace, the predictor's state, a **Recalculate now**
+button, and **Dashboard hostnames**: the names the dashboard has been reached
+by, the names you've saved, and the switch that locks it to them (see
+[Upgrading](#upgrading)).
+
+<p align="center"><img src="docs/assets/screens/system.png" alt="The System view: schedule, status and dashboard hostnames" width="100%"></p>
+
+**Indicators** is the searchable, paginated corpus with per-indicator tier,
+score, votes and sources, and the whitelist (by IP, CIDR, domain or
+`*.wildcard`, everywhere or per tier).
 
 ## Features
 
@@ -126,7 +187,7 @@ image. Feed URLs stay open so firewalls can poll them.
 - **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
   demand, set the auto-refresh interval (default 60 minutes), and set how long
   an IP is kept after it drops out of every feed (default 7 days; `0` = keep
-  forever), all from the dashboard toolbar, no restart needed
+  forever), all from the dashboard's System view, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
 - **Confidence Scoring**: High/Medium/Low tiers based on:
   - **Effective independent votes**: sources are discounted by their
@@ -163,11 +224,13 @@ image. Feed URLs stay open so firewalls can poll them.
 - **Multi-format export**: text, CSV and JSON; `?limit=N` serves the strongest
   N entries for firewalls with an entry cap; ETags so unchanged lists cost a
   304
-- **Operations dashboard**: feed health with inline errors, uniqueness and
-  overlap per feed, "last polled by …" beside every URL, a System panel (DB
-  size, backups, predictor, TAXII), and an ops pulse row
-- **Hardened**: SSRF guard pinned to the connected address, a Host-header
-  allowlist against DNS rebinding (`TFM_ALLOWED_HOSTS`), capped request
+- **Operations dashboard** *(redesigned in v2.5)*: a guided first-run set-up,
+  feed health with inline errors, uniqueness and overlap per feed, "last
+  polled by …" beside every URL, a System view (DB size, backups, predictor,
+  hostnames), and an ops pulse line; works on a phone, needs nothing from the
+  internet to render
+- **Hardened**: SSRF guard pinned to the connected address, an opt-in
+  Host-header allowlist against DNS rebinding (`TFM_ALLOWED_HOSTS`), capped request
   bodies, CSRF on every mutating call, write-only credentials, non-root image
   with an SBOM; see [SECURITY.md](SECURITY.md)
 - **Containerized**: one multi-arch Docker image (amd64/arm64) for any on-prem box
@@ -442,7 +505,7 @@ labels, and a `valid_until` a week past its last sighting so your SIEM expires
 what stops being reported. IDs are stable across polls, so indicators update
 in place. `added_after` and paging are supported. Point Microsoft Sentinel's
 *Threat Intelligence - TAXII* connector, QRadar, Splunk, MISP or OpenCTI at the
-discovery URL; the System panel shows it with a Copy button. Like the feed
+discovery URL; the dashboard's Connect view shows it with a Copy button. Like the feed
 URLs, it's unauthenticated by design, so restrict who can reach the port.
 
 ### Custom lists
@@ -462,8 +525,8 @@ customized.
 
 ### Merged indicators
 
-The dashboard's *Merged indicators* section shows the deduplicated result across
-all feeds (searchable and paginated). You can:
+The dashboard's *Indicators* page shows the deduplicated result across all
+feeds (searchable and paginated). You can:
 - **Add** an IP or CIDR manually (recorded under a `manual` source)
 - **Remove** an IP, which globally whitelists it so a feed refresh won't bring
   it back, and drops it from the served feeds immediately
@@ -478,7 +541,7 @@ in config also forces it, and fails closed if the credentials are missing).
 The database is backed up automatically (online, WAL-safe) on the schedule set
 in `config.yaml` under `database.backup` (default: every 24h, keep 7, to a
 `backups/` folder beside the database, i.e. `data/backups/` on the same
-persistent volume). The dashboard's System panel shows the last backup and has
+persistent volume). The dashboard's System view shows the last backup and has
 a **Back up now** button. Trigger one on demand with
 `POST /api/backup` or `python -m threatfeedme.main --backup`. **Restore:** stop the app and
 copy a backup file over `data/threatfeedme.db`.
@@ -500,7 +563,7 @@ The container is built to fit NAS-class hosts with 1-2 GB of RAM:
 - If you don't consume the CSV/JSON exports, set `output.formats: [text]` in
   `config.yaml`, which cuts export work by two thirds.
 - The default 7-day retention keeps the database lean; lower
-  `retention.max_age_days` (dashboard toolbar) if disk or memory is tight.
+  `retention.max_age_days` (dashboard System view) if disk or memory is tight.
 
 ## Upgrading
 
@@ -545,11 +608,17 @@ automatically on startup:
   indicators that left were mostly corroborated only by feeds that stopped
   listing them days earlier. Set `scoring.votes_require_current_listing: false`
   to keep the old behaviour.
-- **Dashboard hostnames.** A Host-header allowlist protects the dashboard
-  against DNS rebinding. It starts in report-only mode, showing a banner with
-  the hostnames you reach it by and a one-click lock, so upgrading never locks
-  you out. Feed URLs and TAXII are never affected. Set `TFM_ALLOWED_HOSTS`
-  (comma-separated) to lock it from the environment instead.
+- **Dashboard hostnames (off until you switch it on).** A Host-header
+  allowlist can lock the dashboard to the names you use, which stops a
+  malicious web page from reaching it through DNS rebinding. **An upgrade
+  leaves it off**: nothing is refused until you turn on *Only answer to these
+  names*, in the set-up guide or under System → Dashboard hostnames. While
+  it's off, the dashboard just records which names reach it, so the list you
+  lock to is the one you actually use. You can save a DNS name before its
+  record exists (the guide checks whether it resolves, and to this server)
+  without turning anything on. The server's IP address always works, and feed
+  URLs, TAXII and `/healthz` are never checked. Setting `TFM_ALLOWED_HOSTS`
+  (comma-separated) is deliberate configuration, so it enforces from start-up.
 
 If you run the offline predictor, retrain right after upgrading
 (`scripts/predictor.sh both`): its features were redefined to remove a
@@ -596,7 +665,7 @@ Edit `config.yaml` to customize:
 
 Values in `config.yaml` are the **seed defaults**. Runtime-adjustable settings (
 the auto-refresh interval and the retention window) can be changed live from
-the dashboard toolbar (or `POST /api/settings`); the stored value then takes
+the dashboard's System view (or `POST /api/settings`); the stored value then takes
 precedence over the file, so it survives restarts without editing config.
 
 ## Privacy

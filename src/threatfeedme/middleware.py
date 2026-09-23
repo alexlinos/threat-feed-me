@@ -114,14 +114,21 @@ class BodyLimitMiddleware:
 #   * IP-literal and localhost Hosts are ALWAYS allowed, so nobody can lock
 #     themselves out: the server's IP is always a way back in (rebinding needs
 #     the attacker's hostname in Host, never an IP).
-#   * Nothing is enforced until an allowlist exists (TFM_ALLOWED_HOSTS and/or
-#     the dashboard's list). Until then it only RECORDS which hostnames reach
-#     the dashboard, so the operator can lock to exactly the names they use —
-#     an upgrade never breaks named access on its own.
+#   * OFF unless switched on (maintainer, 2026-09-23). An upgrade never
+#     starts refusing anything: the check enforces only when the operator
+#     turns on "Only answer to these names" (first-run guide or System) or
+#     sets TFM_ALLOWED_HOSTS, which is deliberate operator config. While off
+#     it only RECORDS which hostnames reach the dashboard, so the names
+#     offered for the switch are the ones actually in use.
+#   * Saving names and enforcing them are separate: the guide lets an
+#     operator add the DNS name they are about to create BEFORE it resolves,
+#     and saving it must not refuse anything. Only the explicit switch
+#     (enforce flag "1") turns refusal on; a missing flag is off.
 # ---------------------------------------------------------------------------
 
 ALLOWED_HOSTS_ENV = "TFM_ALLOWED_HOSTS"
 ALLOWED_HOSTS_SETTING = "allowed_hosts"
+ENFORCE_SETTING = "allowed_hosts_enforce"
 _EXEMPT_PREFIXES = ("/feeds/", "/taxii2/", "/static/")
 _EXEMPT_PATHS = frozenset({"/healthz", "/favicon.ico"})
 _HOSTNAME_RE = re.compile(
@@ -174,8 +181,25 @@ def configured_hosts(db) -> List[str]:
         return []
 
 
+def enforce_configured(db) -> bool:
+    """Whether the operator switched the host check ON. Missing = off, so an
+    upgrade or a fresh install never refuses a name on its own."""
+    try:
+        return str(db.get_setting(ENFORCE_SETTING)) == "1"
+    except Exception:
+        return False
+
+
 def effective_allowlist(db) -> frozenset:
-    return frozenset(env_allowed_hosts() | set(configured_hosts(db)))
+    """The names being ENFORCED: empty means report-only (nothing refused)."""
+    env = env_allowed_hosts()
+    configured = set(configured_hosts(db))
+    if env:
+        # Env config is deliberate: it enforces, and the dashboard's saved
+        # names join it (otherwise a name added in the guide would be refused
+        # the moment the operator also sets the variable).
+        return frozenset(env | configured)
+    return frozenset(configured) if enforce_configured(db) else frozenset()
 
 
 def invalidate_allowlist_cache() -> None:

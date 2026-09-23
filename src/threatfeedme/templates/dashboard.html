@@ -1,174 +1,227 @@
 {% extends "base.html" %}
-{% block subtitle %}Copy a feed URL below and paste it into your firewall's threat-feed / external block-list setting.{% endblock %}
+{% from "_mark.html" import eat_ip, icon %}
+{% block title %}Threat Feed Me!{% endblock %}
+
+{% macro polled(p) -%}
+{%- if p %}polled {% if p.age_min < 1 %}just now{% elif p.age_min < 120 %}{{ p.age_min }}m ago{% else %}{{ p.age_min // 60 }}h ago{% endif %} by {{ p.by }}{% else %}not polled yet{% endif -%}
+{%- endmacro %}
+
+{% block topbar %}
+    <a class="health{% if pulse.first_problem %} warn{% elif pulse.pending_count %} pending{% endif %}" href="/#feeds"
+       title="{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }} more{% endif %}{% elif pulse.pending_count %}{{ pulse.pending_count }} awaiting first fetch{% else %}all feeds reporting{% endif %}">
+        <i aria-hidden="true"></i>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} feeds healthy{% if pulse.first_problem %}<span class="health-name">: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }}{% endif %}</span>{% endif %}
+    </a>
+    <button class="btn" id="refresh-all-btn" onclick="refreshAll(this)">{{ icon('<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>', 18) }}<span>Refresh</span></button>
+{% endblock %}
 
 {% block content %}
-    {# Host-check banner, filled by app.js from /api/host-check. Shown only
-       while the dashboard answers to ANY hostname (report-only mode) and at
-       least one name has reached it: the operator locks to the names they
-       actually use. Feed URLs are never affected by the host check. #}
-    <div class="callout" id="host-check-banner" role="status" hidden>
-        <b>This dashboard answers to any hostname.</b>
-        <span id="host-check-text"></span>
-        <button type="button" class="mini-btn" id="host-check-lock">Lock to these names</button>
+{# Pick the view before any of it paints: the URL hash wins, then the view
+   a reload came back from, then the operator's "I'm set up" choice, then
+   the server's default (the guide until a firewall has polled an IP list).
+   app.js takes over from here. #}
+<script>
+(function () {
+    var views = ['guide', 'lists', 'feeds', 'integrations', 'system'];
+    var h = (location.hash || '').replace('#', '').split('/')[0];
+    var pref = null, ret = null;
+    try { pref = localStorage.getItem('tfm.guide'); } catch (e) {}
+    try { ret = sessionStorage.getItem('tfm.return'); sessionStorage.removeItem('tfm.return'); } catch (e) {}
+    var v = views.indexOf(h) >= 0 ? h
+          : views.indexOf(ret) >= 0 ? ret          /* back from reloadPage() */
+          : ({{ 'true' if guide.default else 'false' }} && pref !== 'dismissed') ? 'guide' : 'lists';
+    document.documentElement.setAttribute('data-view', v);
+})();
+</script>
+<p id="refresh-status" class="refresh-status" role="status" aria-live="polite"></p>
+
+{# ======================= GUIDE (first-run set-up) ======================= #}
+{% set done_count = (1 if guide.feeds_in else 0) + (1 if guide.ip_poll else 0) + (1 if guide.dom_poll else 0) %}
+<section class="view" id="view-guide" aria-labelledby="guide-title">
+    <div class="guide-grid">
+        <div class="guide-main">
+        <div class="guide-hero">
+            <div class="guide-hero-top">
+                <span class="eyebrow">Your firewall list</span>
+                {{ eat_ip(76) }}
+            </div>
+            <h1 id="guide-title">Paste this into your firewall.</h1>
+            {% if guide.medium %}{% set m = guide.medium.ip %}
+            <p class="lede">The <b>Medium</b> list:
+                {% if m.processing or first_run %}it fills in as the first fetch finishes (usually one to three minutes).
+                {% else %}{{ '{:,}'.format(m.count) }} IPs that more than one independent source agrees on.{% endif %}
+                It updates itself every {{ interval_min }} minutes.</p>
+            <div class="url-row url-row-big">
+                <input class="url-box" type="text" readonly value="{{ feed_base }}{{ m.path }}.txt"
+                       onclick="this.select()" aria-label="Medium IP list URL">
+                <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
+            </div>
+            <span class="polled{% if not m.polled %} never{% endif %}"><i aria-hidden="true"></i>{{ polled(m.polled) }}</span>
+            {% endif %}
+            <p class="vendor-links">Steps for
+                <a href="#integrations">FortiGate</a> · <a href="#integrations">Palo Alto</a> ·
+                <a href="#integrations">pfSense / OPNsense</a> · <a href="#integrations">every firewall</a></p>
+        </div>
+        <div class="guide-more">
+            {% if guide.high %}
+            <div class="mini-card">
+                <b>Stricter list (High)</b>
+                <span class="muted">{{ '{:,}'.format(guide.high.ip.count) }} IPs · for capped or strict devices</span>
+                <div class="url-row"><input class="url-box" type="hidden" value="{{ feed_base }}{{ guide.high.ip.path }}.txt"><button class="btn sec" onclick="copyUrl(this)" aria-label="Copy the High IP list URL">Copy URL</button></div>
+            </div>
+            {% endif %}
+            {% if guide.medium %}
+            <div class="mini-card">
+                <b>Domain list (Medium)</b>
+                <span class="muted">{{ '{:,}'.format(guide.medium.domain.count) }} domains · {{ polled(guide.medium.domain.polled) }}</span>
+                <div class="url-row"><input class="url-box" type="hidden" value="{{ feed_base }}{{ guide.medium.domain.path }}.txt"><button class="btn sec" onclick="copyUrl(this)" aria-label="Copy the Medium domain list URL">Copy URL</button></div>
+            </div>
+            {% endif %}
+            <div class="mini-card">
+                <b>Something blocked by mistake?</b>
+                <span class="muted">Allow an IP, a network or a domain in one step, from every list or one tier.</span>
+                <a class="btn sec" href="/indicators#whitelist">Allow an address</a>
+            </div>
+        </div>
+        <p class="guide-foot">
+            <button class="btn ghost" type="button" onclick="leaveGuide()">I'm set up: show the full dashboard</button>
+            <span class="muted">The guide stays one click away under <b>Guide</b> in the menu.</span>
+        </p>
+        </div>
+
+        <div class="guide-steps">
+            <h2 class="steps-title">Set-up checklist · <span id="guide-done" data-server-done="{{ done_count }}">{{ done_count }}</span> of 4 done</h2>
+            <ol class="steps">
+                <li class="step{% if guide.feeds_in %} done{% endif %}">
+                    <span class="num" aria-hidden="true">1</span>
+                    <div class="step-body">
+                        <b>Feeds are in</b>
+                        {% if guide.feeds_in %}<p>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} feeds fetched{% if pulse.first_problem %}; {{ pulse.first_problem }} needs a look under <a href="#feeds">Feeds</a>{% endif %}.</p>
+                        {% else %}<p><span class="feeding"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span></span> Fetching every feed for the first time. This page updates as they land.</p>{% endif %}
+                    </div>
+                </li>
+                <li class="step{% if guide.ip_poll %} done{% endif %}">
+                    <span class="num" aria-hidden="true">2</span>
+                    <div class="step-body">
+                        <b>Your firewall is pulling</b>
+                        {% if guide.ip_poll %}<p>{{ guide.ip_poll.by }} fetched the {{ guide.ip_poll.tier }} IP list {% if guide.ip_poll.age_min < 1 %}just now{% elif guide.ip_poll.age_min < 120 %}{{ guide.ip_poll.age_min }} minutes ago{% else %}{{ guide.ip_poll.age_min // 60 }} hours ago{% endif %}.</p>
+                        {% else %}<p>Paste the URL into your firewall's external block list or threat feed setting. This ticks when it first polls, so a mistyped URL can't fail silently.</p>{% endif %}
+                    </div>
+                </li>
+                <li class="step{% if guide.dom_poll %} done{% endif %}">
+                    <span class="num" aria-hidden="true">3</span>
+                    <div class="step-body">
+                        <b>Protect DNS too</b>
+                        {% if guide.dom_poll %}<p>{{ guide.dom_poll.by }} is pulling the {{ guide.dom_poll.tier }} domain list.</p>
+                        {% else %}<p>Add the Medium domain list to your DNS filter (FortiGate DNS Filter, Pi-hole, AdGuard, pfBlockerNG DNSBL).</p>
+                        <a class="btn sec" href="#lists">Show the domain lists</a>{% endif %}
+                    </div>
+                </li>
+                <li class="step" id="step-name">
+                    <span class="num" aria-hidden="true">4</span>
+                    <div class="step-body">
+                        <div><b>Name this server</b> <span class="muted">(optional)</span></div>
+                        {# Maintainer, 2026-09-23: a DNS name added here is saved
+                           WITHOUT enforcing the host check. Nothing is refused
+                           until the operator locks it under System. #}
+                        <p id="guide-name-intro">If you'll reach threat-feed-me by a DNS name (for example
+                            <code>threatfeedme.lan</code>), add it here and it's checked against your DNS.
+                            Nothing gets blocked: the dashboard keeps answering every name until you lock it
+                            under <a href="#system">System</a>.</p>
+                        <form class="name-form" onsubmit="return addHostName(event, 'guide')">
+                            <input id="guide-hostname" class="text-input" type="text" placeholder="threatfeedme.lan"
+                                   autocomplete="off" spellcheck="false" aria-label="DNS name for this server">
+                            <button class="btn sec" type="submit">Check &amp; add</button>
+                        </form>
+                        <div class="name-result" id="guide-name-result" role="status" aria-live="polite"></div>
+                    </div>
+                </li>
+                <li class="step optional{% if guide.integrations %} done{% endif %}">
+                    <span class="num" aria-hidden="true">+</span>
+                    <div class="step-body">
+                        <b>Optional: more places</b>
+                        <p>Publish to CrowdSec bouncers, push to a UniFi gateway, or point a SIEM at the TAXII 2.1 server.</p>
+                        <a class="btn sec" href="#integrations">Connect</a>
+                    </div>
+                </li>
+            </ol>
+        </div>
     </div>
 
-    {# Ops pulse row: health / freshness / velocity / overrides / push. No
-       corpus sizes here — the matrix owns those (the old tiles died for
-       duplicating them). UniFi card renders only when push is configured. #}
-    <div class="stats pulse">
-        <div class="stat{% if pulse.first_problem %} warn{% endif %}">
-            <div class="n">{{ pulse.feeds_healthy }}<small> / {{ pulse.feeds_total }}</small></div>
-            <div class="l">Feeds healthy</div>
-            <div class="sub">{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }} more{% endif %}{% elif pulse.pending_count %}{{ pulse.pending_count }} awaiting first fetch{% else %}all feeds reporting{% endif %}</div>
-        </div>
-        <div class="stat{% if pulse.refresh_overdue %} warn{% endif %}" id="pulse-refresh"
-             data-interval-min="{{ interval_min }}">
-            <div class="n" id="pulse-refresh-n">{% if pulse.refresh_age_min is not none %}{{ pulse.refresh_age_min }}m<small> ago</small>{% else %}—{% endif %}</div>
-            <div class="l">Last refresh</div>
-            <div class="sub" id="pulse-refresh-sub">{% if pulse.refresh_overdue %}overdue{% elif pulse.refresh_next_min is not none %}next in ~{{ pulse.refresh_next_min }}m{% else %}first fetch pending{% endif %}</div>
-        </div>
-        <div class="stat">
-            <div class="n">+{{ '{:,}'.format(pulse.new24_ip + pulse.new24_domain) }}</div>
-            <div class="l">New in 24h</div>
-            <div class="sub"><span class="k-ip">{{ '{:,}'.format(pulse.new24_ip) }} IPs</span> · <span class="k-dom">{{ '{:,}'.format(pulse.new24_domain) }} domains</span></div>
-        </div>
-        <div class="stat">
-            <div class="n">{{ pulse.whitelist_count }}{% if pulse.fp_total %}<small> · {{ pulse.fp_total }} FP</small>{% endif %}</div>
-            <div class="l">Overrides</div>
-            <div class="sub">{% if pulse.whitelist_count or pulse.fp_total %}human judgment applied{% else %}pure feed consensus{% endif %}</div>
-        </div>
-        {% if pulse.unifi %}
-        <div class="stat{% if pulse.unifi.ok is sameas false %} warn{% endif %}">
-            <div class="n">{% if pulse.unifi.ok %}✓{% elif pulse.unifi.ok is sameas false %}✗{% else %}—{% endif %}{% if pulse.unifi.age_min is not none %}<small> {{ pulse.unifi.age_min }}m ago</small>{% endif %}</div>
-            <div class="l">UniFi push</div>
-            <div class="sub">{{ pulse.unifi.tier }} tier</div>
-        </div>
-        {% endif %}
+</section>
+
+{# ======================= LISTS (the feed matrix as cards) ======================= #}
+{# Rows = tiers, kinds side by side (D2 revised): each card is one URL with
+   the count it serves right now and whether anything has polled it. The
+   ops pulse is one line under the title: no corpus sizes there, the cards
+   own those. #}
+<section class="view" id="view-lists" aria-labelledby="lists-title">
+    <div class="view-head">
+        <h1 id="lists-title">Block lists</h1>
+        <p class="pulse-line">
+            <span id="pulse-refresh" class="pl{% if pulse.refresh_overdue %} warn{% endif %}" data-interval-min="{{ interval_min }}">refreshed
+                <b id="pulse-refresh-n">{% if pulse.refresh_age_min is not none %}{{ pulse.refresh_age_min }}m<small> ago</small>{% else %}—{% endif %}</b>,
+                <span id="pulse-refresh-sub">{% if pulse.refresh_overdue %}overdue{% elif pulse.refresh_next_min is not none %}next in ~{{ pulse.refresh_next_min }}m{% else %}first fetch pending{% endif %}</span></span>
+            <span class="pl">+<b>{{ '{:,}'.format(pulse.new24_ip) }}</b> IPs · +<b>{{ '{:,}'.format(pulse.new24_domain) }}</b> domains in 24h</span>
+            <span class="pl" title="Whitelist entries and false-positive flags">{% if pulse.whitelist_count or pulse.fp_total %}<b>{{ pulse.whitelist_count }}</b> overrides{% if pulse.fp_total %} · {{ pulse.fp_total }} FP{% endif %}{% else %}pure feed consensus{% endif %}</span>
+            {% if pulse.crowdsec %}<span class="pl{% if pulse.crowdsec.ok is sameas false %} warn{% endif %}">CrowdSec publishing <b>{{ pulse.crowdsec.tier|capitalize }}</b>{% if pulse.crowdsec.ok is sameas false %} (last publish failed){% endif %}</span>{% endif %}
+            {% if pulse.unifi %}<span class="pl{% if pulse.unifi.ok is sameas false %} warn{% endif %}">UniFi push {% if pulse.unifi.ok %}✓{% elif pulse.unifi.ok is sameas false %}failed{% else %}pending{% endif %}{% if pulse.unifi.age_min is not none %} {{ pulse.unifi.age_min }}m ago{% endif %} · {{ pulse.unifi.tier }}</span>{% endif %}
+        </p>
     </div>
 
     {% if first_run %}
-    {# Fresh install: the tables below are empty for the first couple of
-       minutes, which reads as "broken" unless something says otherwise. #}
     <div class="callout first-run" role="status">
-        <b>Welcome. threat-feed-me is fetching its feeds for the first time</b> (usually one
-        to three minutes; this page updates as they land). Next:
-        <ol>
-            <li>Copy the <b>Medium</b> IP URL below into your firewall's external block-list /
-                threat-feed setting (the how-to further down covers FortiGate, Palo Alto,
-                pfSense, OPNsense and more). Domain feeds go to your DNS filter.</li>
-            <li>After the firewall's first poll, its cell here says <i>polled … by …</i>, so you
-                know it's really pulling.</li>
-            <li>Optional: publish to your CrowdSec bouncers or UniFi gateway (panels at the
-                bottom), or point a SIEM at the TAXII 2.1 server (System panel).</li>
-        </ol>
+        <b>Fetching the feeds for the first time</b> (usually one to three minutes; this page updates as
+        they land). New here? <a href="#guide">The set-up guide</a> walks you through it.
     </div>
     {% endif %}
-    <h2>Firewall feed URLs</h2>
-    {# FEED MATRIX (D2 revised): rows = tiers, columns = kinds. The stat-tile
-       row is retired — each cell carries its URL and the count it serves
-       inline, so the page answers "what do I paste and how big is it" in one
-       block. Below 720px the grid collapses to stacked tier groups (CSS);
-       the kind chips inside each cell label the stacked lines there. #}
-    <div class="matrix">
-        <div class="mx-h"></div>
-        <div class="mx-h mx-h-ip">IP feeds</div>
-        <div class="mx-h mx-h-dom">Domain feeds</div>
-        {% for row in matrix_rows %}
-        <div class="mx-tier mx-{{ row.name }}">
-            <span class="mx-label">{{ row.label }}</span>
-            {% if row.recommended %}<span class="rec">Recommended</span>{% endif %}
-            <div class="mx-blurb">{{ row.blurb }}</div>
-        </div>
-        {% for kind in ('ip', 'domain') %}
-        {% set cell = row[kind] %}
-        <div class="mx-cell">
-            <div class="mx-cell-head">
-                <span class="kind-chip kind-{{ kind }}">{{ 'IP' if kind == 'ip' else 'Domain' }}</span>
-                <span class="feed-count" title="{{ '{:,}'.format(cell.count) }} entries served by this URL right now">
-                    {% if cell.processing %}<span class="feeding" title="First fetch for this feed kind is running"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span>Feeding…</span>
-                    {% else %}<span class="count-full">{{ '{:,}'.format(cell.count) }}</span><span class="count-compact">{{ cell.compact }}</span> entries{% endif %}
-                </span>
+
+    <div class="list-grid">
+        {% for row in matrix_rows %}{% for kind in ('ip', 'domain') %}{% set cell = row[kind] %}
+        <article class="lc lc-{{ kind }}{% if row.recommended %} lc-rec{% endif %}" aria-label="{{ row.label }} {{ 'IP' if kind == 'ip' else 'domain' }} list">
+            <header class="lc-head">
+                <span class="swatch" aria-hidden="true"></span>
+                <h2>{{ row.label|replace(' Confidence', '') }} {{ 'IPs' if kind == 'ip' else 'domains' }}</h2>
+                {% if row.recommended %}<span class="rec">Recommended</span>{% endif %}
+            </header>
+            <div class="lc-count feed-count" title="{{ '{:,}'.format(cell.count) }} entries served by this URL right now">
+                {% if cell.processing %}<span class="feeding" title="First fetch for this kind is running"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span>Feeding…</span>
+                {% else %}<span class="count-full">{{ '{:,}'.format(cell.count) }}</span><span class="count-compact">{{ cell.compact }}</span>{% endif %}
             </div>
+            <p class="lc-blurb">{{ row.blurb }}</p>
             <div class="url-row">
                 <input class="url-box" type="text" readonly value="{{ feed_base }}{{ cell.path }}.txt"
                        onclick="this.select()" aria-label="{{ row.label }} {{ kind }} feed URL">
                 <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
             </div>
-            <div class="alt-formats">
-                Also: <a href="{{ feed_base }}{{ cell.path }}.csv">CSV</a> ·
-                <a href="{{ feed_base }}{{ cell.path }}.json">JSON</a>
+            <div class="lc-foot">
+                <span class="fmt">Also <a href="{{ feed_base }}{{ cell.path }}.csv">CSV</a> <a href="{{ feed_base }}{{ cell.path }}.json">JSON</a></span>
                 {# "Is my firewall actually polling this?" A typo'd URL fails
                    silently on most firewalls; this line is the only proof. #}
                 <span class="polled{% if not cell.polled %} never{% endif %}"
-                      title="{% if cell.polled %}{{ '{:,}'.format(cell.polled.count) }} fetches recorded{% else %}Nothing has fetched this URL yet{% endif %}">
-                    · {% if cell.polled %}polled {% if cell.polled.age_min < 1 %}just now{% elif cell.polled.age_min < 120 %}{{ cell.polled.age_min }}m ago{% else %}{{ cell.polled.age_min // 60 }}h ago{% endif %} by {{ cell.polled.by }}{% else %}not polled yet{% endif %}
-                </span>
+                      title="{% if cell.polled %}{{ '{:,}'.format(cell.polled.count) }} fetches recorded{% else %}Nothing has fetched this URL yet{% endif %}"><i aria-hidden="true"></i>{{ polled(cell.polled) }}</span>
             </div>
-        </div>
-        {% endfor %}
-        {% endfor %}
+        </article>
+        {% endfor %}{% endfor %}
     </div>
+    <p class="hint lists-hint">IP lists go to your firewall's address or threat-feed setting, domain lists to your
+        DNS filter. Lists are cumulative (Medium includes High), whitelisted entries are removed, and an IP list
+        never contains a domain. Start with <b>Medium</b>. <a href="#integrations">Step-by-step for your firewall →</a></p>
+</section>
 
-    <!-- Read once per deployment, then pure noise: collapsed by default. -->
-    <details class="howto">
-        <summary><b>How to use these</b>: per-firewall instructions</summary>
-        <ul>
-            <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL. IP connectors are used as address objects in firewall policies. Domain connectors are used in <b>DNS Filter profiles</b>: Security Profiles → DNS Filter → the connector appears in the category table under the <i>Threat Feeds</i> group (top or bottom of the list depending on firmware) → set it to <i>Redirect to Block Portal</i>, then apply the profile to the policy carrying client DNS. Bonus: adding the IP connector under the same profile's <i>External IP Block Lists</i> also blocks lookups whose answers resolve to blocked IPs.</li>
-            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL.</li>
-            <li><b>SonicWall</b> (SonicOS 7): Object → Match Objects → Dynamic External Object → protocol <i>HTTPS</i>, paste the URL; use the created address group in a rule.</li>
-            <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>
-            <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> (IPs) / <i>DNS Lists and Feeds</i> (domains).</li>
-            <li><b>Check Point</b> (R81+ SmartConsole): Security Policies → Threat Prevention → Custom Policy Tools → Indicators → New → <i>External IOC Feed</i>, paste the URL.</li>
-            <li><b>UniFi (UDM / UDM Pro / SE):</b> can't poll a URL — use the <i>UniFi integration</i>
-                panel at the bottom of this page instead: it pushes the tier into network lists on the
-                gateway after every refresh. Device limitations to know: lists cap ~10k entries and
-                <b>a policy can reference only ONE list</b> (every firmware), so <b>High = 1 list =
-                1 policy per direction</b>, Medium = 4 lists, Everything = 10 — one policy each.
-                Push High unless you enjoy policy bookkeeping.</li>
-            <li><b>pfSense (pfBlockerNG):</b> Firewall → pfBlockerNG → IPv4 for IP URLs; DNSBL → DNSBL Groups for domain URLs.</li>
-            <li><b>OPNsense:</b> Firewall → Aliases → URL Table (IPs); domain lists fit Unbound DNS block lists.</li>
-            <li><b>Pi-hole / AdGuard Home:</b> add a domain URL as a blocklist (Adlists / DNS blocklists).</li>
-        </ul>
-        Lists are plain text, one entry per line, generated live with whitelisted entries removed automatically.
-        IP URLs never contain a domain and domain URLs never contain an IP — an address-type
-        feed import fed the wrong kind errors out on most firewalls.
-        Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feeds.
-        <b>FortiGate note:</b> external resources are capped per model (commonly ~131k entries / 10 MB);
-        the domain <i>Everything</i> feed can exceed that, so point FortiGate DNS filters at the
-        Medium or High domain feed. If a URL shows a loopback address, replace the host with this
-        server's LAN IP or hostname.
-    </details>
-
-    <!-- The common question ("is this IP/domain in my feeds?") without the 51k-row list. -->
-    <form class="lookup" onsubmit="return lookupIndicator(event)">
-        <label for="lookup-ip">Look up an IP or domain</label>
-        <input id="lookup-ip" type="text" class="text-input" placeholder="e.g. 203.0.113.10 or evil.example.com">
-        <button class="mini-btn" type="submit">Search</button>
-        <span class="muted">Opens the indicators page filtered to that value.</span>
-    </form>
-
-    <h2>Feeds</h2>
-    <p class="hint">One table, grouped by what the feeds produce (IP feeds, then domain feeds), and
-       sorted within each group by what each feed contributes that nothing else does — after any feed
-       with a problem, which always floats to the top of its group. <b>Unique</b> is the share of a
-       feed's entries no other feed reports (compared within its own kind; IP and domain feeds can
-       never overlap); <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and
-       the status badge catch a feed that has quietly gone stale.</p>
+{# ======================= FEEDS (roster + telemetry) ======================= #}
+<section class="view" id="view-feeds" aria-labelledby="feeds-title">
+    <div class="view-head">
+        <h1 id="feeds-title">Feeds</h1>
+        <p class="hint">Grouped by what the feeds produce, and sorted within each group by what each one
+           contributes that nothing else does, after any feed with a problem, which always floats to the top.
+           <b>Unique</b> is the share of a feed's entries no other feed reports (within its own kind);
+           <b>first</b> is how often it saw a threat before anyone else; <b>new</b> and the status catch a feed
+           that has quietly gone stale.</p>
+    </div>
     <div class="toolbar">
-        <button class="btn" id="refresh-all-btn" onclick="refreshAll(this)">↻ Refresh all now</button>
         <button class="mini-btn" onclick="restoreDefaults()">Restore default feeds</button>
-        <span id="refresh-status"></span>
         <span class="grow"></span>
-        <span class="interval-box">
-            Auto-refresh every
-            <input id="interval-min" type="number" min="1" value="{{ interval_min }}">
-            min <button class="mini-btn" onclick="saveInterval()">Save</button>
-        </span>
-        <span class="interval-box" title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
-            Keep entries for
-            <input id="retention-days" type="number" min="0" max="3650" value="{{ retention_days }}">
-            days <button class="mini-btn" onclick="saveRetention()">Save</button>
-        </span>
+        <a class="mini-btn" href="#system">Schedule and retention</a>
     </div>
     <div class="table-scroll">
     <table class="feeds">
@@ -270,7 +323,8 @@
     </form>
     <p class="hint">Uploaded lists are stored server-side (max 5 MB, text only) and must contain at least one entry of the selected kind.</p>
 
-    <details class="howto">
+    <h2 class="section-title">Insights</h2>
+    <details class="panel insight">
         <summary><b>Overlap map</b>: which feeds report the same indicators</summary>
         {# Two blocks, one per kind (D9): cross-kind overlap is structurally
            zero, so one mixed grid would waste most cells on guaranteed blanks. #}
@@ -305,7 +359,7 @@
         {% endif %}
     </details>
 
-    <details class=howto id=geo-heatmap>
+    <details class="panel insight" id=geo-heatmap>
         <summary><b>Blocked IP country heatmap</b>: where blocked addresses live</summary>
         <div class=geo-wrap>
             <p class=muted>Geo data loads when you open this section.</p>
@@ -316,18 +370,110 @@
     {# TLD panel (D10): the domain corpus's analogue of the geo heatmap —
        lazy fetch on first expand, plain ranked bars (top 15 + an honest
        "other" bucket; TLD abuse is heavily skewed and pies fail long tails). #}
-    <details class=howto id=tld-panel>
+    <details class="panel insight" id=tld-panel>
         <summary><b>Problematic TLDs</b>: where blocked domains live</summary>
         <div class=tld-wrap>
             <p class=muted>TLD data loads when you open this section.</p>
         </div>
     </details>
 
+</section>
+
+{# ======================= CONNECT (firewalls + integrations) ======================= #}
+<section class="view" id="view-integrations" aria-labelledby="int-title">
+    <div class="view-head">
+        <h1 id="int-title">Connect</h1>
+        <p class="hint">Firewalls poll the list URLs. UniFi and CrowdSec can't poll, so threat-feed-me pushes to
+           them after every refresh. SIEMs and TIPs read the same lists over TAXII 2.1.</p>
+    </div>
+    <details class="panel" open id="firewall-howto">
+        <summary><b>Firewalls and DNS filters</b>: where each URL goes</summary>
+        <ul>
+            <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL. IP connectors are used as address objects in firewall policies. Domain connectors are used in <b>DNS Filter profiles</b>: Security Profiles → DNS Filter → the connector appears in the category table under the <i>Threat Feeds</i> group (top or bottom of the list depending on firmware) → set it to <i>Redirect to Block Portal</i>, then apply the profile to the policy carrying client DNS. Bonus: adding the IP connector under the same profile's <i>External IP Block Lists</i> also blocks lookups whose answers resolve to blocked IPs.</li>
+            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL.</li>
+            <li><b>SonicWall</b> (SonicOS 7): Object → Match Objects → Dynamic External Object → protocol <i>HTTPS</i>, paste the URL; use the created address group in a rule.</li>
+            <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>
+            <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> (IPs) / <i>DNS Lists and Feeds</i> (domains).</li>
+            <li><b>Check Point</b> (R81+ SmartConsole): Security Policies → Threat Prevention → Custom Policy Tools → Indicators → New → <i>External IOC Feed</i>, paste the URL.</li>
+            <li><b>UniFi (UDM / UDM Pro / SE):</b> can't poll a URL — use the <i>UniFi integration</i>
+                panel below instead: it pushes the tier into network lists on the
+                gateway after every refresh. Device limitations to know: lists cap ~10k entries and
+                <b>a policy can reference only ONE list</b> (every firmware), so <b>High = 1 list =
+                1 policy per direction</b>, Medium = 4 lists, Everything = 10 — one policy each.
+                Push High unless you enjoy policy bookkeeping.</li>
+            <li><b>pfSense (pfBlockerNG):</b> Firewall → pfBlockerNG → IPv4 for IP URLs; DNSBL → DNSBL Groups for domain URLs.</li>
+            <li><b>OPNsense:</b> Firewall → Aliases → URL Table (IPs); domain lists fit Unbound DNS block lists.</li>
+            <li><b>Pi-hole / AdGuard Home:</b> add a domain URL as a blocklist (Adlists / DNS blocklists).</li>
+        </ul>
+        Lists are plain text, one entry per line, generated live with whitelisted entries removed automatically.
+        IP URLs never contain a domain and domain URLs never contain an IP — an address-type
+        feed import fed the wrong kind errors out on most firewalls.
+        Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feeds.
+        <b>FortiGate note:</b> external resources are capped per model (commonly ~131k entries / 10 MB);
+        the domain <i>Everything</i> feed can exceed that, so point FortiGate DNS filters at the
+        Medium or High domain feed. If a URL shows a loopback address, replace the host with this
+        server's LAN IP or hostname.
+    </details>
+
+    <details class="panel" open id="taxii-panel">
+        <summary><b>TAXII 2.1</b>: read-only STIX for SIEMs and TIPs</summary>
+        <p class="hint">Sentinel, QRadar, MISP and OpenCTI can subscribe to the same six lists as the feed URLs.</p>
+        <div class="url-row" style="max-width:560px">
+            <input class="url-box ltr" type="text" readonly value="{{ system.taxii_url }}" onclick="this.select()" aria-label="TAXII discovery URL">
+            <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
+        </div>
+        <p class="hint" style="margin-top:8px">{% if system.taxii_polls %}Recent: {% for p in system.taxii_polls %}{{ p.collection }} {{ p.age }} by {{ p.by }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}No TAXII client has polled yet.{% endif %}</p>
+    </details>
+
+    {# CrowdSec, both directions (v2.5.0). Settings in a DB row; the machine
+       login and bouncer key are write-only into the data-volume .env and
+       bound to the LAPI (changing it clears them). Test is read-only. #}
+    <details class="panel" open id=crowdsec-panel>
+        <summary><b>CrowdSec integration</b>: publish tiers to your bouncers, pull its decisions as feeds</summary>
+        <p class="hint" style="margin-top:8px"><b>Publish:</b> after every refresh, the chosen IP
+           tier is written into your CrowdSec Local API as ban decisions, so every CrowdSec
+           bouncer you run (nginx, Traefik, Cloudflare, firewall) enforces it. On the CrowdSec
+           host: <code>cscli machines add threatfeedme --password '…' -f /dev/null</code>, then
+           enter that login under <i>Set credentials</i>. Each publish replaces the previous one
+           with no gap; if threat-feed-me stops, its decisions expire after the duration.<br>
+           <b>Pull:</b> <code>cscli bouncers add threatfeedme</code> and enter the key, then
+           enable any of the <code>crowdsec_*</code> feeds under <a href="#feeds">Feeds</a>: your own detections, the
+           community blocklist, and your subscribed lists each vote as a separate source.
+           Decisions threat-feed-me published are never read back as votes.<br>
+           <b>Never publish into a honeypot's CrowdSec</b>: a honeypot needs attackers to reach
+           it. Pull from it; publish to the CrowdSec that protects your services.</p>
+        <div class="wl-form" style="margin-top:8px">
+            <label class="unifi-enable-label" title="When enabled, every refresh publishes the tier to the LAPI">
+                Publish
+                <span class="switch"><input type="checkbox" id="cs-enabled" aria-label="Publish to CrowdSec"><span></span></span>
+            </label>
+            <input class="ip" id="cs-lapi" type="text" placeholder="http://192.168.1.20:8080" style="width:220px"
+                   title="Your CrowdSec Local API: http(s)://host:port, no path" aria-label="CrowdSec LAPI URL">
+            <select id="cs-tier" title="Which cumulative IP tier to publish" aria-label="Tier to publish">
+                <option value="high">High tier</option>
+                <option value="medium" selected>Medium tier (recommended)</option>
+                <option value="low">Everything</option>
+            </select>
+            <label class="unifi-enable-label" title="Decision lifetime: if threat-feed-me stops, its bans lapse after this">
+                Bans last
+                <input id="cs-duration" type="number" min="2" max="168" value="24" style="width:70px"
+                       aria-label="Ban lifetime in hours">
+                hours
+            </label>
+            <input id="cs-console" type="text" placeholder="Console integration id (optional)" style="width:230px"
+                   title="For the crowdsec_console feed: the id of a Raw IP List integration in the CrowdSec Console" aria-label="Console integration id">
+            <button type="button" onclick="csSave()">Save</button>
+            <button type="button" class="mini-btn" id="cs-creds-btn" onclick="openCsCredsModal()">Set credentials</button>
+            <button type="button" class="mini-btn" onclick="csTest(this)">Test connection</button>
+            <button type="button" class="mini-btn" onclick="csPush(this)" title="Saves the settings above, then publishes">Save &amp; publish now</button>
+        </div>
+        <p class="hint" id="cs-status">—</p>
+    </details>
     {# UniFi push integration: UDMs can't poll a URL, so the app pushes the
        tier into firewall groups after every refresh. Everything managed
        here — settings in a DB row, credentials write-only into the
        data-volume .env (feed-API-key mechanics), Test = read-only. #}
-    <details class=howto id=unifi-panel>
+    <details class="panel" open id=unifi-panel>
         <summary><b>UniFi integration</b>: push IP tiers into UDM firewall groups</summary>
         <p class="hint" style="margin-top:8px">UniFi gateways can't poll a blocklist URL, so
            threat-feed-me pushes instead: after every refresh it maintains firewall groups named
@@ -384,9 +530,32 @@
         <p class="hint" id="unifi-status">—</p>
     </details>
 
-    {# System (v2.5.0): the operational facts that used to need SSH. #}
-    <details class=howto id=system-panel>
-        <summary><b>System</b>: version, database, backups, predictor, TAXII</summary>
+</section>
+
+{# ======================= SYSTEM ======================= #}
+<section class="view" id="view-system" aria-labelledby="sys-title">
+    <div class="view-head">
+        <h1 id="sys-title">System</h1>
+        <p class="hint">Schedule, storage, scoring and which names this dashboard answers to.</p>
+    </div>
+    <div class="panel-grid">
+        <div class="panel card" id="schedule-panel">
+            <h2 class="card-title">Schedule</h2>
+            <div class="setting-row">
+                <label for="interval-min">Refresh every</label>
+                <span class="interval-box"><input id="interval-min" type="number" min="1" value="{{ interval_min }}"> min</span>
+                <button class="mini-btn" onclick="saveInterval()">Save</button>
+            </div>
+            <div class="setting-row" title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
+                <label for="retention-days">Keep entries for</label>
+                <span class="interval-box"><input id="retention-days" type="number" min="0" max="3650" value="{{ retention_days }}"> days</span>
+                <button class="mini-btn" onclick="saveRetention()">Save</button>
+            </div>
+            <p class="hint">Entries are dropped this long after no feed lists them. 0 keeps them forever.</p>
+        </div>
+
+        <div class="panel card" id="system-panel">
+            <h2 class="card-title">Status</h2>
         <dl class="sysinfo">
             <dt>Version</dt><dd>v{{ system.version }}</dd>
             <dt>Database</dt><dd>{{ system.db_size }}</dd>
@@ -397,61 +566,28 @@
             <dt>Predictor</dt><dd>{% if system.predictor.live %}live, weight {{ system.predictor.weight }}{% if system.predictor.model_age %}; model trained {{ system.predictor.model_age }}{% endif %}{% if system.predictor.last_pass %}; last scoring pass {{ system.predictor.last_pass }}{% endif %}{% elif system.predictor.enabled %}enabled but no model file yet (inert){% else %}off{% endif %}</dd>
             <dt>Scores</dt><dd><button type="button" class="mini-btn" onclick="recalcNow(this)">Recalculate now</button>
                 <span class="muted">refreshes run this automatically when anything that affects scores changes</span></dd>
-            <dt>TAXII 2.1</dt><dd>
-                <div class="url-row" style="max-width:520px">
-                    <input class="url-box" type="text" readonly value="{{ system.taxii_url }}" onclick="this.select()" aria-label="TAXII discovery URL">
-                    <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
-                </div>
-                <span class="muted">Read-only STIX 2.1 for SIEMs and TIPs (Sentinel, QRadar, MISP, OpenCTI): the same six lists as the feed URLs.
-                {% if system.taxii_polls %}Recent: {% for p in system.taxii_polls %}{{ p.collection }} {{ p.age }} by {{ p.by }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}No TAXII client has polled yet.{% endif %}</span></dd>
         </dl>
-        <p class="hint" id="system-status"></p>
-    </details>
-
-    {# CrowdSec, both directions (v2.5.0). Settings in a DB row; the machine
-       login and bouncer key are write-only into the data-volume .env and
-       bound to the LAPI (changing it clears them). Test is read-only. #}
-    <details class=howto id=crowdsec-panel>
-        <summary><b>CrowdSec integration</b>: publish tiers to your bouncers, pull its decisions as feeds</summary>
-        <p class="hint" style="margin-top:8px"><b>Publish:</b> after every refresh, the chosen IP
-           tier is written into your CrowdSec Local API as ban decisions, so every CrowdSec
-           bouncer you run (nginx, Traefik, Cloudflare, firewall) enforces it. On the CrowdSec
-           host: <code>cscli machines add threatfeedme --password '…' -f /dev/null</code>, then
-           enter that login under <i>Set credentials</i>. Each publish replaces the previous one
-           with no gap; if threat-feed-me stops, its decisions expire after the duration.<br>
-           <b>Pull:</b> <code>cscli bouncers add threatfeedme</code> and enter the key, then
-           enable any of the <code>crowdsec_*</code> feeds below: your own detections, the
-           community blocklist, and your subscribed lists each vote as a separate source.
-           Decisions threat-feed-me published are never read back as votes.<br>
-           <b>Never publish into a honeypot's CrowdSec</b>: a honeypot needs attackers to reach
-           it. Pull from it; publish to the CrowdSec that protects your services.</p>
-        <div class="wl-form" style="margin-top:8px">
-            <label class="unifi-enable-label" title="When enabled, every refresh publishes the tier to the LAPI">
-                Publish
-                <span class="switch"><input type="checkbox" id="cs-enabled" aria-label="Publish to CrowdSec"><span></span></span>
-            </label>
-            <input class="ip" id="cs-lapi" type="text" placeholder="http://192.168.1.20:8080" style="width:220px"
-                   title="Your CrowdSec Local API: http(s)://host:port, no path" aria-label="CrowdSec LAPI URL">
-            <select id="cs-tier" title="Which cumulative IP tier to publish" aria-label="Tier to publish">
-                <option value="high">High tier</option>
-                <option value="medium" selected>Medium tier (recommended)</option>
-                <option value="low">Everything</option>
-            </select>
-            <label class="unifi-enable-label" title="Decision lifetime: if threat-feed-me stops, its bans lapse after this">
-                Bans last
-                <input id="cs-duration" type="number" min="2" max="168" value="24" style="width:70px"
-                       aria-label="Ban lifetime in hours">
-                hours
-            </label>
-            <input id="cs-console" type="text" placeholder="Console integration id (optional)" style="width:230px"
-                   title="For the crowdsec_console feed: the id of a Raw IP List integration in the CrowdSec Console" aria-label="Console integration id">
-            <button type="button" onclick="csSave()">Save</button>
-            <button type="button" class="mini-btn" id="cs-creds-btn" onclick="openCsCredsModal()">Set credentials</button>
-            <button type="button" class="mini-btn" onclick="csTest(this)">Test connection</button>
-            <button type="button" class="mini-btn" onclick="csPush(this)" title="Saves the settings above, then publishes">Save &amp; publish now</button>
+            <p class="hint" id="system-status"></p>
         </div>
-        <p class="hint" id="cs-status">—</p>
-    </details>
+
+        {# Host check (DNS-rebinding allowlist). Report-only until LOCKED;
+           names can be saved without locking (the guide does exactly that).
+           Hostnames shown here come from request headers: app.js escapes. #}
+        <div class="panel card wide" id="hostnames-panel">
+            <h2 class="card-title">Dashboard hostnames</h2>
+            <p class="hint">Locking the dashboard to the names you use stops other websites reaching it through
+               DNS rebinding. The server's IP address always works, and list URLs, TAXII and health checks are
+               never affected.</p>
+            <div id="hostnames-body"><p class="muted">Loading…</p></div>
+            <form class="name-form" onsubmit="return addHostName(event, 'system')">
+                <input id="system-hostname" class="text-input" type="text" placeholder="threatfeedme.lan"
+                       autocomplete="off" spellcheck="false" aria-label="Add a DNS name">
+                <button class="mini-btn" type="submit">Check &amp; add</button>
+            </form>
+            <div class="name-result" id="system-name-result" role="status" aria-live="polite"></div>
+        </div>
+    </div>
+</section>
 {% endblock %}
 
 {% block modals %}

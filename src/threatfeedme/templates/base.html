@@ -1,11 +1,12 @@
 <!DOCTYPE html>
+{% from "_mark.html" import mark, icon %}
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>{% block title %}Threat Feed Me!{% endblock %}</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ app_version }}">
     {# ?v= cache-buster: StaticFiles sends no Cache-Control, so browsers use
        heuristic freshness and happily keep serving a stale app.js after an
        upgrade — new server-rendered HTML calling JS functions that don't
@@ -13,18 +14,40 @@
        see. Versioning the URL invalidates on every release. #}
     <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
 </head>
-<body>
-<div class="container">
-    <h1><svg class="logo-mark" viewBox="0 0 128 128" aria-hidden="true"><g transform="translate(64 60)"><path d="M-40 10 C-44 -18 -24 -38 0 -38 C24 -38 44 -18 40 10 L28 10 L22 -2 L14 10 L6 -2 L-2 10 L-10 -2 L-18 10 L-26 -2 L-34 10 Z" fill="none" stroke="#34d399" stroke-width="9" stroke-linejoin="round"/><path d="M0 12 C-3 32 3 38 0 52" fill="none" stroke="#34d399" stroke-width="9" stroke-linecap="round"/><circle class="prey" cx="0" cy="-12" r="6.5" fill="#f87171"/></g></svg>Threat Feed Me!</h1>
-    <nav class="nav">
-        <a href="/" {% if page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
-        <a href="/indicators" {% if page == 'indicators' %}class="active"{% endif %}>Indicators</a>
+<body class="page-{{ page }}">
+<a class="skip" href="#main">Skip to content</a>
+{# v2.5 "Slate Pro" shell: an icon rail for the views, a top bar that is
+   the same on every page (lookup, health, refresh). The dashboard's views
+   are hash-routed sections of one page (app.js showView), so every rail
+   link is "/#view": on the dashboard it switches view without a reload,
+   from the indicators page it navigates back. No external fonts or
+   scripts: the dashboard works air-gapped and calls nothing (PRIVACY.md). #}
+<div class="shell">
+    <nav class="rail" aria-label="Main">
+        <a class="rail-mark" href="/#lists" aria-label="Threat Feed Me! home">{{ mark(38) }}</a>
+        <a class="rail-link" href="/#guide" data-view="guide">{{ icon('<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>') }}<span>Guide</span></a>
+        <a class="rail-link" href="/#lists" data-view="lists">{{ icon('<path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>') }}<span>Lists</span></a>
+        <a class="rail-link" href="/#feeds" data-view="feeds">{{ icon('<path d="M5 19a1 1 0 1 0 0-.01"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/>') }}<span>Feeds</span></a>
+        <a class="rail-link{% if page == 'indicators' %} on{% endif %}" href="/indicators"{% if page == 'indicators' %} aria-current="page"{% endif %}>{{ icon('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>') }}<span>Indicators</span></a>
+        <a class="rail-link" href="/#integrations" data-view="integrations">{{ icon('<path d="M9 7V3M15 7V3"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>') }}<span>Connect</span></a>
+        <a class="rail-link" href="/#system" data-view="system">{{ icon('<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>') }}<span>System</span></a>
     </nav>
-    <p class="sub">{% block subtitle %}{% endblock %}</p>
-
+    <div class="main">
+        <header class="topbar">
+            <a class="brand" href="/#lists">Threat Feed Me<span class="bang">!</span></a>
+            <form class="search" role="search" onsubmit="return lookupIndicator(event)">
+                {{ icon('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>') }}
+                <label class="sr-only" for="lookup-ip">Look up an IP or domain</label>
+                <input id="lookup-ip" type="search" placeholder="Look up an IP or domain" autocomplete="off" spellcheck="false">
+                <kbd aria-hidden="true">/</kbd>
+            </form>
+            <div class="topbar-end">{% block topbar %}{% endblock %}</div>
+        </header>
+        <main id="main" class="content" tabindex="-1">
 {% block content %}{% endblock %}
-
-    <footer>Generated {{ generated_at }} · Threat Feed Me! v{{ app_version }}</footer>
+        </main>
+        <footer class="foot">Threat Feed Me! v{{ app_version }} · page generated {{ generated_at }}</footer>
+    </div>
 </div>
 {% block modals %}{% endblock %}
 <script src="/static/app.js?v={{ app_version }}"></script>

@@ -1,6 +1,6 @@
 # Privacy Statement
 
-*Effective 2026-09-14. Applies to Threat Feed Me v2.4.13 and later.*
+*Effective 2026-09-23. Applies to Threat Feed Me v2.5.0 and later.*
 
 Threat Feed Me runs on infrastructure you control. The project and its
 maintainer collect nothing from you or from your installation: there is no
@@ -24,7 +24,8 @@ published compose file). Nothing is written anywhere else.
 | Feed telemetry | Per-feed fetch times, counts, HTTP status, overlap and reputation metrics | `feeds`, `feed_stats`, `deleted_feeds` | Until the feed is deleted, then a tombstone with the name only |
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
-| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostname allowlist, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
+| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved and whether the host check is switched on, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
+| Hostnames seen | The hostnames (from the `Host` header) the dashboard has been reached by, with a count and first/last time, so the System view can offer them for the host check. No client IP address. Capped at 200 names | Memory only, never written to disk | Until the process restarts |
 | Feed polls | Per served feed URL and TAXII collection: when it was last fetched, how many times, and the fetching client's User-Agent (truncated), so the dashboard can show "polled 3m ago by FortiGate". No client IP address | `settings` (`feed_polls`) | Overwritten on every poll; one entry per URL |
 | Uploaded lists | Custom indicator lists you upload through the dashboard, as text files | `uploads/` under the data directory | Until you delete the feed |
 | Credentials | Feed API keys, UniFi credentials and CrowdSec credentials (machine login, bouncer key, Console integration login) you save from the dashboard, as `KEY=value` lines | `.env` next to the database, plain text | Until you remove them |
@@ -79,12 +80,20 @@ integration login to `admin.api.crowdsec.net` (CrowdSec's servers) to
 download the blocklists your Console account subscribes to; CrowdSec's
 privacy policy governs that request.
 
+**To your DNS resolver, only when you ask.** The dashboard's *Check & add*
+button (set-up guide and System → Dashboard hostnames) looks up the DNS name
+you typed, through the server's own resolver, to tell you whether it points
+at this server. That is a lookup only, no connection is made to the name,
+and the answer is shown to you and not stored. Your resolver (and anything
+upstream of it) sees the name and the time of the query.
+
 **To nobody else.** The software does not contact the project, the
 maintainer, a licensing server, an analytics endpoint or an update service.
 Country lookups for the dashboard heatmap use an offline table derived from
 the DB-IP Lite database and shipped inside the image; no geolocation
 service is called at runtime. The map outline is served by the application
-itself, not fetched from a CDN. You can confirm all of this with an egress
+itself, not fetched from a CDN, and the dashboard loads no web fonts,
+scripts or images from anywhere else. You can confirm all of this with an egress
 rule that allows only your enabled feed hosts, your gateway and your
 CrowdSec LAPI: the software works normally behind it.
 

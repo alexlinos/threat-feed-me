@@ -88,7 +88,8 @@ def test_unknown_feed_returns_404(client):
 
 def test_homepage_shows_paste_url(client):
     body = client.get("/").text
-    assert "Firewall feed URLs" in body
+    assert "Block lists" in body
+    assert "Paste this into your firewall." in body    # the first-run guide
     assert "/feeds/medium.txt" in body
 
 
@@ -173,12 +174,12 @@ def test_dashboard_is_not_a_wall_of_ips(client):
     feed health. The 50k-row indicator list and whitelist live on their own
     page, reachable from the nav and the lookup box."""
     body = client.get("/").text
-    assert "Firewall feed URLs" in body
+    assert "Block lists" in body
     assert 'href="/indicators"' in body          # nav link
     assert 'id="lookup-ip"' in body              # single-IP lookup, not a list
     assert 'id="ind-body"' not in body           # indicator table gone
     assert 'id="wl-feed"' not in body            # whitelist form gone
-    assert "<details" in body                    # firewall instructions collapsed
+    assert "<details" in body                    # panels are disclosures
 
 
 def test_feeds_table_carries_telemetry_inline(client):
@@ -438,6 +439,23 @@ def test_the_matrix_says_whether_a_firewall_is_polling(client):
     assert set(entry) == {"at", "count", "agent"}    # no client address stored
 
 
+def test_guide_is_the_default_until_a_firewall_polls(client, monkeypatch):
+    """v2.5 Guided view: first-time operators land on the set-up checklist;
+    once any IP list has been polled the block lists are the default (the
+    guide stays in the rail). The name step never enforces the host check."""
+    from threatfeedme import polls
+    monkeypatch.setattr(polls, "_polls", {})
+    monkeypatch.setattr(polls, "_loaded", True)
+    body = client.get("/").text
+    assert "Set-up checklist" in body and "Name this server" in body
+    assert "(true && pref !== 'dismissed')" in body
+    assert "Nothing gets blocked" in body
+    client.get("/feeds/medium.txt", headers={"User-Agent": "FortiGate (FortiOS 7.4)"})
+    body = client.get("/").text
+    assert "(false && pref !== 'dismissed')" in body
+    assert "FortiGate fetched the Medium IP list" in body
+
+
 def test_poll_keys_come_from_routes_not_raw_paths(client):
     from threatfeedme import dashboard, polls
     client.get("/feeds/nope.txt")                     # 404: unknown feed, not recorded
@@ -448,7 +466,7 @@ def test_poll_keys_come_from_routes_not_raw_paths(client):
 
 def test_system_panel_shows_operational_facts(client):
     body = client.get("/").text
-    for text in ("System</b>", "Last backup", "Vote grace", "Predictor", "/taxii2/"):
+    for text in ('id="view-system"', "Last backup", "Vote grace", "Predictor", "/taxii2/"):
         assert text in body, text
 
 
@@ -795,14 +813,13 @@ def test_feeds_are_cumulative_high_subset_of_medium(client):
 
 
 def test_matrix_recommends_medium(client):
-    """The docs always recommended Medium; the matrix badge said High. One
-    Recommended badge, on the Medium row."""
+    """The docs always recommended Medium; the matrix badge said High. The
+    Recommended badge sits on the Medium lists only (one per kind)."""
     import re
     body = client.get("/").text
-    assert body.count('class="rec">Recommended<') == 1
-    row = re.search(r'mx-tier mx-(\w+)">\s*<span class="mx-label">[^<]*</span>\s*'
-                    r'<span class="rec">Recommended', body)
-    assert row and row.group(1) == "medium"
+    badged = re.findall(r'<h2>(\w+) (?:IPs|domains)</h2>\s*<span class="rec">Recommended', body)
+    assert badged == ["Medium", "Medium"]
+    assert body.count('class="rec">Recommended<') == 2
 
 
 def test_footer_shows_running_version(client):
@@ -817,7 +834,7 @@ def test_matrix_cells_show_served_counts(client):
     stat-tile row is retired in v2.0; counts live inline in the feed matrix,
     one column per indicator kind.)"""
     body = client.get("/").text
-    assert "Domain feeds" in body                 # the kind columns render
+    assert "Medium domains</h2>" in body          # the domain cards render
     assert "/feeds/domains/medium.txt" in body    # domain URLs in the matrix
     med_served = len([l for l in client.get("/feeds/medium.txt").text.splitlines() if l.strip()])
     assert f'{med_served:,}' in body      # medium IP cell == medium.txt size
@@ -927,7 +944,10 @@ def test_host_check_api_lock_and_unlock(client):
         assert s["mode"] == "report-only"
         assert "testserver" in [e["host"] for e in s["seen"]]
 
-        r = client.post("/api/host-check", json={"allowed": ["threatfeedme.tnh.local"]})
+        # saving names alone refuses nothing: the switch is off by default
+        s = client.post("/api/host-check", json={"allowed": ["threatfeedme.tnh.local"]}).json()
+        assert s["mode"] == "report-only"
+        r = client.post("/api/host-check", json={"allowed": ["threatfeedme.tnh.local"], "enforce": True})
         assert r.status_code == 200
         s = r.json()
         assert s["mode"] == "enforcing"
@@ -942,6 +962,62 @@ def test_host_check_api_lock_and_unlock(client):
         client.post("/api/host-check", json={"allowed": []})   # back to report-only
         mw._seen.clear(); mw.invalidate_allowlist_cache()
     assert client.get("/api/host-check").json()["mode"] == "report-only"
+
+
+def test_host_check_save_names_without_enforcing(client):
+    """The first-run guide adds a DNS name with enforce=false: nothing is
+    refused until the operator locks, and unlocking keeps the names."""
+    from threatfeedme import middleware as mw
+    mw._seen.clear(); mw.invalidate_allowlist_cache()
+    try:
+        s = client.post("/api/host-check",
+                        json={"allowed": ["threatfeedme.lan"], "enforce": False}).json()
+        assert s["mode"] == "report-only" and s["locked"] is False
+        assert "threatfeedme.lan" in s["configured"]
+        assert client.get("/api/stats", headers={"host": "not-yet.example"}).status_code == 200
+        # a saved name is not listed as an unknown one
+        client.get("/api/stats", headers={"host": "threatfeedme.lan"})
+        seen = [e["host"] for e in client.get("/api/host-check").json()["seen"]]
+        assert "threatfeedme.lan" not in seen and "not-yet.example" in seen
+
+        # omitting enforce keeps the current (unlocked) state
+        s = client.post("/api/host-check", json={"allowed": ["threatfeedme.lan", "tfm.lan"]}).json()
+        assert s["mode"] == "report-only"
+
+        s = client.post("/api/host-check", json={"allowed": s["configured"], "enforce": True}).json()
+        assert s["mode"] == "enforcing" and s["locked"] is True
+        assert client.get("/api/stats", headers={"host": "not-yet.example"}).status_code == 400
+
+        s = client.post("/api/host-check", json={"allowed": s["configured"], "enforce": False}).json()
+        assert s["mode"] == "report-only" and "tfm.lan" in s["configured"]
+    finally:
+        client.post("/api/host-check", json={"allowed": []})
+        mw._seen.clear(); mw.invalidate_allowlist_cache()
+
+
+def test_host_check_resolve(client, monkeypatch):
+    """The guide's "does this name point at this server?" check: a DNS lookup
+    only, compared with the IP the operator is using right now."""
+    import socket
+    answers = {"threatfeedme.lan": ["10.0.0.5"], "elsewhere.lan": ["10.9.9.9"]}
+
+    def fake_getaddrinfo(host, *a, **k):
+        if host not in answers:
+            raise socket.gaierror("no such name")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0)) for ip in answers[host]]
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    here = {"host": "10.0.0.5:8080"}
+    r = client.post("/api/host-check/resolve", json={"name": "threatfeedme.lan"}, headers=here).json()
+    assert r["resolves"] and r["addresses"] == ["10.0.0.5"] and r["matches_current"] is True
+    r = client.post("/api/host-check/resolve", json={"name": "elsewhere.lan"}, headers=here).json()
+    assert r["resolves"] and r["matches_current"] is False
+    r = client.post("/api/host-check/resolve", json={"name": "missing.lan"}, headers=here).json()
+    assert not r["resolves"] and r["error"] == "does not resolve"
+    # reached by name, not IP: no comparison is possible
+    r = client.post("/api/host-check/resolve", json={"name": "threatfeedme.lan"}).json()
+    assert r["matches_current"] is None
+    for bad in ("bad_name!", "10.0.0.5", "localhost"):
+        assert client.post("/api/host-check/resolve", json={"name": bad}).status_code == 400
 
 
 def test_feed_etag_304_and_limit_over_http(client):
@@ -964,11 +1040,11 @@ def test_ops_pulse_row(client):
     and must NOT duplicate matrix sizes. UniFi card renders only when the
     push integration is configured (it isn't, in this fixture)."""
     body = client.get("/").text
-    for label in ("Feeds healthy", "Last refresh", "New in 24h", "Overrides"):
+    for label in ("feeds healthy", 'id="pulse-refresh"', "in 24h", "overrides"):
         assert label in body
     assert "UniFi push" not in body           # hidden unless configured
+    assert "CrowdSec publishing" not in body  # likewise
     # fixture has one whitelist entry -> the zero-state line must NOT show
-    assert "human judgment applied" in body
     assert "pure feed consensus" not in body
 
 

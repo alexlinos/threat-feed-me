@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Indicators: Threat Feed Me!{% endblock %}
-{% block subtitle %}The deduplicated result across all feeds. Search for an IP or domain, add one manually,
-   or remove one (removing globally whitelists it so a refresh won't bring it back).{% endblock %}
-
 {% block content %}
-    <h2>Merged indicators</h2>
+    <div class="view-head">
+        <h1>Indicators</h1>
+        <p class="hint">The deduplicated result across all feeds. Search for an IP or domain, add one manually,
+           or remove one (removing whitelists it everywhere, so a refresh won't bring it back).</p>
+    </div>
     <div class="toolbar">
         <input id="ind-q" type="text" class="text-input" placeholder="Search IP / domain…" value="{{ q }}">
         <form onsubmit="return addIndicator(event)" style="display:flex;gap:8px;align-items:center">
@@ -25,7 +26,7 @@
     </table>
     </div>
 
-    <h2>Whitelist</h2>
+    <h2 class="section-title" id="whitelist">Whitelist</h2>
     <p class="hint">Whitelist an entry from <b>all tiers</b> (excluded everywhere) or from a
        <b>single tier</b> (only that tier's feed drops it; the others still list it).
        Accepts an IP, a CIDR, a domain, or a wildcard like <code>*.example.com</code>

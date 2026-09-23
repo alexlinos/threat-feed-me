@@ -55,12 +55,20 @@ Verified in code review (adversarial passes, 2026-08 and 2026-09; the
   exactly the validated address, so a DNS-rebinding host cannot answer
   public at check time and private at connect time. Adding a feed also runs
   the check up front, refusing an internal URL with a reason.
-- **Host-header allowlist** (v2.5.0): the dashboard and API answer only to
-  hostnames you allow (`TFM_ALLOWED_HOSTS`, or one click from the dashboard
-  banner), which stops DNS-rebinding pages in a LAN browser from driving
-  the API. IP literals and localhost always work; `/feeds`, `/healthz` and
-  static files are exempt so firewalls keep polling. Report-only until
-  configured, so an upgrade behind a proxy never locks you out.
+- **Host-header allowlist** (v2.5.0, opt-in): switched on, the dashboard
+  and API answer only to hostnames you allow, which stops DNS-rebinding
+  pages in a LAN browser from driving the API. **Off by default and after an
+  upgrade**: it refuses nothing until the operator turns on *Only answer to
+  these names* (set-up guide or System) or sets `TFM_ALLOWED_HOSTS`. While
+  off it only records which names reach the dashboard (in memory). Saving a
+  name and enforcing are separate, so the guide can save a DNS name before
+  its record exists without refusing anything; its *Check & add* does a DNS
+  lookup only (no connection), of a syntactically valid hostname, behind
+  auth and the CSRF check, with a 3-second timeout. IP literals and
+  localhost always work, the name the switching request arrived on is kept,
+  and `/feeds`, `/taxii2`, `/healthz` and static files are exempt so
+  firewalls and SIEMs keep polling. We recommend switching it on once the
+  names you use are listed.
 - **Request bodies are capped** before authentication (1 MB, 6 MB for list
   uploads), by declared length and by counting streamed bytes.
 - **Least privilege in the image** (v2.5.0): the runtime user owns only
