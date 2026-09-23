@@ -25,6 +25,7 @@ published compose file). Nothing is written anywhere else.
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
 | Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostname allowlist, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
+| Feed polls | Per served feed URL and TAXII collection: when it was last fetched, how many times, and the fetching client's User-Agent (truncated), so the dashboard can show "polled 3m ago by FortiGate". No client IP address | `settings` (`feed_polls`) | Overwritten on every poll; one entry per URL |
 | Uploaded lists | Custom indicator lists you upload through the dashboard, as text files | `uploads/` under the data directory | Until you delete the feed |
 | Credentials | Feed API keys, UniFi credentials and CrowdSec credentials (machine login, bouncer key, Console integration login) you save from the dashboard, as `KEY=value` lines | `.env` next to the database, plain text | Until you remove them |
 

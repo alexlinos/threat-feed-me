@@ -46,6 +46,23 @@
         {% endif %}
     </div>
 
+    {% if first_run %}
+    {# Fresh install: the tables below are empty for the first couple of
+       minutes, which reads as "broken" unless something says otherwise. #}
+    <div class="callout first-run" role="status">
+        <b>Welcome. threat-feed-me is fetching its feeds for the first time</b> (usually one
+        to three minutes; this page updates as they land). Next:
+        <ol>
+            <li>Copy the <b>Medium</b> IP URL below into your firewall's external block-list /
+                threat-feed setting (the how-to further down covers FortiGate, Palo Alto,
+                pfSense, OPNsense and more). Domain feeds go to your DNS filter.</li>
+            <li>After the firewall's first poll, its cell here says <i>polled … by …</i>, so you
+                know it's really pulling.</li>
+            <li>Optional: publish to your CrowdSec bouncers or UniFi gateway (panels at the
+                bottom), or point a SIEM at the TAXII 2.1 server (System panel).</li>
+        </ol>
+    </div>
+    {% endif %}
     <h2>Firewall feed URLs</h2>
     {# FEED MATRIX (D2 revised): rows = tiers, columns = kinds. The stat-tile
        row is retired — each cell carries its URL and the count it serves
@@ -80,6 +97,12 @@
             <div class="alt-formats">
                 Also: <a href="{{ feed_base }}{{ cell.path }}.csv">CSV</a> ·
                 <a href="{{ feed_base }}{{ cell.path }}.json">JSON</a>
+                {# "Is my firewall actually polling this?" A typo'd URL fails
+                   silently on most firewalls; this line is the only proof. #}
+                <span class="polled{% if not cell.polled %} never{% endif %}"
+                      title="{% if cell.polled %}{{ '{:,}'.format(cell.polled.count) }} fetches recorded{% else %}Nothing has fetched this URL yet{% endif %}">
+                    · {% if cell.polled %}polled {% if cell.polled.age_min < 1 %}just now{% elif cell.polled.age_min < 120 %}{{ cell.polled.age_min }}m ago{% else %}{{ cell.polled.age_min // 60 }}h ago{% endif %} by {{ cell.polled.by }}{% else %}not polled yet{% endif %}
+                </span>
             </div>
         </div>
         {% endfor %}
@@ -359,6 +382,30 @@
         </div>
         <p class="hint" id="unifi-tier-warning" style="display:none;color:var(--amber)"></p>
         <p class="hint" id="unifi-status">—</p>
+    </details>
+
+    {# System (v2.5.0): the operational facts that used to need SSH. #}
+    <details class=howto id=system-panel>
+        <summary><b>System</b>: version, database, backups, predictor, TAXII</summary>
+        <dl class="sysinfo">
+            <dt>Version</dt><dd>v{{ system.version }}</dd>
+            <dt>Database</dt><dd>{{ system.db_size }}</dd>
+            <dt>Last backup</dt><dd>{{ system.last_backup or 'none yet' }}
+                <button type="button" class="mini-btn" onclick="backupNow(this)">Back up now</button></dd>
+            <dt>Retention</dt><dd>{% if system.retention_days %}{{ system.retention_days }} days after no feed lists an entry{% else %}keep forever{% endif %}</dd>
+            <dt>Vote grace</dt><dd>{% if system.vote_grace_days is not none %}a feed's vote lasts {{ system.vote_grace_days|round(1)|replace('.0', '') }} days after it drops an entry{% else %}off (permanent credit){% endif %}</dd>
+            <dt>Predictor</dt><dd>{% if system.predictor.live %}live, weight {{ system.predictor.weight }}{% if system.predictor.model_age %}; model trained {{ system.predictor.model_age }}{% endif %}{% if system.predictor.last_pass %}; last scoring pass {{ system.predictor.last_pass }}{% endif %}{% elif system.predictor.enabled %}enabled but no model file yet (inert){% else %}off{% endif %}</dd>
+            <dt>Scores</dt><dd><button type="button" class="mini-btn" onclick="recalcNow(this)">Recalculate now</button>
+                <span class="muted">refreshes run this automatically when anything that affects scores changes</span></dd>
+            <dt>TAXII 2.1</dt><dd>
+                <div class="url-row" style="max-width:520px">
+                    <input class="url-box" type="text" readonly value="{{ system.taxii_url }}" onclick="this.select()" aria-label="TAXII discovery URL">
+                    <button class="copy-btn" onclick="copyUrl(this)">Copy</button>
+                </div>
+                <span class="muted">Read-only STIX 2.1 for SIEMs and TIPs (Sentinel, QRadar, MISP, OpenCTI): the same six lists as the feed URLs.
+                {% if system.taxii_polls %}Recent: {% for p in system.taxii_polls %}{{ p.collection }} {{ p.age }} by {{ p.by }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}No TAXII client has polled yet.{% endif %}</span></dd>
+        </dl>
+        <p class="hint" id="system-status"></p>
     </details>
 
     {# CrowdSec, both directions (v2.5.0). Settings in a DB row; the machine

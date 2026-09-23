@@ -427,6 +427,31 @@ def test_whitelist_errors_are_http_errors_not_200_false(client, monkeypatch):
     assert r.status_code == 500 and "/secret/path" not in r.text
 
 
+def test_the_matrix_says_whether_a_firewall_is_polling(client):
+    import re
+    from threatfeedme import dashboard, polls
+    client.get("/feeds/high.txt", headers={"User-Agent": "FortiGate (FortiOS 7.4)"})
+    body = client.get("/").text
+    assert re.search(r"polled (just now|\d+m ago) by FortiGate", body)
+    assert "not polled yet" in body                  # the cells nothing fetched
+    entry = polls.snapshot(dashboard.db)["high.txt"]
+    assert set(entry) == {"at", "count", "agent"}    # no client address stored
+
+
+def test_poll_keys_come_from_routes_not_raw_paths(client):
+    from threatfeedme import dashboard, polls
+    client.get("/feeds/nope.txt")                     # 404: unknown feed, not recorded
+    client.get("/feeds/domains/medium.json", headers={"User-Agent": "x\x01y"})
+    snap = polls.snapshot(dashboard.db)
+    assert "nope.txt" not in snap and snap["domains/medium.json"]["agent"] == "xy"
+
+
+def test_system_panel_shows_operational_facts(client):
+    body = client.get("/").text
+    for text in ("System</b>", "Last backup", "Vote grace", "Predictor", "/taxii2/"):
+        assert text in body, text
+
+
 def test_local_file_feed_outside_uploads_is_rejected(client):
     # Adding a local-file feed pointing at an arbitrary path must be blocked.
     r = client.post("/api/feeds", json={

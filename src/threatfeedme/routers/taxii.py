@@ -109,6 +109,10 @@ def objects(cid: str, request: Request,
     result, err = _page(cid, added_after, next, limit)
     if err:
         return err
+    if not next:            # one poll = its first page
+        from threatfeedme import polls
+        kind, tier = taxii.COLLECTIONS[cid]
+        polls.record(core.db, f"taxii:{kind}/{tier}", request.headers.get("user-agent", ""))
     objs, added, more, token = result
     body = {"more": more, "objects": objs}
     if token:

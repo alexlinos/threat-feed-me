@@ -232,3 +232,11 @@ def test_objects_describe_their_evidence(client):
     assert "reported by 2 feeds" in o["description"]
     assert set(o["labels"]) >= {"source:blocklist_de", "source:spamhaus_drop"}
     assert not any(k.startswith("x_") for k in o)
+
+
+def test_a_taxii_poll_is_recorded_once_per_poll_not_per_page(client, db):
+    from threatfeedme import polls
+    cid = _cid("ip", "all")
+    before = polls.snapshot(db).get("taxii:ip/all", {}).get("count", 0)
+    _all(client, cid, limit=2)                        # several pages, one poll
+    assert polls.snapshot(db)["taxii:ip/all"]["count"] == before + 1

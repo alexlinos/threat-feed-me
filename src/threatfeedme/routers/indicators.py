@@ -41,8 +41,17 @@ def _known(name: str) -> None:
         raise HTTPException(status_code=404, detail="Unknown feed")
 
 
+def _polled(request: Request, name: str, kind: str, ext: str) -> None:
+    """Note the poll for the dashboard's "last polled" line. The key is built
+    from the validated route name, never from the raw path."""
+    from threatfeedme import polls
+    polls.record(core.db, f"{'domains/' if kind == 'domain' else ''}{name}.{ext}",
+                 request.headers.get("user-agent", ""))
+
+
 def _feed_txt(request: Request, name: str, kind: str, limit: Optional[int]) -> Response:
     _known(name)
+    _polled(request, name, kind, "txt")
     body, etag = feed_cache.txt(core.db, name, kind, limit)
     headers = {"Cache-Control": "no-cache", "ETag": etag}
     if request.headers.get("if-none-match") == etag:
@@ -50,14 +59,16 @@ def _feed_txt(request: Request, name: str, kind: str, limit: Optional[int]) -> R
     return Response(body, media_type="text/plain; charset=utf-8", headers=headers)
 
 
-def _feed_csv(name: str, kind: str, limit: Optional[int]) -> StreamingResponse:
+def _feed_csv(request: Request, name: str, kind: str, limit: Optional[int]) -> StreamingResponse:
     _known(name)
+    _polled(request, name, kind, "csv")
     return StreamingResponse(feed_cache.stream_csv(core.db, name, kind, limit),
                              media_type="text/csv; charset=utf-8")
 
 
-def _feed_json(name: str, kind: str, limit: Optional[int]) -> StreamingResponse:
+def _feed_json(request: Request, name: str, kind: str, limit: Optional[int]) -> StreamingResponse:
     _known(name)
+    _polled(request, name, kind, "json")
     return StreamingResponse(feed_cache.stream_json(core.db, name, kind, limit),
                              media_type="application/json")
 
@@ -69,15 +80,15 @@ def feed_txt(name: str, request: Request, limit: Optional[int] = _LIMIT):
 
 
 @router.get("/feeds/{name}.csv")
-def feed_csv(name: str, limit: Optional[int] = _LIMIT):
+def feed_csv(name: str, request: Request, limit: Optional[int] = _LIMIT):
     """CSV with metadata (for SIEM / spreadsheet use)."""
-    return _feed_csv(name, "ip", limit)
+    return _feed_csv(request, name, "ip", limit)
 
 
 @router.get("/feeds/{name}.json")
-def feed_json(name: str, limit: Optional[int] = _LIMIT):
+def feed_json(name: str, request: Request, limit: Optional[int] = _LIMIT):
     """JSON with full details (for programmatic / SIEM ingestion)."""
-    return _feed_json(name, "ip", limit)
+    return _feed_json(request, name, "ip", limit)
 
 
 @router.get("/feeds/domains/{name}.txt", response_class=PlainTextResponse)
@@ -87,15 +98,15 @@ def domain_feed_txt(name: str, request: Request, limit: Optional[int] = _LIMIT):
 
 
 @router.get("/feeds/domains/{name}.csv")
-def domain_feed_csv(name: str, limit: Optional[int] = _LIMIT):
+def domain_feed_csv(name: str, request: Request, limit: Optional[int] = _LIMIT):
     """Domain CSV with metadata (for SIEM / spreadsheet use)."""
-    return _feed_csv(name, "domain", limit)
+    return _feed_csv(request, name, "domain", limit)
 
 
 @router.get("/feeds/domains/{name}.json")
-def domain_feed_json(name: str, limit: Optional[int] = _LIMIT):
+def domain_feed_json(name: str, request: Request, limit: Optional[int] = _LIMIT):
     """Domain JSON with full details (for programmatic / SIEM ingestion)."""
-    return _feed_json(name, "domain", limit)
+    return _feed_json(request, name, "domain", limit)
 
 
 # ==================== JSON API (authenticated when auth enabled) ============

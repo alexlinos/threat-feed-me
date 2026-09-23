@@ -945,6 +945,27 @@ async function csPush(btn) {
     } finally { btn.disabled = false; }
 }
 
+// ---- System panel actions ----
+async function backupNow(btn) {
+    const el = document.getElementById('system-status');
+    btn.disabled = true; el.textContent = 'Backing up…';
+    try {
+        const r = await apiFetch('/api/backup', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? 'Backup written.' : ('Backup failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+async function recalcNow(btn) {
+    const el = document.getElementById('system-status');
+    btn.disabled = true; el.textContent = 'Recalculating every score (can take a minute on a large corpus)…';
+    try {
+        const r = await apiFetch('/api/recalculate-scores', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? ('Recalculated ' + Number(j.recalculated).toLocaleString() + ' indicators.')
+                              : ('Recalculate failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+
 // ---- Host check (DNS-rebinding allowlist) ----------------------------------
 // Report-only until an allowlist exists: the banner lists the hostnames that
 // actually reached this dashboard so the operator can lock to exactly those.
