@@ -414,6 +414,19 @@ def test_an_upload_cannot_take_over_a_remote_feeds_name(client):
     client.delete("/api/feeds/my_upload")
 
 
+def test_whitelist_errors_are_http_errors_not_200_false(client, monkeypatch):
+    from threatfeedme import core
+    r = client.post("/api/whitelist", json={"ip": "198.51.100.77", "reason_code": "other",
+                                            "expires_at": "next tuesday"})
+    assert r.status_code == 400 and "expires_at" in r.json()["detail"]
+
+    def boom(*a, **k):
+        raise RuntimeError("disk I/O error at /secret/path")
+    monkeypatch.setattr(core.db, "add_to_whitelist", boom)
+    r = client.post("/api/whitelist", json={"ip": "198.51.100.77", "reason_code": "other"})
+    assert r.status_code == 500 and "/secret/path" not in r.text
+
+
 def test_local_file_feed_outside_uploads_is_rejected(client):
     # Adding a local-file feed pointing at an arbitrary path must be blocked.
     r = client.post("/api/feeds", json={
