@@ -92,6 +92,7 @@ CrowdSec LAPI: the software works normally behind it.
 | Endpoint | Authentication | Who can see what |
 |---|---|---|
 | `/feeds/*` | None, by design | Anyone who can reach the port can download your block lists. Firewalls polling a feed cannot present credentials, so the lists are treated as non-secret. |
+| `/taxii2/*` | None, by design | The same block lists as `/feeds/*`, as STIX 2.1 Indicators over TAXII 2.1 (read-only), each with its confidence, tier and the names of the feeds that reported it. For SIEM and threat-intel platforms that subscribe rather than poll a text file. |
 | `/healthz` | None | Returns `{"ok": true}` and nothing else. |
 | Dashboard and `/api/*` | Optional HTTP Basic auth (`DASHBOARD_USER`, `DASHBOARD_PASSWORD`, `dashboard.auth_required: true`) | Open by default for a trusted LAN. Enable auth on any network you do not fully trust, and do not expose it to the internet. |
 

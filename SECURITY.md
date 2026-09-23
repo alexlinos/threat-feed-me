@@ -22,6 +22,7 @@ boundaries are deliberate and worth understanding:
 | Surface | Posture | Why |
 |---|---|---|
 | Feed URLs (`/feeds/*`) | **Unauthenticated, by design** | Firewalls polling a block list cannot present credentials. Treat the feed content as non-secret. |
+| TAXII 2.1 (`/taxii2/*`) | **Unauthenticated, read-only, by design** | The same content as `/feeds/*` for SIEM/TIP subscribers, with the same whitelist rules; no write endpoints exist. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
 | Dashboard + mutating API | Optional HTTP Basic auth — setting both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
 | TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
