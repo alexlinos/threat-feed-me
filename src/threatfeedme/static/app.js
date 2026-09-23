@@ -125,28 +125,75 @@ async function toggleFeed(el, name) {
         el.disabled = false;
     }
 }
-async function setApiKey(name, envVar) {
-    // auth_env may declare several credentials (comma-separated, e.g.
-    // HoneyDB's id+key pair) — prompt for each in turn. Cancel on any
-    // prompt aborts the whole operation; nothing is saved.
-    const vars = envVar.split(',').map(v => v.trim()).filter(Boolean);
+// API keys go through a masked modal. They used to be typed into prompt(),
+// which echoes the secret in plain text on screen and in screen shares.
+// auth_env may declare several credentials (comma-separated, e.g. HoneyDB's
+// id + key): one password field each; Cancel saves nothing.
+let keyModalFeed = null;
+function setApiKey(name, envVar) {
+    keyModalFeed = name;
+    const box = document.getElementById('key-modal-fields');
+    box.replaceChildren();
+    envVar.split(',').map(v => v.trim()).filter(Boolean).forEach((v, i) => {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.htmlFor = 'key-field-' + i;
+        label.textContent = v;
+        const input = document.createElement('input');
+        input.type = 'password'; input.id = 'key-field-' + i;
+        input.autocomplete = 'new-password'; input.dataset.var = v;
+        field.append(label, input);
+        box.append(field);
+    });
+    document.getElementById('key-modal-title').textContent = 'API key for ' + name;
+    openModal('key-modal');
+}
+function closeKeyModal() {
+    document.getElementById('key-modal-fields').replaceChildren();  // never linger in the DOM
+    closeModal('key-modal');
+    keyModalFeed = null;
+}
+async function saveKeyModal() {
+    if (!keyModalFeed) return;
     const keys = {};
-    for (let i = 0; i < vars.length; i++) {
-        const step = vars.length > 1 ? ' (' + (i + 1) + ' of ' + vars.length + ')' : '';
-        const val = prompt(vars[i] + ' for "' + name + '"' + step +
-            '\n\nSaved server-side to the data volume\'s .env and applied immediately.' +
-            '\nLeave empty and press OK to clear this credential.');
-        if (val === null) return; // cancelled — abort without saving anything
-        keys[vars[i]] = val;
-    }
-    const r = await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/api-key', {
+    document.querySelectorAll('#key-modal-fields input').forEach(i => { keys[i.dataset.var] = i.value; });
+    const r = await apiFetch('/api/feeds/' + encodeURIComponent(keyModalFeed) + '/api-key', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({keys: keys}),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { reloadPage(); }
+    if (r.ok) { closeKeyModal(); reloadPage(); }
     else { alert('Could not save key: ' + (j.detail || r.status)); }
 }
+
+// ---- Modal accessibility: focus in on open, Esc closes, focus returns ----
+let _modalOpener = null;
+function openModal(id) {
+    _modalOpener = document.activeElement;
+    const m = document.getElementById(id);
+    m.classList.add('open');
+    const first = m.querySelector('input, select, textarea, button');
+    if (first) first.focus();
+}
+function closeModal(id) {
+    document.getElementById(id).classList.remove('open');
+    if (_modalOpener && document.body.contains(_modalOpener)) _modalOpener.focus();
+    _modalOpener = null;
+}
+const _MODAL_CLOSERS = {
+    'key-modal': () => closeKeyModal(),
+    'unifi-creds-modal': () => closeUnifiCredsModal(),
+    'cs-creds-modal': () => closeCsCredsModal(),
+    'fp-modal': () => (typeof closeFpModal === 'function' ? closeFpModal()
+                       : document.getElementById('fp-modal').classList.remove('open')),
+    'wl-modal': () => closeWlModal(),
+};
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const open = document.querySelector('.modal-overlay.open');
+    if (open && _MODAL_CLOSERS[open.id]) { e.preventDefault(); _MODAL_CLOSERS[open.id](); }
+});
 async function saveInterval() {
     const v = parseInt(document.getElementById('interval-min').value, 10);
     if (!v || v < 1) { alert('Enter a whole number of minutes (>= 1)'); return; }
@@ -349,7 +396,7 @@ async function openFpModal(feed) {
     document.getElementById('fp-modal-summary').textContent = '';
     const list = document.getElementById('fp-modal-list');
     list.textContent = 'Loading…';
-    document.getElementById('fp-modal').classList.add('open');
+    openModal('fp-modal');
     try {
         const j = await (await fetch('/api/feeds/' + encodeURIComponent(feed) + '/false-positives')).json();
         document.getElementById('fp-modal-summary').textContent =
@@ -401,7 +448,7 @@ async function openWhitelistModal(ip) {
                 '≈ ' + esc(j.effective_votes.toFixed(1)) + ' independent votes</div>';
         }
     } catch (e) { srcBox.textContent = 'Could not load sources'; }
-    document.getElementById('wl-modal').classList.add('open');
+    openModal('wl-modal');
 }
 function closeWlModal() { document.getElementById('wl-modal').classList.remove('open'); wlModalIp = null; }
 async function confirmWlModal() {
@@ -716,7 +763,7 @@ async function unifiSave(quiet) {
 function openUnifiCredsModal() {
     document.getElementById('unifi-cred-user').value = '';
     document.getElementById('unifi-cred-pass').value = '';
-    document.getElementById('unifi-creds-modal').classList.add('open');
+    openModal('unifi-creds-modal');
 }
 function closeUnifiCredsModal() {
     // Clear the fields on close so the password never lingers in the DOM.
@@ -842,7 +889,7 @@ function _csCredFields() {
 }
 function openCsCredsModal() {
     _csCredFields().forEach(f => { f.value = ''; });
-    document.getElementById('cs-creds-modal').classList.add('open');
+    openModal('cs-creds-modal');
     _csCredFields()[0].focus();
 }
 function closeCsCredsModal() {
