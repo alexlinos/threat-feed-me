@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 from threatfeedme.models import ThreatIndicator, ConfidenceTier, FeedType, effective_sources
-from threatfeedme.database import Database
+from threatfeedme.database import Database, CURRENT_ATTRIBUTION_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,16 @@ class ConfidenceScorer:
         # (and lazily for single-IP scoring); (a, b) keys are stored both ways.
         self._overlap = None
         self._source_sizes = {}
+        # Opt-in: votes come from what feeds list NOW, not everything they
+        # ever listed (database.CURRENT_ATTRIBUTION_SQL). Overlap ratios stay
+        # on attribution history either way: they estimate how correlated two
+        # PUBLISHERS are, and the retention window is a far larger sample of
+        # that than a single snapshot. Off by default: measured on the prod
+        # snapshot (2026-09-22) a hard cut took IP HIGH 36.8k -> 5.0k and
+        # domain HIGH 1,241 -> 366, because most feeds publish short windows
+        # (honeydb 24h, abuseipdb 3d) and most of today's corroboration is two
+        # feeds seeing an IP days apart. Pending a maintainer decision.
+        self.current_votes = bool(scoring.get('votes_require_current_listing', False))
 
         # Reputation weights are driven by config/DB (via pipeline.scorer_config)
         # so adding a feed never requires editing this module; sources without
@@ -208,7 +218,7 @@ class ConfidenceScorer:
         Tier boundaries come from the last full rescore (persisted in
         settings); before any rescore has run, the configured floors apply.
         """
-        indicator = self.db.get_indicator(ip)
+        indicator = self.db.get_indicator(ip, current_sources=self.current_votes)
         if not indicator:
             return 0.0, ConfidenceTier.LOW
 
@@ -241,7 +251,8 @@ class ConfidenceScorer:
         evidence = []
         previous = []   # (score, tier, votes) as stored, aligned with evidence
         count = 0
-        for indicator in self.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
+        for indicator in self.db.iter_indicators_by_tiers(
+                tuple(ConfidenceTier), current_sources=self.current_votes):
             count += 1
             score, votes, sources = self._evidence(indicator, netblocks, whitelist_map)
             evidence.append((indicator.ip, score, votes, sources, indicator.kind))
@@ -685,14 +696,15 @@ class ConfidenceScorer:
         netblocks that could possibly contain the IP; networks broader than
         /8 and IPv6 land in the small catch-all list checked for every IP.
         """
+        # A netblock's corroboration follows the same current-listing rule as
+        # a direct vote, or a dropped /24 would keep voting for every IP in it.
+        current = f" AND {CURRENT_ATTRIBUTION_SQL}" if self.current_votes else ""
         with self.db._cursor() as cur:
             cur.execute(
-                """
-                SELECT i.ip, i.metadata, s.source_name
-                FROM indicators i
-                JOIN indicator_sources s ON i.id = s.indicator_id
-                WHERE i.metadata LIKE '%"cidr"%'
-                """
+                "SELECT i.ip, i.metadata, s.source_name "
+                "FROM indicators i "
+                "JOIN indicator_sources s ON i.id = s.indicator_id "
+                f"""WHERE i.metadata LIKE '%"cidr"%'{current}"""
             )
             rows = cur.fetchall()
 

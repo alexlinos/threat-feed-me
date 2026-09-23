@@ -65,6 +65,41 @@ def _feed_fingerprint(feed: FeedSource) -> str:
     }, sort_keys=True)
 
 
+# A feed's VOTE on an indicator lasts only while the feed still lists it
+# (v2.5.0). indicator_sources is add-only attribution history: it never
+# forgets an IP a feed has since dropped, so before this a feed that listed an
+# IP once kept corroborating it until retention aged the row out — and for a
+# windowed feed (honeydb 24h, abuseipdb 3d) that is 14 days of votes for an
+# IP it stopped reporting after one. source_state is each feed's membership as
+# of its last clean fetch, so an attribution counts when (a) the feed's state
+# still holds the value, or (b) the feed was never seeded (source_seeded) —
+# never cleanly fetched since the transition log shipped, or the 'manual'
+# pseudo-source — where history is the only evidence there is. A feed whose
+# list is now EMPTY is seeded and votes for nothing. Errors, 304s and the collapse
+# guard never touch source_state, so a bad fetch can't strip votes.
+# Attribution itself is kept: it drives "who ever reported this", first-
+# reporter telemetry and FP-rate denominators, which are history by design.
+# Both probes are primary-key lookups.
+CURRENT_ATTRIBUTION_SQL = (
+    "(EXISTS (SELECT 1 FROM source_state ss "
+    "WHERE ss.source_name = s.source_name AND ss.ip = i.ip) "
+    "OR NOT EXISTS (SELECT 1 FROM source_seeded sd "
+    "WHERE sd.source_name = s.source_name))")
+
+
+def _sources_sql(current: bool) -> str:
+    """Correlated subquery producing an indicator row's comma-joined sources
+    (all attribution, or only current listings). Internal constants only."""
+    extra = f" AND {CURRENT_ATTRIBUTION_SQL}" if current else ""
+    return ("(SELECT GROUP_CONCAT(s.source_name) FROM indicator_sources s "
+            f"WHERE s.indicator_id = i.id{extra})")
+
+
+# Settings key bumped whenever any feed's current membership changes, so the
+# refresh's rescore gate sees a leave even when no attribution row moved.
+MEMBERSHIP_STAMP_KEY = "membership_stamp"
+
+
 class Database:
     def __init__(self, db_path: str = "./data/threatfeedme.db"):
         self.db_path = db_path
@@ -239,6 +274,22 @@ class Database:
                     PRIMARY KEY (source_name, ip)
                 ) WITHOUT ROWID
             """)
+            # Which sources HAVE a membership baseline. "Has state rows" can't
+            # answer that: a feed whose list empties has none left and would
+            # read as never-fetched — and the never-fetched fallback (history
+            # counts) would hand it back every stale vote. Backfilled once from
+            # source_state for deployments upgrading from 2.4.x.
+            had_seeded = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'source_seeded'").fetchone()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS source_seeded (
+                    source_name TEXT PRIMARY KEY
+                ) WITHOUT ROWID
+            """)
+            if not had_seeded:
+                cursor.execute("INSERT OR IGNORE INTO source_seeded "
+                               "SELECT DISTINCT source_name FROM source_state")
 
             # Legacy whitelist migration
             existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
@@ -383,6 +434,7 @@ class Database:
                 """)
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
                 cursor.execute("DELETE FROM source_state")
+                cursor.execute("DELETE FROM source_seeded")
                 cursor.execute(
                     "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
                 conn.commit()
@@ -506,12 +558,22 @@ class Database:
             cur.execute("SELECT ip FROM source_state WHERE source_name = ?",
                         (source_name,))
             prior = {row["ip"] for row in cur.fetchall()}
+            # A clean fetch, even an empty one, is a baseline: from here on
+            # this source votes by membership, not history (source_seeded).
+            newly_seeded = cur.execute(
+                "INSERT OR IGNORE INTO source_seeded (source_name) VALUES (?)",
+                (source_name,)).rowcount > 0
 
+            # Empty prior (first sight, or a list that emptied and is back):
+            # re-baseline without events. A refill after an accepted collapse
+            # is the feed recovering, not a wave of genuine returns.
             if not prior:
                 if current_values:
                     cur.executemany(
                         "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
                         [(source_name, v) for v in current_values])
+                if current_values or newly_seeded:
+                    self._bump_membership_stamp(cur)
                 return {"arrived": 0, "left": 0, "baseline": len(current_values)}
 
             arrived = current_values - prior
@@ -534,7 +596,20 @@ class Database:
                 cur.executemany(
                     "DELETE FROM source_state WHERE source_name = ? AND ip = ?",
                     [(source_name, v) for v in left])
+            if arrived or left:
+                self._bump_membership_stamp(cur)
             return {"arrived": len(arrived), "left": len(left), "baseline": 0}
+
+    @staticmethod
+    def _bump_membership_stamp(cur) -> None:
+        """Membership moved: votes (CURRENT_ATTRIBUTION_SQL) moved with it. A leave
+        deletes no attribution row, so corpus_change_key alone would let the
+        rescore gate skip exactly the rescore that drops the stale vote."""
+        cur.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = "
+            "CAST(COALESCE(CAST(settings.value AS INTEGER), 0) + 1 AS TEXT)",
+            (MEMBERSHIP_STAMP_KEY, "1"))
 
     def detect_leaves(self, source_name: str, window_days: int) -> Dict[str, List[str]]:
         """Churn labels from the transition log.
@@ -717,11 +792,13 @@ class Database:
                 counts[tld] = counts.get(tld, 0) + 1
         return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
-    def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
-        """Get a single indicator by its value (IP address or domain)."""
+    def get_indicator(self, ip: str, current_sources: bool = False) -> Optional[ThreatIndicator]:
+        """Get a single indicator by its value (IP address or domain).
+        `current_sources` restricts .sources to feeds still listing it (see
+        CURRENT_ATTRIBUTION_SQL); the default is full attribution history."""
         with self._cursor() as cur:
             cur.execute(
-                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                f"SELECT i.*, {_sources_sql(current_sources)} AS sources_str "
                 "FROM indicators i WHERE i.ip = ?", (ip,))
             row = cur.fetchone()
             if not row:
@@ -737,7 +814,8 @@ class Database:
         medium.txt is every high- OR medium-tier indicator)."""
         return list(self.iter_indicators_by_tiers(tiers))
 
-    def iter_indicators_by_tiers(self, tiers, batch: int = 5000, kind: str = None):
+    def iter_indicators_by_tiers(self, tiers, batch: int = 5000, kind: str = None,
+                                 current_sources: bool = False):
         """Stream indicators whose tier is in `tiers`, in score order.
 
         Generator so the tier-file exports never hold the whole table as
@@ -748,6 +826,9 @@ class Database:
         `kind` filters to one indicator kind ('ip' or 'domain'); None streams
         both. The on-disk tier exports pass it so the *_ips files never
         contain a domain and vice versa (same never-bleed rule as the URLs).
+
+        `current_sources` (the scorer's read) restricts each row's sources to
+        feeds that still list it; see CURRENT_ATTRIBUTION_SQL.
         """
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
@@ -758,7 +839,7 @@ class Database:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                f"SELECT i.*, {_sources_sql(current_sources)} AS sources_str "
                 f"FROM indicators i WHERE i.tier IN ({marks}){kind_sql} ORDER BY i.confidence_score DESC",
                 values)
             while True:
@@ -1017,13 +1098,15 @@ class Database:
         churn_log_exclude ones), and a 304 means that membership is unchanged,
         so it is exactly the set to keep current.
 
-        Fallback: a feed with no source_state rows (never cleanly fetched since
-        the transition log shipped) keeps the old attribution-based touch —
-        refreshing nothing would age out everything it still serves."""
+        Fallback: a feed never seeded (never cleanly fetched since the
+        transition log shipped) keeps the old attribution-based touch —
+        refreshing nothing would age out everything it still serves. Keyed on
+        source_seeded, not "has state rows": a feed whose list emptied has no
+        rows, and the fallback would have revived everything it ever listed."""
         now = _utcnow_iso()
         with self._cursor() as cur:
             seeded = cur.execute(
-                "SELECT 1 FROM source_state WHERE source_name = ? LIMIT 1",
+                "SELECT 1 FROM source_seeded WHERE source_name = ?",
                 (feed_name,)).fetchone()
             if seeded:
                 cur.execute(
@@ -1610,6 +1693,10 @@ class Database:
                     (name, _utcnow_iso()),
                 )
             cur.execute("DELETE FROM indicator_sources WHERE source_name = ?", (name,))
+            # Its membership baseline goes too: a feed re-added under the same
+            # name must start fresh, not diff against the deleted one's list.
+            cur.execute("DELETE FROM source_state WHERE source_name = ?", (name,))
+            cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
             cur.execute(
                 "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",

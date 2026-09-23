@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from threatfeedme import jobs
-from threatfeedme.database import Database
+from threatfeedme.database import Database, MEMBERSHIP_STAMP_KEY
 from threatfeedme.feed_ingestor import FeedIngestor
 from threatfeedme.scorer import ConfidenceScorer
 from threatfeedme.safety import SafetyFilter
@@ -286,6 +286,12 @@ def scoring_input_key(db: Database, config: Dict) -> str:
         "catalog": catalog,
         "whitelist": whitelist,
         "predict_stamp": db.get_setting(PREDICT_STAMP_KEY),
+        # With current-listing votes a leave removes a vote without touching
+        # any attribution row. Only then: some feed churns almost every
+        # refresh, so folding it in unconditionally would disable the gate.
+        "membership": (db.get_setting(MEMBERSHIP_STAMP_KEY)
+                       if (config.get('scoring') or {}).get('votes_require_current_listing')
+                       else None),
     }, sort_keys=True, default=str)
     digest = hashlib.sha256(blob.encode()).hexdigest()[:16]
     return ",".join(str(n) for n in db.corpus_change_key()) + ":" + digest

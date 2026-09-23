@@ -376,6 +376,14 @@ scoring:
     medium_floor: 1.1
     high_floor: 2.0
 
+  # true: a feed votes for an indicator only while the feed still lists it (as
+  # of its last clean fetch). false (default): a feed keeps its vote until
+  # retention ages the indicator out, 14 days after no feed lists it. Turning
+  # this on is a large tier change: most feeds publish short windows, so most
+  # corroboration is two feeds seeing an IP days apart (prod, 2026-09-22: IP
+  # HIGH 36.8k -> 5.0k, domain HIGH 1,241 -> 366).
+  votes_require_current_listing: false
+
   # Confidence tier thresholds (used when tiering.method: legacy; the
   # require_threat_intel gate applies to BOTH methods)
   high_confidence:
