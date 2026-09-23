@@ -38,7 +38,11 @@
             <option value="tier:medium">Medium only</option>
             <option value="tier:low">Low only</option>
         </select>
-        <select id="wl-reason-code" title="Reason">
+        {# No preselected reason: "False positive" sorts first and lowers the
+           reporting feeds' reputation, so defaulting to it penalized feeds
+           whenever an operator just wanted an internal host allowed. #}
+        <select id="wl-reason-code" title="Reason" required>
+            <option value="" disabled selected>Reason…</option>
             {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
         </select>
         <input class="reason" id="wl-reason" type="text" placeholder="Note (optional)">
@@ -80,7 +84,8 @@
         </div>
         <div class="field">
             <label>Reason</label>
-            <select id="wl-modal-reason">
+            <select id="wl-modal-reason" required>
+                <option value="" disabled selected>Choose a reason…</option>
                 {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
             </select>
         </div>

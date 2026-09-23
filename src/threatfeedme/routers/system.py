@@ -1,7 +1,7 @@
 """The HTML dashboard page plus stats, settings, backup, and rescore endpoints."""
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -306,11 +306,21 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # NO corpus sizes — the matrix below owns those (the old stat tiles died
     # for duplicating them).
     enabled_tele = [r for r in telemetry["rows"] if r["enabled"]]
+    last_fin = _refresh_state.get("last_finished")
+    # "never run" = no successful fetch yet. Before any refresh has finished
+    # that is just pending; after one, the feed had its chance and has
+    # nothing, which is a problem (it used to count as healthy, so a feed
+    # failing since day one sat inside "all feeds reporting").
+    never = [r for r in enabled_tele if r["health"]["state"] == "never run"]
     problem_rows = [r for r in enabled_tele if r["health"]["state"] in ("error", "stale")]
+    pending_rows = []
+    if last_fin:
+        problem_rows += never
+    else:
+        pending_rows = never
     interval_min = _refresh_interval_minutes()
     refresh_age_min = refresh_next_min = None
     refresh_overdue = False
-    last_fin = _refresh_state.get("last_finished")
     if last_fin:
         try:
             fin = datetime.fromisoformat(last_fin)
@@ -342,15 +352,19 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "age_min": push_age_min,
             "tier": pusher_unifi.effective_block(core.db, core.config).get("tier", "high"),
         }
+    new24 = core.db.get_new_indicator_counts(
+        (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat())
     pulse = {
         "feeds_total": len(enabled_tele),
-        "feeds_healthy": len(enabled_tele) - len(problem_rows),
+        "feeds_healthy": len(enabled_tele) - len(problem_rows) - len(pending_rows),
         "first_problem": problem_rows[0]["name"] if problem_rows else None,
+        "problem_count": len(problem_rows),
+        "pending_count": len(pending_rows),
         "refresh_age_min": refresh_age_min,
         "refresh_next_min": refresh_next_min,
         "refresh_overdue": refresh_overdue,
-        "new24_ip": sum((r["new"] or 0) for r in enabled_tele if r["kind"] == "ip"),
-        "new24_domain": sum((r["new"] or 0) for r in enabled_tele if r["kind"] == "domain"),
+        "new24_ip": new24.get("ip", 0),
+        "new24_domain": new24.get("domain", 0),
         "whitelist_count": len(core.db.get_whitelist()),
         "fp_total": fp_total,
         "unifi": unifi_pulse,

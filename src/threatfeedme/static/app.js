@@ -34,6 +34,10 @@ function fallback(url, done) {
 }
 async function addWl(e) {
     e.preventDefault();
+    if (!document.getElementById('wl-reason-code').value) {
+        alert('Choose a reason. Only "False positive" lowers the reporting feeds\' reputation.');
+        return false;
+    }
     const body = {
         ip: document.getElementById('wl-ip').value.trim(),
         feed_name: document.getElementById('wl-feed').value,
@@ -70,10 +74,16 @@ async function addFeed(e) {
         weight: isNaN(w) ? 1.0 : w,
         indicator_kind: document.getElementById('f-kind').value,
     };
-    const r = await apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    const j = await r.json().catch(() => ({}));
+    const post = () => apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    let r = await post();
+    let j = await r.json().catch(() => ({}));
+    if (r.status === 409 && confirm((j.detail || 'A feed with this name exists.') + '\n\nReplace it?')) {
+        body.overwrite = true;
+        r = await post();
+        j = await r.json().catch(() => ({}));
+    }
     if (r.ok && j.success !== false) { reloadPage(); }
-    else { alert('Could not add feed: ' + (j.message || j.detail || r.status)); }
+    else if (r.status !== 409) { alert('Could not add feed: ' + (j.message || j.detail || r.status)); }
     return false;
 }
 async function uploadFeed(e) {
@@ -371,6 +381,7 @@ async function openWhitelistModal(ip) {
     wlModalIp = ip;
     document.getElementById('wl-modal-ip').textContent = ip;
     document.getElementById('wl-modal-note').value = '';
+    document.getElementById('wl-modal-reason').value = '';   // never carry a reason over
     const scope = document.getElementById('wl-modal-scope');
     const srcBox = document.getElementById('wl-modal-sources');
     scope.innerHTML = '<option value="*">All tiers</option>' +
@@ -395,6 +406,12 @@ async function openWhitelistModal(ip) {
 function closeWlModal() { document.getElementById('wl-modal').classList.remove('open'); wlModalIp = null; }
 async function confirmWlModal() {
     if (!wlModalIp) return;
+    const reasonSel = document.getElementById('wl-modal-reason');
+    if (!reasonSel.value) {
+        alert('Choose a reason. Only "False positive" lowers the reporting feeds\' reputation.');
+        reasonSel.focus();
+        return;
+    }
     const body = {
         ip: wlModalIp,
         feed_name: document.getElementById('wl-modal-scope').value,

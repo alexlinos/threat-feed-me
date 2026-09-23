@@ -19,7 +19,7 @@
         <div class="stat{% if pulse.first_problem %} warn{% endif %}">
             <div class="n">{{ pulse.feeds_healthy }}<small> / {{ pulse.feeds_total }}</small></div>
             <div class="l">Feeds healthy</div>
-            <div class="sub">{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% else %}all feeds reporting{% endif %}</div>
+            <div class="sub">{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }} more{% endif %}{% elif pulse.pending_count %}{{ pulse.pending_count }} awaiting first fetch{% else %}all feeds reporting{% endif %}</div>
         </div>
         <div class="stat{% if pulse.refresh_overdue %} warn{% endif %}" id="pulse-refresh"
              data-interval-min="{{ interval_min }}">

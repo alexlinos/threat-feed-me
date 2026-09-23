@@ -16,19 +16,28 @@ from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS, ThreatIndicato
 
 # ==================== FEED HELPERS ====================
 # Ordered so the UI renders strongest-first; "recommended" flags the default
-# most operators should point their firewall at.
+# most operators should point their firewall at. That is MEDIUM (v2.5.0): the
+# README and how-to always said so, but this flag said High, so the page
+# contradicted the docs. Medium is corroborated by independent sources, so
+# false-positive risk is low and coverage is several times High's. High is
+# for strict or capacity-capped devices (the UniFi panel recommends it for
+# its own reason: one list per policy). The blurbs sit on rows shared by
+# both kinds, so High describes domain authority too, not just vote counts.
 TIER_FEEDS = [
     {
         "key": "high",
         "label": "High Confidence",
-        "description": "More than two independent sources agree (overlap-discounted)",
-        "recommended": True,
+        "description": ("Strongest evidence: several independent sources agree, or a "
+                        "primary curator (e.g. URLhaus) lists the domain. Smallest list, "
+                        "for strict or capacity-limited devices"),
+        "recommended": False,
     },
     {
         "key": "medium",
         "label": "Medium Confidence",
-        "description": "Corroborated by more than one independent source; includes high",
-        "recommended": False,
+        "description": ("Corroborated by more than one independent source; includes High. "
+                        "The right default for most firewalls"),
+        "recommended": True,
     },
     {
         # With cumulative serving, low == all. The URL stays live (firewalls

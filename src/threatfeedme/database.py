@@ -439,6 +439,9 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_score ON indicators(confidence_score DESC, ip)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
+            # The pulse row's "new in 24h" range count. first_seen is written
+            # on insert only, so upserts of existing rows never touch it.
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_first_seen ON indicators(first_seen)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
             # The churn-log ring prune deletes by tick every refresh; index it
             # so that DELETE is a range scan, not a full table scan.
@@ -1431,6 +1434,16 @@ class Database:
                 (since,),
             )
             return {r['source_name']: r['n'] for r in cur.fetchall()}
+
+    def get_new_indicator_counts(self, since: str) -> Dict[str, int]:
+        """{kind: n} of indicators NEW TO THE CORPUS since `since`. Distinct
+        by construction; summing get_feed_new_counts instead counted an ip
+        once per feed that newly reported it."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(kind, 'ip') AS k, COUNT(*) AS n FROM indicators "
+                "WHERE first_seen >= ? GROUP BY k", (since,))
+            return {r['k']: r['n'] for r in cur.fetchall()}
 
     def get_tier_kind_counts(self) -> Dict:
         """{(kind, tier): count} in one SQL aggregation. The dashboard's

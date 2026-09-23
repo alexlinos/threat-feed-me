@@ -35,6 +35,9 @@ class FeedRequest(BaseModel):
     # 'ip' (default) or 'domain' — what the feed's lines parse as (D8: feeds
     # declare their kind; domains are never sniffed out of IP feeds).
     indicator_kind: str = "ip"
+    # A name that already exists is refused (409) unless this is set: adding a
+    # feed used to replace a same-named one silently, shipped defaults included.
+    overwrite: bool = False
 
 
 class SettingsRequest(BaseModel):

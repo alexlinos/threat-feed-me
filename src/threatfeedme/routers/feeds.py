@@ -116,6 +116,27 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
             status_code=400,
             detail="Local-file feeds must be uploaded via /api/feeds/upload",
         )
+    existing = core.db.get_feed_source(feed.name)
+    if existing is not None and not request.overwrite:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"A feed named '{feed.name}' already exists "
+                    f"({'uploaded list' if existing.local_file else existing.url}). "
+                    "Choose another name, or confirm to replace it."),
+        )
+    # Early SSRF feedback: an internal or metadata-service URL is refused here
+    # with a clear reason, instead of being stored and failing every refresh.
+    # Not the enforcing check (the connect-time guard is, on every fetch); an
+    # unresolvable host is accepted and reports its error when fetched.
+    safety_cfg = core.config.get('safety', {}) or {}
+    if not feed.local_file and not safety_cfg.get('allow_private_feed_urls', False):
+        from threatfeedme import feed_ingestor
+        try:
+            feed_ingestor._require_public_url(feed.url)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            pass
     core.db.add_feed(feed)
     return WhitelistResponse(success=True, message=f"Feed '{feed.name}' saved")
 
@@ -201,6 +222,14 @@ async def upload_feed(
         url=dest, feed_type=ftype, weight=weight, local_file=True, enabled=True,
         indicator_kind=indicator_kind,
     )
+    # Re-uploading your own list is how it gets updated; turning a REMOTE feed
+    # (a shipped default, say) into an upload by reusing its name is not.
+    existing = core.db.get_feed_source(feed.name)
+    if existing is not None and not existing.local_file:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{feed.name}' is a remote feed ({existing.url}); upload under another name",
+        )
     core.db.add_feed(feed)
     return WhitelistResponse(
         success=True,

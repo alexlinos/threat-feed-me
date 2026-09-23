@@ -368,6 +368,46 @@ def dashboard_max():
     return dashboard.MAX_UPLOAD_BYTES
 
 
+def test_adding_an_existing_feed_name_needs_explicit_overwrite(client):
+    feed = {"name": "dup_feed", "url": "https://example.com/a.txt", "feed_type": "custom"}
+    assert client.post("/api/feeds", json=feed).status_code == 200
+    # same name, different URL: refused, the original is untouched
+    r = client.post("/api/feeds", json={**feed, "url": "https://example.com/b.txt"})
+    assert r.status_code == 409 and "already exists" in r.json()["detail"]
+    urls = {f["name"]: f["url"] for f in client.get("/api/feed-sources").json()}
+    assert urls["dup_feed"] == "https://example.com/a.txt"
+    r = client.post("/api/feeds", json={**feed, "url": "https://example.com/b.txt",
+                                        "overwrite": True})
+    assert r.status_code == 200
+    urls = {f["name"]: f["url"] for f in client.get("/api/feed-sources").json()}
+    assert urls["dup_feed"] == "https://example.com/b.txt"
+    client.delete("/api/feeds/dup_feed")
+
+
+def test_adding_a_feed_that_points_inside_the_network_is_refused(client, monkeypatch):
+    from threatfeedme import feed_ingestor
+    monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda h: ["169.254.169.254"])
+    r = client.post("/api/feeds", json={"name": "metadata", "feed_type": "custom",
+                                        "url": "http://metadata.example/latest"})
+    assert r.status_code == 400 and "non-public" in r.json()["detail"]
+    assert "metadata" not in [f["name"] for f in client.get("/api/feed-sources").json()]
+
+
+def test_an_upload_cannot_take_over_a_remote_feeds_name(client):
+    client.post("/api/feeds", json={"name": "remote_one", "feed_type": "custom",
+                                    "url": "https://example.com/r.txt"})
+    r = client.post("/api/feeds/upload", data={"name": "remote_one"},
+                    files={"file": ("l.txt", b"198.51.100.7\n", "text/plain")})
+    assert r.status_code == 409
+    # re-uploading your OWN list under its name is how it gets updated
+    for body in (b"198.51.100.7\n", b"198.51.100.8\n"):
+        r = client.post("/api/feeds/upload", data={"name": "my_upload"},
+                        files={"file": ("l.txt", body, "text/plain")})
+        assert r.status_code == 200, r.text
+    client.delete("/api/feeds/remote_one")
+    client.delete("/api/feeds/my_upload")
+
+
 def test_local_file_feed_outside_uploads_is_rejected(client):
     # Adding a local-file feed pointing at an arbitrary path must be blocked.
     r = client.post("/api/feeds", json={
@@ -710,6 +750,17 @@ def test_feeds_are_cumulative_high_subset_of_medium(client):
     assert med  # non-empty
 
 
+def test_matrix_recommends_medium(client):
+    """The docs always recommended Medium; the matrix badge said High. One
+    Recommended badge, on the Medium row."""
+    import re
+    body = client.get("/").text
+    assert body.count('class="rec">Recommended<') == 1
+    row = re.search(r'mx-tier mx-(\w+)">\s*<span class="mx-label">[^<]*</span>\s*'
+                    r'<span class="rec">Recommended', body)
+    assert row and row.group(1) == "medium"
+
+
 def test_footer_shows_running_version(client):
     from threatfeedme import __version__
     body = client.get("/").text
@@ -875,6 +926,29 @@ def test_ops_pulse_row(client):
     # fixture has one whitelist entry -> the zero-state line must NOT show
     assert "human judgment applied" in body
     assert "pure feed consensus" not in body
+
+
+def test_pulse_never_run_is_pending_then_a_problem(client, monkeypatch):
+    """A feed with no successful fetch used to count as healthy. Before any
+    refresh finishes it is pending; after one, it is a problem."""
+    from threatfeedme import scheduler
+    monkeypatch.setitem(scheduler._refresh_state, "last_finished", None)
+    body = client.get("/").text
+    assert "awaiting first fetch" in body and "all feeds reporting" not in body
+    monkeypatch.setitem(scheduler._refresh_state, "last_finished",
+                        "2026-01-01T00:00:00+00:00")
+    body = client.get("/").text
+    assert "problem:" in body and "awaiting first fetch" not in body
+
+
+def test_new_in_24h_counts_each_indicator_once(tmp_path):
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "n.db"))
+    for feed in ("feed_a", "feed_b", "feed_c"):          # one ip, three feeds
+        db.add_indicators_bulk([("198.51.100.9", {})], source=feed)
+    db.add_indicators_bulk([("evil.example.net", {})], source="feed_d", kind="domain")
+    assert db.get_new_indicator_counts("2000-01-01T00:00:00+00:00") == {"ip": 1, "domain": 1}
+    assert db.get_new_indicator_counts("2999-01-01T00:00:00+00:00") == {}
 
 
 def test_matrix_count_fast_path_matches_walk(client):
