@@ -66,7 +66,9 @@
   h1 .bang{color:var(--red)}
   .lede{font-size:1.18rem;color:var(--text-2);margin:0;max-width:560px}
   .lede b{color:var(--text)}
-  .hero-mark{width:100%;max-width:470px;height:auto;display:block;margin-left:auto}
+  .hero-stage{width:100%;max-width:520px;margin-left:auto;border-radius:24px;overflow:hidden;
+    border:1px solid #1e2a36;background:#111922;aspect-ratio:3/2;box-shadow:0 24px 70px rgba(0,0,0,.35)}
+  .hero-video{display:block;width:100%;height:100%;object-fit:cover}
   .cta-row{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0 0}
   .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:11px;font-weight:700;font-size:.95rem;
     border:1px solid var(--border-2)}
@@ -157,7 +159,7 @@
 
   @media (max-width:860px){
     .hero{grid-template-columns:1fr}
-    .hero-mark{margin:0 auto;max-width:360px;order:-1}
+    .hero-stage{margin:0 auto;max-width:420px;order:-1}
     h1{font-size:2.5rem}
     .step,.step:nth-child(even){grid-template-columns:1fr}
     .step:nth-child(even) .step-text{order:0}
@@ -197,7 +199,17 @@
           <a class="btn ghost" href="#walkthrough">See the dashboard</a>
         </div>
       </div>
-      <svg class="hero-mark" viewBox="0 0 199 128" role="img" aria-label="The flytrap eating the dots of the IP address 203.0.113.7"><path d="M22 74 C12 90 27 102 19 120" stroke="#0c9064" stroke-width="7" fill="none" stroke-linecap="round"/><path d="M24 101 C13 95 6 99 3 107 C13 111 20 108 24 101 Z" fill="#0c9064"/><g font-family="'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace" font-size="18" font-weight="600" fill="#cfe9dc"><text x="68" y="66" textLength="32.4" lengthAdjust="spacingAndGlyphs">203</text><text x="111.4" y="66" textLength="10.8" lengthAdjust="spacingAndGlyphs">0</text><text x="133.2" y="66" textLength="32.4" lengthAdjust="spacingAndGlyphs">113</text><text x="176.6" y="66" textLength="10.8" lengthAdjust="spacingAndGlyphs">7</text></g><circle cx="105.9" cy="63" r="3.6" fill="#f87171"/><circle cx="127.7" cy="63" r="3.6" fill="#f87171"/><circle cx="171.1" cy="63" r="3.6" fill="#f87171"/><g transform="translate(24 60)"><g transform="rotate(-24)"><path d="M0 0 C-7 -10 -1 -24 14 -30 C40 -40 70 -32 84 -8 L86 0 L79 8 L72 0 L65 8 L58 0 L51 8 L44 0 L37 8 L30 0 L23 7 L16 0 Z" fill="#10b981"/></g><g transform="rotate(24)"><path d="M0 0 C-7 10 -1 24 14 30 C40 40 70 32 84 8 L86 0 L80 0 L73 -8 L66 0 L59 -8 L52 0 L45 -8 L38 0 L31 -8 L24 0 L16 0 Z" fill="#0c9064"/></g></g></svg>
+      <div class="hero-stage">
+        <!-- 6 s loop rendered with HyperFrames: the flytrap eats the dots of
+             203.0.113.7 (RFC 5737 documentation space). Opaque on purpose, the
+             card is the video's own background, so no alpha channel is needed. -->
+        <video class="hero-video" autoplay muted loop playsinline preload="auto" width="960" height="640"
+               poster="assets/hero-chomp-poster.jpg"
+               aria-label="Animation: the flytrap eats the three dots of the IP address 203.0.113.7, one bite each, leaving the 7">
+          <source src="assets/hero-chomp.webm" type="video/webm">
+          <source src="assets/hero-chomp.mp4" type="video/mp4">
+        </video>
+      </div>
     </div>
     <div class="chips">
       <span class="chip"><b>Docker</b> · one container, amd64 + arm64</span>
@@ -413,6 +425,13 @@
 </footer>
 
 <script>
+  // Reduced motion: stop the hero loop on its poster (the flytrap mid-meal).
+  (function(){
+    var v = document.querySelector('.hero-video');
+    if (v && window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      v.removeAttribute('autoplay'); v.pause(); v.load();
+    }
+  })();
   document.querySelectorAll('.copy-btn').forEach(function(btn){
     btn.addEventListener('click', function(){
       var el = document.getElementById(btn.dataset.copy);

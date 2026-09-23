@@ -117,8 +117,10 @@ Basic auth credentials are not logged.
 
 - **GitHub** hosts the source, releases and the project page.
   `threatfeedme.app` redirects to that GitHub Pages site. The page contains
-  no analytics or tracking script; the only script is the copy-to-clipboard
-  button. GitHub's own privacy statement applies to your visit and to any
+  no analytics or tracking script; the only scripts are the copy-to-clipboard
+  button and a check that pauses the hero animation for visitors who ask
+  their system for reduced motion. The animation is a video file served
+  from the same site. GitHub's own privacy statement applies to your visit and to any
   issue or report you file.
 - **Docker Hub** serves the published image. Pulling it is subject to
   Docker's privacy policy.
