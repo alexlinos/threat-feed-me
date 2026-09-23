@@ -171,6 +171,14 @@ goes through three checks:
 3. **Is the sighting fresh?** *(recency weight)*: A scan from three days ago
    matters less than one from an hour ago. Age halves an indicator's score
    every 72 hours.
+4. **Does the witness still say so?** *(current listings, v2.5.0)*: A feed
+   votes for an IP while it lists it, and for `scoring.vote_grace_days`
+   (default 3) after it drops it. Most feeds publish short windows (HoneyDB
+   24 hours, AbuseIPDB 3 days), so two feeds seeing an IP a few days apart is
+   real corroboration and the grace keeps it; what goes is the two-week tail
+   where a feed that dropped an IP long ago still counted. Upgrading from
+   2.4.x shrinks High noticeably (on one production install IP High fell from
+   36.8k to about 11k at rollout).
 
 **Where the tier lines come from.** After those weights, every IP has one
 number: its *effective votes* (how many genuinely independent, reputable,

@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from threatfeedme import jobs
 from threatfeedme.database import Database, MEMBERSHIP_STAMP_KEY
 from threatfeedme.feed_ingestor import FeedIngestor
-from threatfeedme.scorer import ConfidenceScorer
+from threatfeedme.scorer import ConfidenceScorer, current_votes_enabled, vote_grace_days
 from threatfeedme.safety import SafetyFilter
 from threatfeedme.exporter import _write_text, _write_csv, _write_json, is_included
 from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS
@@ -110,6 +110,9 @@ def recalculate(db: Database, config: Dict) -> int:
     other heavy writer (jobs.write_lock): a request-triggered rescore waits
     for a running one instead of racing it with stale reads."""
     with jobs.write_lock:
+        # The grace lives in source_left's contents, so expire it first:
+        # otherwise a recalc between refreshes scores last hour's grace.
+        db.prune_left_memberships(vote_grace_days(config))
         scorer = ConfidenceScorer(db, scorer_config(db, config))
         count = scorer.recalculate_all_scores()
         # Tiers and scores changed in place — invisible to row counts — so tell
@@ -290,8 +293,7 @@ def scoring_input_key(db: Database, config: Dict) -> str:
         # any attribution row. Only then: some feed churns almost every
         # refresh, so folding it in unconditionally would disable the gate.
         "membership": (db.get_setting(MEMBERSHIP_STAMP_KEY)
-                       if (config.get('scoring') or {}).get('votes_require_current_listing')
-                       else None),
+                       if current_votes_enabled(config) else None),
     }, sort_keys=True, default=str)
     digest = hashlib.sha256(blob.encode()).hexdigest()[:16]
     return ",".join(str(n) for n in db.corpus_change_key()) + ":" + digest
@@ -404,6 +406,9 @@ def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict
     # window so a leave-then-return WITHIN that window stays observable; floor
     # at 30d so a disabled/short retention still leaves usable churn history.
     db.prune_sightings(max(2 * max_age_days, 30) if max_age_days > 0 else 30)
+    # Expire drops past the vote grace BEFORE the gate key is read: an expiry
+    # is a vote change with no attribution change, and must force the rescore.
+    db.prune_left_memberships(vote_grace_days(config))
     # Re-apply the safety filter to what is already stored: a filter fix or a
     # new operator known-good entry must take effect now, not when the rows age
     # out. A non-empty sweep changes the corpus key, so it forces the rescore.

@@ -27,6 +27,32 @@ def predictor_live(config: Dict) -> bool:
     return os.path.exists(pcfg.get('model_path', 'data/predictor_model.txt'))
 
 
+DEFAULT_VOTE_GRACE_DAYS = 3.0
+_MAX_VOTE_GRACE_DAYS = 30.0
+
+
+def current_votes_enabled(config: Dict) -> bool:
+    """Whether votes follow current listings (plus grace) rather than all
+    attribution history. One definition: the scorer, the rescore gate and
+    the grace prune must agree on the default or the gate goes blind."""
+    scoring = (config or {}).get('scoring') or {}
+    return bool(scoring.get('votes_require_current_listing', True))
+
+
+def vote_grace_days(config: Dict) -> float:
+    """Days a feed's vote survives after it drops an indicator. Invalid or
+    negative values fall back to the default rather than silently becoming a
+    hard cut; capped because retention (14d) bounds the corpus anyway."""
+    raw = ((config or {}).get('scoring') or {}).get('vote_grace_days', DEFAULT_VOTE_GRACE_DAYS)
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_VOTE_GRACE_DAYS
+    if not math.isfinite(v) or v < 0:
+        return DEFAULT_VOTE_GRACE_DAYS
+    return min(v, _MAX_VOTE_GRACE_DAYS)
+
+
 def _differs(update, previous, eps: float = 1e-6) -> bool:
     """Whether a rescore result (score, tier, votes, ip) changes what is
     stored (score, tier, votes). Never-scored rows (votes None) always count.
@@ -113,16 +139,13 @@ class ConfidenceScorer:
         # (and lazily for single-IP scoring); (a, b) keys are stored both ways.
         self._overlap = None
         self._source_sizes = {}
-        # Opt-in: votes come from what feeds list NOW, not everything they
-        # ever listed (database.CURRENT_ATTRIBUTION_SQL). Overlap ratios stay
-        # on attribution history either way: they estimate how correlated two
-        # PUBLISHERS are, and the retention window is a far larger sample of
-        # that than a single snapshot. Off by default: measured on the prod
-        # snapshot (2026-09-22) a hard cut took IP HIGH 36.8k -> 5.0k and
-        # domain HIGH 1,241 -> 366, because most feeds publish short windows
-        # (honeydb 24h, abuseipdb 3d) and most of today's corroboration is two
-        # feeds seeing an IP days apart. Pending a maintainer decision.
-        self.current_votes = bool(scoring.get('votes_require_current_listing', False))
+        # Votes come from what feeds list now plus a short grace after a drop
+        # (database.CURRENT_ATTRIBUTION_SQL; the grace itself is enforced by
+        # pipeline pruning source_left before every rescore). Overlap ratios
+        # stay on attribution history either way: they estimate how
+        # correlated two PUBLISHERS are, and the retention window is a far
+        # larger sample of that than a single snapshot.
+        self.current_votes = current_votes_enabled(config)
 
         # Reputation weights are driven by config/DB (via pipeline.scorer_config)
         # so adding a feed never requires editing this module; sources without

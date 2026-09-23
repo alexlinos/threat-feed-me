@@ -65,14 +65,20 @@ def _feed_fingerprint(feed: FeedSource) -> str:
     }, sort_keys=True)
 
 
-# A feed's VOTE on an indicator lasts only while the feed still lists it
-# (v2.5.0). indicator_sources is add-only attribution history: it never
-# forgets an IP a feed has since dropped, so before this a feed that listed an
-# IP once kept corroborating it until retention aged the row out — and for a
-# windowed feed (honeydb 24h, abuseipdb 3d) that is 14 days of votes for an
-# IP it stopped reporting after one. source_state is each feed's membership as
-# of its last clean fetch, so an attribution counts when (a) the feed's state
-# still holds the value, or (b) the feed was never seeded (source_seeded) —
+# A feed's VOTE on an indicator lasts while the feed lists it and for a short
+# grace after it drops it (v2.5.0, scoring.vote_grace_days, default 3).
+# indicator_sources is add-only attribution history: it never forgets an IP a
+# feed has since dropped, so before this a feed that listed an IP once kept
+# corroborating it until retention aged the row out — for a windowed feed
+# (honeydb 24h, abuseipdb 3d), 14 days of votes for an IP it stopped
+# reporting after one. A HARD cut was measured on prod first and rejected:
+# most feeds publish short windows, so most real corroboration is two feeds
+# seeing an IP days apart (IP HIGH 36.8k -> 5.0k). The grace keeps that and
+# ends the long tail. source_state is each feed's membership as of its last
+# clean fetch and source_left holds what it dropped within the grace (pruned
+# each refresh, so presence there IS "inside the grace"). An attribution
+# counts when (a) the feed's state holds the value, (b) the feed dropped it
+# within the grace, or (c) the feed was never seeded (source_seeded) —
 # never cleanly fetched since the transition log shipped, or the 'manual'
 # pseudo-source — where history is the only evidence there is. A feed whose
 # list is now EMPTY is seeded and votes for nothing. Errors, 304s and the collapse
@@ -83,6 +89,8 @@ def _feed_fingerprint(feed: FeedSource) -> str:
 CURRENT_ATTRIBUTION_SQL = (
     "(EXISTS (SELECT 1 FROM source_state ss "
     "WHERE ss.source_name = s.source_name AND ss.ip = i.ip) "
+    "OR EXISTS (SELECT 1 FROM source_left sl "
+    "WHERE sl.source_name = s.source_name AND sl.ip = i.ip) "
     "OR NOT EXISTS (SELECT 1 FROM source_seeded sd "
     "WHERE sd.source_name = s.source_name))")
 
@@ -94,6 +102,10 @@ def _sources_sql(current: bool) -> str:
     return ("(SELECT GROUP_CONCAT(s.source_name) FROM indicator_sources s "
             f"WHERE s.indicator_id = i.id{extra})")
 
+
+# Upgrade backfill horizon for source_left: comfortably past any sane grace;
+# the first refresh's prune trims it to the configured one.
+_BACKFILL_DAYS = 14
 
 # Settings key bumped whenever any feed's current membership changes, so the
 # refresh's rescore gate sees a leave even when no attribution row moved.
@@ -290,6 +302,34 @@ class Database:
             if not had_seeded:
                 cursor.execute("INSERT OR IGNORE INTO source_seeded "
                                "SELECT DISTINCT source_name FROM source_state")
+            # What each source dropped, and when: the vote grace window (see
+            # CURRENT_ATTRIBUTION_SQL). Bounded by prune_left_memberships.
+            had_left = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'source_left'").fetchone()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS source_left (
+                    source_name TEXT NOT NULL,
+                    ip TEXT NOT NULL,
+                    left_at TEXT NOT NULL,
+                    PRIMARY KEY (source_name, ip)
+                ) WITHOUT ROWID
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_left_at "
+                           "ON source_left(left_at)")
+            if not had_left:
+                # Upgrading: recover recent leave times from the churn log so
+                # the grace applies from day one. Feeds excluded from the log
+                # (churn_log_exclude) have no events; their old drops simply
+                # get no grace, and new ones are tracked from here. The
+                # refresh's prune trims this to the configured grace.
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=_BACKFILL_DAYS)).isoformat()
+                cursor.execute(
+                    "INSERT OR IGNORE INTO source_left (source_name, ip, left_at) "
+                    "SELECT sg.source_name, sg.ip, MAX(sg.tick) FROM sightings sg "
+                    "WHERE sg.present = 0 AND sg.tick >= ? AND NOT EXISTS "
+                    "(SELECT 1 FROM source_state ss WHERE ss.source_name = sg.source_name "
+                    "AND ss.ip = sg.ip) GROUP BY sg.source_name, sg.ip", (cutoff,))
 
             # Legacy whitelist migration
             existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
@@ -435,6 +475,7 @@ class Database:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
                 cursor.execute("DELETE FROM source_state")
                 cursor.execute("DELETE FROM source_seeded")
+                cursor.execute("DELETE FROM source_left")
                 cursor.execute(
                     "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
                 conn.commit()
@@ -572,6 +613,9 @@ class Database:
                     cur.executemany(
                         "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
                         [(source_name, v) for v in current_values])
+                    cur.executemany(
+                        "DELETE FROM source_left WHERE source_name = ? AND ip = ?",
+                        [(source_name, v) for v in current_values])
                 if current_values or newly_seeded:
                     self._bump_membership_stamp(cur)
                 return {"arrived": 0, "left": 0, "baseline": len(current_values)}
@@ -587,6 +631,9 @@ class Database:
                 cur.executemany(
                     "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
                     [(source_name, v) for v in arrived])
+                cur.executemany(      # back on the list: no longer in grace
+                    "DELETE FROM source_left WHERE source_name = ? AND ip = ?",
+                    [(source_name, v) for v in arrived])
             if left:
                 if record:
                     cur.executemany(
@@ -596,6 +643,10 @@ class Database:
                 cur.executemany(
                     "DELETE FROM source_state WHERE source_name = ? AND ip = ?",
                     [(source_name, v) for v in left])
+                cur.executemany(
+                    "INSERT OR REPLACE INTO source_left (source_name, ip, left_at) "
+                    "VALUES (?, ?, ?)",
+                    [(source_name, v, tick) for v in left])
             if arrived or left:
                 self._bump_membership_stamp(cur)
             return {"arrived": len(arrived), "left": len(left), "baseline": 0}
@@ -648,6 +699,21 @@ class Database:
                 (source_name, cutoff))
             returned = sorted(row["ip"] for row in cur.fetchall())
         return {"left": left, "returned": returned}
+
+    def prune_left_memberships(self, grace_days: float) -> int:
+        """Expire drops older than the vote grace. Presence in source_left is
+        what CURRENT_ATTRIBUTION_SQL reads as "inside the grace", so this runs
+        before every rescore; an expiry changes votes without touching any
+        attribution row, so it bumps the membership stamp for the rescore
+        gate. grace_days <= 0 is a hard cut (every drop expires at once)."""
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=max(0.0, grace_days))).isoformat()
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM source_left WHERE left_at < ?", (cutoff,))
+            n = cur.rowcount
+            if n:
+                self._bump_membership_stamp(cur)
+            return n
 
     def prune_sightings(self, keep_days: int) -> int:
         """Ring-window prune of the churn log: drop transition events older
@@ -1697,6 +1763,7 @@ class Database:
             # name must start fresh, not diff against the deleted one's list.
             cur.execute("DELETE FROM source_state WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (name,))
+            cur.execute("DELETE FROM source_left WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
             cur.execute(
                 "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",

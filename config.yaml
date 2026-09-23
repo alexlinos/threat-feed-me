@@ -376,13 +376,17 @@ scoring:
     medium_floor: 1.1
     high_floor: 2.0
 
-  # true: a feed votes for an indicator only while the feed still lists it (as
-  # of its last clean fetch). false (default): a feed keeps its vote until
-  # retention ages the indicator out, 14 days after no feed lists it. Turning
-  # this on is a large tier change: most feeds publish short windows, so most
-  # corroboration is two feeds seeing an IP days apart (prod, 2026-09-22: IP
-  # HIGH 36.8k -> 5.0k, domain HIGH 1,241 -> 366).
-  votes_require_current_listing: false
+  # A feed votes for an indicator while it lists it, and for vote_grace_days
+  # after it drops it. Before v2.5.0 a vote lasted until retention aged the
+  # indicator out (14 days after NO feed listed it), so a 24h-window feed kept
+  # corroborating an IP for two weeks. The grace keeps what is real about that
+  # (two feeds seeing an IP a few days apart is genuine corroboration; most
+  # feeds publish short windows) and ends the long tail. 0 = vote ends the
+  # moment the feed drops it. Prod, 2026-09-22: IP HIGH 36.8k before, 5.0k at
+  # 0 days, 10.7k-17.0k at 3.
+  # votes_require_current_listing: false restores the pre-2.5.0 behaviour.
+  votes_require_current_listing: true
+  vote_grace_days: 3
 
   # Confidence tier thresholds (used when tiering.method: legacy; the
   # require_threat_intel gate applies to BOTH methods)
