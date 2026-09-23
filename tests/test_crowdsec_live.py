@@ -37,6 +37,7 @@ def env(monkeypatch, tmp_path):
     db = Database(str(tmp_path / "cs.db"))
     db.set_setting(crowdsec.SETTINGS_KEY, json.dumps(
         {"enabled": True, "lapi_url": LAPI, "tier": "low", "duration_hours": 2}))
+    _expire_ours()          # start clean: another publisher may share this LAPI
     yield db
     _expire_ours()
 
@@ -47,9 +48,12 @@ def _bouncer_view():
     return r.json() or []
 
 
-def _ours():
+def _ours(scenario=None):
+    """Our live decisions; with `scenario`, only that generation's, so a
+    second publisher on the same test LAPI can't satisfy or break a test."""
     return {(d["value"], d["scenario"]) for d in _bouncer_view()
-            if d["scenario"].startswith(crowdsec.SCENARIO_PREFIX)}
+            if d["scenario"].startswith(crowdsec.SCENARIO_PREFIX)
+            and (scenario is None or d["scenario"] == scenario)}
 
 
 def _machine():
@@ -83,18 +87,17 @@ def test_push_publishes_replaces_and_never_gaps(env):
     _seed(db, ["198.51.100.12"])
     s2 = crowdsec.push_to_crowdsec(db, {})
     assert s2["scenario"] != gen1 and s2["expired_previous"] == 3
-    live = _ours()
-    assert {s for _v, s in live} == {s2["scenario"]}          # old generation gone
-    assert {v for v, _s in live} == {"198.51.100.10", "198.51.100.11",
-                                     "203.0.113.0/24", "198.51.100.12"}
+    assert _ours(gen1) == set()                               # old generation gone
+    assert {v for v, _s in _ours(s2["scenario"])} == {"198.51.100.10", "198.51.100.11",
+                                                      "203.0.113.0/24", "198.51.100.12"}
 
 
 def test_whitelisted_values_are_not_published(env):
     db = env
     _seed(db, ["198.51.100.20", "198.51.100.21"])
     db.add_to_whitelist("198.51.100.21", "internal", "test")
-    crowdsec.push_to_crowdsec(db, {}, force=True)
-    assert {v for v, _s in _ours()} == {"198.51.100.20"}
+    gen = crowdsec.push_to_crowdsec(db, {}, force=True)["scenario"]
+    assert {v for v, _s in _ours(gen)} == {"198.51.100.20"}
 
 
 def test_pull_ingests_crowdsec_decisions_but_never_our_own(env):
@@ -128,7 +131,8 @@ def test_back_to_back_pushes_never_share_a_generation(env):
     a = crowdsec.push_to_crowdsec(db, {}, force=True)["scenario"]
     b = crowdsec.push_to_crowdsec(db, {}, force=True)["scenario"]
     assert a != b
-    assert _ours() == {("198.51.100.40", b)}                  # exactly one live copy
+    assert _ours(a) == set()                                  # the first was expired
+    assert _ours(b) == {("198.51.100.40", b)}
 
 
 def test_test_connection_and_bad_password(env, monkeypatch):
