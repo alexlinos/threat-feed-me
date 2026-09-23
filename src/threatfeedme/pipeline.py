@@ -80,11 +80,15 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
     set has no business being."""
     safety_cfg = config.get('safety', {}) or {}
     from threatfeedme.credentials import KeyPolicy
+    from threatfeedme import crowdsec
     ingestor = FeedIngestor(
         db,
         safety=SafetyFilter.from_config(config),
         allow_private_urls=bool(safety_cfg.get('allow_private_feed_urls', False)),
         key_policy=KeyPolicy.from_config(config),
+        crowdsec_lapi=crowdsec.lapi_url(db, config),
+        crowdsec_console_id=crowdsec.console_integration_id(db, config),
+        crowdsec_verify_ssl=bool(crowdsec.effective_block(db, config).get('verify_ssl', True)),
     )
     feeds = db.get_feed_sources(enabled_only=True)
     if only is not None:
@@ -197,6 +201,7 @@ def export_tiers_async(db: Database, config: Dict) -> None:
                         push_to_unifi(db, config)
                 except Exception:
                     logger.exception("[unifi] push after whitelist/export change failed")
+                _push_crowdsec(db, config)
         finally:
             with _export_state_lock:
                 _export_running = False
@@ -317,6 +322,18 @@ def retention_max_age_days(db: Database, config: Dict) -> int:
 
 # ---- Full refresh ----
 
+def _push_crowdsec(db: Database, config: Dict) -> None:
+    """Publish to the operator's CrowdSec LAPI when configured. Guarded like
+    the UniFi push: an unreachable LAPI never breaks a refresh or an export,
+    and unconfigured deployments skip it without a login attempt."""
+    try:
+        from threatfeedme import crowdsec
+        if crowdsec.push_ready(db, config):
+            crowdsec.push_to_crowdsec(db, config)
+    except Exception:
+        logger.exception("[crowdsec] push failed (the served lists are unaffected)")
+
+
 def churn_log_exclude(config: Dict) -> set:
     """Feed names whose churn transitions should NOT be written to `sightings`.
 
@@ -436,6 +453,10 @@ def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict
     key = scoring_input_key(db, config)
     if key == db.get_setting(_RESCORE_KEY):
         logger.info("[refresh] no scoring-relevant change; skipped rescore/export/push")
+        # CrowdSec decisions EXPIRE (UniFi groups don't): an unchanged corpus
+        # must still be re-published before its duration runs out. The push
+        # is a no-op until then.
+        _push_crowdsec(db, config)
         return fetched
     recalculate(db, config)
     export_tiers(db, config)
@@ -450,5 +471,6 @@ def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict
             push_to_unifi(db, config)
     except Exception:
         logger.exception("[unifi] push failed (refresh itself succeeded)")
+    _push_crowdsec(db, config)
     db.set_setting(_RESCORE_KEY, key)
     return fetched

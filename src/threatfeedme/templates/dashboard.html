@@ -357,6 +357,47 @@
         <p class="hint" id="unifi-tier-warning" style="display:none;color:var(--amber)"></p>
         <p class="hint" id="unifi-status">—</p>
     </details>
+
+    {# CrowdSec, both directions (v2.5.0). Settings in a DB row; the machine
+       login and bouncer key are write-only into the data-volume .env and
+       bound to the LAPI (changing it clears them). Test is read-only. #}
+    <details class=howto id=crowdsec-panel>
+        <summary><b>CrowdSec integration</b>: publish tiers to your bouncers, pull its decisions as feeds</summary>
+        <p class="hint" style="margin-top:8px"><b>Publish:</b> after every refresh, the chosen IP
+           tier is written into your CrowdSec Local API as ban decisions, so every CrowdSec
+           bouncer you run (nginx, Traefik, Cloudflare, firewall) enforces it. On the CrowdSec
+           host: <code>cscli machines add threatfeedme --password '…' -f /dev/null</code>, then
+           enter that login under <i>Set credentials</i>. Each publish replaces the previous one
+           with no gap; if threat-feed-me stops, its decisions expire after the duration.<br>
+           <b>Pull:</b> <code>cscli bouncers add threatfeedme</code> and enter the key, then
+           enable any of the <code>crowdsec_*</code> feeds below: your own detections, the
+           community blocklist, and your subscribed lists each vote as a separate source.
+           Decisions threat-feed-me published are never read back as votes.<br>
+           <b>Never publish into a honeypot's CrowdSec</b>: a honeypot needs attackers to reach
+           it. Pull from it; publish to the CrowdSec that protects your services.</p>
+        <div class="wl-form" style="margin-top:8px">
+            <label class="unifi-enable-label" title="When enabled, every refresh publishes the tier to the LAPI">
+                Publish
+                <span class="switch"><input type="checkbox" id="cs-enabled" aria-label="Publish to CrowdSec"><span></span></span>
+            </label>
+            <input class="ip" id="cs-lapi" type="text" placeholder="http://192.168.1.20:8080" style="width:220px"
+                   title="Your CrowdSec Local API: http(s)://host:port, no path" aria-label="CrowdSec LAPI URL">
+            <select id="cs-tier" title="Which cumulative IP tier to publish" aria-label="Tier to publish">
+                <option value="high">High tier</option>
+                <option value="medium" selected>Medium tier (recommended)</option>
+                <option value="low">Everything</option>
+            </select>
+            <input id="cs-duration" type="number" min="2" max="168" value="24" style="width:80px"
+                   title="Decision lifetime in hours: if threat-feed-me stops, its bans lapse after this" aria-label="Decision duration hours">
+            <input id="cs-console" type="text" placeholder="Console integration id (optional)" style="width:230px"
+                   title="For the crowdsec_console feed: the id of a Raw IP List integration in the CrowdSec Console" aria-label="Console integration id">
+            <button type="button" onclick="csSave()">Save</button>
+            <button type="button" class="mini-btn" id="cs-creds-btn" onclick="openCsCredsModal()">Set credentials</button>
+            <button type="button" class="mini-btn" onclick="csTest(this)">Test connection</button>
+            <button type="button" class="mini-btn" onclick="csPush(this)" title="Saves the settings above, then publishes">Save &amp; publish now</button>
+        </div>
+        <p class="hint" id="cs-status">—</p>
+    </details>
 {% endblock %}
 
 {% block modals %}
@@ -377,6 +418,30 @@
         <div class="actions">
             <button class="cancel" onclick="closeUnifiCredsModal()">Cancel</button>
             <button class="btn" onclick="saveUnifiCreds()">Save</button>
+        </div>
+    </div>
+</div>
+<div class="modal-overlay" id="cs-creds-modal" role="dialog" aria-modal="true" aria-labelledby="cs-creds-title">
+    <div class="modal">
+        <h3 id="cs-creds-title">CrowdSec credentials</h3>
+        <p class="muted">Stored write-only in the server's data-volume <code>.env</code> and sent
+           only to the LAPI above; never displayed again. Fields left empty stay as they are.</p>
+        <div class="field">
+            <label for="cs-cred-machine">Machine id (publish)</label>
+            <input id="cs-cred-machine" type="text" autocomplete="off" placeholder="threatfeedme">
+        </div>
+        <div class="field">
+            <label for="cs-cred-pass">Machine password (publish)</label>
+            <input id="cs-cred-pass" type="password" autocomplete="new-password">
+        </div>
+        <div class="field">
+            <label for="cs-cred-bouncer">Bouncer API key (pull)</label>
+            <input id="cs-cred-bouncer" type="password" autocomplete="new-password">
+        </div>
+        <div class="actions">
+            <button class="cancel" onclick="csClearCreds()">Clear saved</button>
+            <button class="cancel" onclick="closeCsCredsModal()">Cancel</button>
+            <button class="btn" onclick="saveCsCreds()">Save</button>
         </div>
     </div>
 </div>

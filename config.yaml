@@ -318,6 +318,49 @@ feeds:
     scraper: honeydb
     enabled: false
 
+  # --- CrowdSec (v2.5.0; all OFF until the CrowdSec panel is set up) -----
+  # Read the operator's own CrowdSec Local API as a bouncer and turn its
+  # decisions into feeds. Split by ORIGIN so each is its own witness in the
+  # votes engine: your engine's detections (a sensor you run: the strongest
+  # local signal), the community blocklist (CAPI, needs an enrolled engine),
+  # and blocklists subscribed in the Console ("lists"). The URL carries only
+  # the origin selector; the LAPI host and the bouncer key come from the
+  # CrowdSec panel, the one place they are bound to. Decisions threat-feed-me
+  # pushed itself are always excluded (see crowdsec.py).
+  - name: crowdsec_local
+    url: https://crowdsec-lapi/v1/decisions?origins=crowdsec,cscli
+    feed_type: "threat_intel"
+    update_interval: 900
+    scraper: crowdsec_lapi
+    enabled: false
+
+  - name: crowdsec_community
+    url: https://crowdsec-lapi/v1/decisions?origins=CAPI
+    feed_type: "threat_intel"
+    update_interval: 3600
+    scraper: crowdsec_lapi
+    enabled: false
+
+  - name: crowdsec_lists
+    url: https://crowdsec-lapi/v1/decisions?origins=lists
+    feed_type: "threat_intel"
+    update_interval: 3600
+    scraper: crowdsec_lapi
+    enabled: false
+
+  # CrowdSec Console "Raw IP List" integration: the blocklists your Console
+  # account subscribes to, without running a CrowdSec engine. Create the
+  # integration in the Console (Blocklists -> Integrations -> Raw IP List),
+  # put its id in the CrowdSec panel and its username/password in Set key.
+  - name: crowdsec_console
+    url: https://admin.api.crowdsec.net/v1/integrations/
+    feed_type: "threat_intel"
+    update_interval: 7200   # Console blocklists refresh every ~2h
+    requires_auth: true
+    auth_env: CROWDSEC_CONSOLE_USER,CROWDSEC_CONSOLE_PASSWORD
+    scraper: crowdsec_console
+    enabled: false
+
   - name: custom_honeypot
     url: ./sample_honeypot_ips.txt
     feed_type: "custom"
@@ -473,6 +516,23 @@ integrations:
     # gateway (strongest indicators are kept, the log reports any drop).
     max_per_group: 5000
     max_entries: 50000
+
+  # CrowdSec, both directions (managed from the dashboard's CrowdSec panel).
+  # PUSH: after every refresh, publish the chosen IP tier into your CrowdSec
+  # Local API as ban decisions, so every CrowdSec bouncer you run enforces
+  # threat-feed-me's lists. Needs a machine login for threat-feed-me:
+  #   cscli machines add threatfeedme --password '<pw>' -f /dev/null
+  # PULL: the crowdsec_* feeds read the same LAPI with a bouncer key
+  # (cscli bouncers add threatfeedme). Credentials are write-only in the panel.
+  # Do NOT push into a honeypot's CrowdSec: a honeypot wants attackers.
+  crowdsec:
+    enabled: false          # the push; the pull feeds are enabled per feed
+    # lapi_url: http://192.168.1.20:8080
+    tier: medium            # recommended; decisions are cheap for bouncers
+    duration_hours: 24      # a stopped threat-feed-me stops blocking within this
+    max_entries: 200000
+    verify_ssl: true
+    # console_integration_id: ""   # for the crowdsec_console feed
 
 retention:
   # How long an IP is kept after it was last seen in ANY feed. Because last_seen

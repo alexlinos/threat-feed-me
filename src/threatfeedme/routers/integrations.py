@@ -192,3 +192,181 @@ def unifi_push(_=Depends(require_auth), _csrf=Depends(csrf_check)):
     if summary is None:  # enabled flag raced off, or host missing
         raise HTTPException(status_code=400, detail="Integration is not fully configured")
     return {"success": True, "summary": summary}
+
+
+# ---------------------------------------------------------------------------
+# CrowdSec (v2.5.0): push the tier into the operator's LAPI as decisions, and
+# pull its decisions back as feeds. Same credential model as UniFi: write-only,
+# data-volume .env, bound to the configured LAPI (cleared on a host change).
+# ---------------------------------------------------------------------------
+from threatfeedme import crowdsec as _cs
+
+
+def _cs_stored() -> dict:
+    try:
+        raw = core.db.get_setting(_cs.SETTINGS_KEY)
+        return (json.loads(raw) or {}) if raw else {}
+    except Exception:
+        return {}
+
+
+def _cs_status() -> dict:
+    block = _cs.effective_block(core.db, core.config)
+    last = None
+    try:
+        raw = core.db.get_setting(_cs.LAST_PUSH_KEY)
+        if raw:
+            last = json.loads(raw)
+    except Exception:
+        pass
+    return {
+        "enabled": bool(block.get("enabled")),
+        "lapi_url": _cs.lapi_url(core.db, core.config),
+        "tier": block.get("tier", _cs.DEFAULT_TIER),
+        "duration_hours": _cs.duration_hours(block),
+        "verify_ssl": bool(block.get("verify_ssl", True)),
+        "console_integration_id": _cs.console_integration_id(core.db, core.config),
+        # presence only, never values
+        "machine_configured": _cs.CrowdSecPusher.credentials_configured(),
+        "bouncer_configured": bool(os.environ.get(_cs.ENV_BOUNCER_KEY)),
+        "last_push": last,
+    }
+
+
+@router.get("/api/integrations/crowdsec")
+def crowdsec_status(_=Depends(require_auth)):
+    return _cs_status()
+
+
+class CrowdSecSettingsRequest(BaseModel):
+    enabled: Optional[bool] = None
+    lapi_url: Optional[str] = None
+    tier: Optional[str] = None
+    duration_hours: Optional[int] = None
+    verify_ssl: Optional[bool] = None
+    console_integration_id: Optional[str] = None
+
+
+@router.post("/api/integrations/crowdsec")
+def crowdsec_save(request: CrowdSecSettingsRequest, _=Depends(require_auth),
+                  _csrf=Depends(csrf_check)):
+    if request.tier is not None and request.tier not in _VALID_TIERS:
+        raise HTTPException(status_code=400, detail="tier must be high, medium, or low")
+    new_url = None
+    if request.lapi_url is not None:
+        try:
+            new_url = _cs.normalize_lapi_url(request.lapi_url)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if request.duration_hours is not None and not (
+            _cs._MIN_DURATION_H <= request.duration_hours <= _cs._MAX_DURATION_H):
+        raise HTTPException(status_code=400, detail=(
+            f"duration_hours must be {_cs._MIN_DURATION_H}-{_cs._MAX_DURATION_H}"))
+    if request.console_integration_id is not None:
+        cid = request.console_integration_id.strip()
+        if cid and not _cs._CONSOLE_ID_RE.match(cid):
+            raise HTTPException(status_code=400, detail="console_integration_id must be the "
+                                "integration's id (letters, digits, - or _)")
+    stored = _cs_stored()
+    # The LAPI credentials are bound to the LAPI they were entered for:
+    # repointing it must not carry them along (else saving an attacker's URL
+    # and pressing Test posts the machine password there).
+    credentials_cleared = False
+    previous = _cs.lapi_url(core.db, core.config)
+    if new_url is not None and previous and _host_key(new_url) != _host_key(previous):
+        for var in _cs.CREDENTIAL_VARS:
+            _write_env_var(core.env_file(), var, None)
+            os.environ.pop(var, None)
+        credentials_cleared = True
+    for field in ("enabled", "tier", "duration_hours", "verify_ssl"):
+        value = getattr(request, field)
+        if value is not None:
+            stored[field] = value
+    if new_url is not None:
+        stored["lapi_url"] = new_url
+    if request.console_integration_id is not None:
+        stored["console_integration_id"] = request.console_integration_id.strip()
+    core.db.set_setting(_cs.SETTINGS_KEY, json.dumps(stored))
+    status = _cs_status()
+    status["credentials_cleared"] = credentials_cleared
+    return status
+
+
+class CrowdSecCredentialsRequest(BaseModel):
+    # None = leave unchanged, "" = clear
+    machine_id: Optional[str] = None
+    machine_password: Optional[str] = None
+    bouncer_key: Optional[str] = None
+
+
+@router.post("/api/integrations/crowdsec/credentials")
+def crowdsec_credentials(request: CrowdSecCredentialsRequest,
+                         _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Write-only. Values are never echoed, logged or returned."""
+    pairs = ((_cs.ENV_MACHINE_ID, request.machine_id),
+             (_cs.ENV_MACHINE_PASSWORD, request.machine_password),
+             (_cs.ENV_BOUNCER_KEY, request.bouncer_key))
+    for _var, value in pairs:
+        if value is not None and any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise HTTPException(status_code=400, detail="Credential contains control characters")
+    for var, value in pairs:
+        if value is None:
+            continue
+        value = value.strip() if var != _cs.ENV_MACHINE_PASSWORD else value
+        _write_env_var(core.env_file(), var, value or None)
+        if value:
+            os.environ[var] = value
+        else:
+            os.environ.pop(var, None)
+    s = _cs_status()
+    return {"success": True, "machine_configured": s["machine_configured"],
+            "bouncer_configured": s["bouncer_configured"]}
+
+
+@router.post("/api/integrations/crowdsec/test")
+def crowdsec_test(_=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Read-only checks of whatever is configured: the machine login (push)
+    and a decisions read with the bouncer key (pull). Nothing is written."""
+    url = _cs.lapi_url(core.db, core.config)
+    if not url:
+        raise HTTPException(status_code=400, detail="Set the LAPI URL first")
+    block = _cs.effective_block(core.db, core.config)
+    out = {"ok": True, "checks": {}}
+    if _cs.CrowdSecPusher.credentials_configured():
+        try:
+            _cs.CrowdSecPusher.from_block(block).test_connection()
+            out["checks"]["push"] = "machine login OK"
+        except Exception as e:
+            out["ok"] = False
+            out["checks"]["push"] = f"machine login failed: {e}"
+    key = os.environ.get(_cs.ENV_BOUNCER_KEY)
+    if key:
+        try:
+            session = _cs._session(verify=bool(block.get("verify_ssl", True)))
+            r = _cs._check(session.get(
+                f"{url}/v1/decisions", headers={"X-Api-Key": key},
+                params={"type": "ban", "scenarios_not_containing": "threatfeedme"},
+                timeout=30, allow_redirects=False), "pull")
+            n = len(_cs.decision_values(r.json()))
+            out["checks"]["pull"] = f"bouncer key OK, {n} active ban decision(s) to ingest"
+        except Exception as e:
+            out["ok"] = False
+            out["checks"]["pull"] = f"bouncer read failed: {e}"
+    if not out["checks"]:
+        raise HTTPException(status_code=400, detail="Set the machine login and/or bouncer key first")
+    out["message"] = "; ".join(f"{k}: {v}" for k, v in out["checks"].items())
+    return out
+
+
+@router.post("/api/integrations/crowdsec/push")
+def crowdsec_push(_=Depends(require_auth), _csrf=Depends(csrf_check)):
+    block = _cs.effective_block(core.db, core.config)
+    if not block.get("enabled"):
+        raise HTTPException(status_code=400, detail="Enable the push first (and Save)")
+    try:
+        summary = _cs.push_to_crowdsec(core.db, core.config, force=True)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Push failed: {e}")
+    if summary is None:
+        raise HTTPException(status_code=400, detail="Set the LAPI URL and machine login first")
+    return {"success": True, "summary": summary}

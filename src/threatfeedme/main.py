@@ -119,12 +119,14 @@ def main():
     parser.add_argument('--backup', action='store_true', help='Take a database backup now')
     parser.add_argument('--push-unifi', action='store_true',
                         help='Push the configured tier into UniFi firewall groups now (integrations.unifi)')
+    parser.add_argument('--push-crowdsec', action='store_true',
+                        help='Publish the configured tier into the CrowdSec LAPI now (integrations.crowdsec)')
     parser.add_argument('--config', default='config.yaml', help='Config file path')
 
     args = parser.parse_args()
 
     if not any([args.fetch, args.score, args.export, args.full,
-                args.serve, args.stats, args.backup, args.push_unifi]):
+                args.serve, args.stats, args.backup, args.push_unifi, args.push_crowdsec]):
         parser.print_help()
         return
 
@@ -174,6 +176,17 @@ def main():
             logger.error("UniFi push is not enabled - set integrations.unifi in config.yaml")
             sys.exit(2)
         logger.info(f"UniFi push complete: {summary}")
+
+    if args.push_crowdsec:
+        from threatfeedme.core import load_env_file
+        load_env_file(os.path.join(os.path.dirname(db_path) or ".", ".env"))
+        from threatfeedme.crowdsec import push_to_crowdsec
+        summary = push_to_crowdsec(db, cfg, force=True)
+        if summary is None:
+            logger.error("CrowdSec publish is not enabled or has no LAPI URL "
+                         "(dashboard CrowdSec panel, or integrations.crowdsec in config.yaml)")
+            sys.exit(2)
+        logger.info(f"CrowdSec publish complete: {summary}")
 
 
 

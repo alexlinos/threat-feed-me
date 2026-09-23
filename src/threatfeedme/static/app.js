@@ -769,6 +769,135 @@ async function unifiPush(btn) {
     } finally { btn.disabled = false; }
 }
 
+// ---- CrowdSec integration panel (v2.5.0) ----
+// Same shape as the UniFi panel. Everything the LAPI or the server says is
+// rendered with textContent (error strings can carry LAPI-controlled text).
+let csLoaded = false;
+
+function csRenderStatus(s) {
+    const el = document.getElementById('cs-status');
+    if (!el) return;
+    const parts = [];
+    parts.push(s.machine_configured ? 'Publish login ✓' : 'Publish login not set');
+    parts.push(s.bouncer_configured ? 'Bouncer key ✓' : 'Bouncer key not set');
+    const btn = document.getElementById('cs-creds-btn');
+    if (btn) btn.textContent = (s.machine_configured || s.bouncer_configured)
+        ? 'Credentials ✓' : 'Set credentials';
+    const last = s.last_push;
+    if (last && last.at) {
+        const at = new Date(last.at).toLocaleString();
+        if (last.error) parts.push('Last publish FAILED ' + at + ': ' + last.error +
+            (last.live_scenario ? ' (the previous list is still enforced)' : ''));
+        else if (last.summary) parts.push('Last publish ' + at + ': ' +
+            last.summary.entries.toLocaleString() + ' ' + last.summary.tier + '-tier IPs, ' +
+            last.summary.duration_h + 'h decisions');
+    } else { parts.push('Not published yet'); }
+    el.textContent = parts.join(' · ');
+}
+
+async function loadCsOnce() {
+    if (csLoaded) return;
+    csLoaded = true;
+    try {
+        const s = await (await apiFetch('/api/integrations/crowdsec')).json();
+        document.getElementById('cs-enabled').checked = !!s.enabled;
+        document.getElementById('cs-lapi').value = s.lapi_url || '';
+        document.getElementById('cs-tier').value = s.tier || 'medium';
+        document.getElementById('cs-duration').value = s.duration_hours || 24;
+        document.getElementById('cs-console').value = s.console_integration_id || '';
+        csRenderStatus(s);
+    } catch (e) {
+        csLoaded = false;
+        const el = document.getElementById('cs-status');
+        if (el) el.textContent = 'Could not load settings: reopen to retry.';
+    }
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const box = document.getElementById('crowdsec-panel');
+    if (box) box.addEventListener('toggle', () => { if (box.open) loadCsOnce(); });
+});
+
+async function csSave(quiet) {
+    const body = {
+        enabled: document.getElementById('cs-enabled').checked,
+        lapi_url: document.getElementById('cs-lapi').value.trim(),
+        tier: document.getElementById('cs-tier').value,
+        duration_hours: parseInt(document.getElementById('cs-duration').value, 10) || 24,
+        console_integration_id: document.getElementById('cs-console').value.trim(),
+    };
+    const r = await apiFetch('/api/integrations/crowdsec', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Could not save: ' + (j.detail || r.status)); return false; }
+    csRenderStatus(j);
+    if (j.credentials_cleared) {
+        alert('The LAPI address changed, so the saved CrowdSec credentials were cleared '
+            + '(they were bound to the old one). Re-enter them with "Set credentials".');
+    } else if (!quiet) { alert('CrowdSec settings saved'); }
+    return true;
+}
+
+function _csCredFields() {
+    return ['cs-cred-machine', 'cs-cred-pass', 'cs-cred-bouncer'].map(id => document.getElementById(id));
+}
+function openCsCredsModal() {
+    _csCredFields().forEach(f => { f.value = ''; });
+    document.getElementById('cs-creds-modal').classList.add('open');
+    _csCredFields()[0].focus();
+}
+function closeCsCredsModal() {
+    _csCredFields().forEach(f => { f.value = ''; });   // never linger in the DOM
+    document.getElementById('cs-creds-modal').classList.remove('open');
+}
+async function _postCsCreds(body) {
+    const r = await apiFetch('/api/integrations/crowdsec/credentials', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Could not save credentials: ' + (j.detail || r.status)); return; }
+    closeCsCredsModal();
+    csLoaded = false; loadCsOnce();
+}
+async function saveCsCreds() {
+    const [m, p, b] = _csCredFields();
+    const body = {};                       // empty field = leave unchanged
+    if (m.value.trim()) body.machine_id = m.value.trim();
+    if (p.value) body.machine_password = p.value;
+    if (b.value.trim()) body.bouncer_key = b.value.trim();
+    if (!Object.keys(body).length) { closeCsCredsModal(); return; }
+    await _postCsCreds(body);
+}
+async function csClearCreds() {
+    if (!confirm('Clear the saved CrowdSec machine login and bouncer key?')) return;
+    await _postCsCreds({machine_id: '', machine_password: '', bouncer_key: ''});
+}
+
+async function csTest(btn) {
+    const el = document.getElementById('cs-status');
+    btn.disabled = true; el.textContent = 'Testing…';
+    try {
+        const r = await apiFetch('/api/integrations/crowdsec/test', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? ((j.ok ? '✓ ' : '✗ ') + j.message) : ('Test failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+
+async function csPush(btn) {
+    const el = document.getElementById('cs-status');
+    btn.disabled = true;
+    try {
+        if (!await csSave(true)) return;
+        el.textContent = 'Publishing…';
+        const r = await apiFetch('/api/integrations/crowdsec/push', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) {
+            const s = j.summary;
+            el.textContent = 'Published ' + s.entries.toLocaleString() + ' ' + s.tier +
+                '-tier IPs as ' + s.scenario + ' (' + s.expired_previous.toLocaleString() +
+                ' from the previous publish expired). Your bouncers pick them up on their next pull.';
+        } else { el.textContent = 'Publish failed: ' + (j.detail || r.status); }
+    } finally { btn.disabled = false; }
+}
+
 // ---- Host check (DNS-rebinding allowlist) ----------------------------------
 // Report-only until an allowlist exists: the banner lists the hostnames that
 // actually reached this dashboard so the operator can lock to exactly those.

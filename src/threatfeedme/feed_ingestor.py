@@ -12,7 +12,7 @@ import ipaddress
 import json
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple, Union
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 import logging
 
 import requests
@@ -275,8 +275,17 @@ class FeedIngestor:
         return wrapper
 
     def __init__(self, db: Database, safety=None, allow_private_urls: bool = False,
-                 key_policy: Optional[KeyPolicy] = None):
+                 key_policy: Optional[KeyPolicy] = None,
+                 crowdsec_lapi: str = "", crowdsec_console_id: str = "",
+                 crowdsec_verify_ssl: bool = True):
         self.db = db
+        # CrowdSec integration targets (crowdsec.py), set from the dashboard's
+        # CrowdSec panel: the operator's LAPI base URL and Console Raw IP List
+        # integration id. The crowdsec_* scrapers build their URLs from these,
+        # never from a feed URL, so a feed can't redirect the credentials.
+        self.crowdsec_lapi = crowdsec_lapi or ""
+        self.crowdsec_console_id = crowdsec_console_id or ""
+        self.crowdsec_verify_ssl = crowdsec_verify_ssl
         # Optional SafetyFilter; when set, private/reserved/known-good entries
         # are skipped at ingest so they never reach outputs.
         self.safety = safety
@@ -858,6 +867,90 @@ def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
 
 
 FeedIngestor.register_scraper("honeydb")(_scrape_honeydb)
+
+
+# CrowdSec LAPI decisions (see crowdsec.py). The feed URL only carries the
+# origin selector (?origins=crowdsec,cscli | CAPI | lists); host and path come
+# from the integration's configured LAPI, which is the ONE host the bouncer
+# key goes to. The LAPI is the operator's own LAN service, so the SSRF guard is
+# lifted for exactly this request, the same trust the UniFi gateway gets.
+_CROWDSEC_ORIGINS_RE = re.compile(r'^[A-Za-z0-9_:,-]{1,128}$')
+
+
+def _scrape_crowdsec_lapi(self: FeedIngestor, feed: FeedSource):
+    from threatfeedme import crowdsec
+    if not self.crowdsec_lapi:
+        raise RuntimeError(f"{feed.name}: set the CrowdSec LAPI URL in the dashboard's "
+                           "CrowdSec panel")
+    key = os.environ.get(crowdsec.ENV_BOUNCER_KEY)
+    if not key:
+        raise RuntimeError(f"{feed.name}: set the CrowdSec bouncer key "
+                           f"({crowdsec.ENV_BOUNCER_KEY}) in the CrowdSec panel")
+    params = {"type": "ban",
+              # never read back what threat-feed-me itself published
+              "scenarios_not_containing": crowdsec.SCENARIO_PREFIX.rstrip("/")}
+    origins = (parse_qs(urlsplit(feed.url).query).get("origins") or [""])[0]
+    if origins:
+        if not _CROWDSEC_ORIGINS_RE.match(origins):
+            raise RuntimeError(f"{feed.name}: invalid origins selector {origins!r}")
+        params["origins"] = origins
+    guard_was = getattr(_ssrf_guard, "active", False)
+    _ssrf_guard.active = False
+    try:
+        session = crowdsec._session(verify=self.crowdsec_verify_ssl)
+        response = session.get(f"{self.crowdsec_lapi}/v1/decisions",
+                               headers={"X-Api-Key": key, "User-Agent": "ThreatFeedMe/1.0"},
+                               params=params, timeout=60, stream=True,
+                               allow_redirects=False)
+        crowdsec._check(response, "pull")
+        body = _read_capped(response, feed.name)
+    finally:
+        _ssrf_guard.active = guard_was
+    try:
+        data = json.loads(body) if body.strip() else None
+    except ValueError:
+        raise RuntimeError(f"{feed.name}: CrowdSec LAPI answer is not JSON")
+    values = crowdsec.decision_values(data)
+    if not values:
+        # No active bans is a normal state for a quiet sensor (the LAPI
+        # answers null), not a broken fetch: keep what was ingested, like
+        # HoneyDB's empty window.
+        logger.info(f"{feed.name}: no active CrowdSec decisions; keeping prior indicators")
+        return NOT_MODIFIED
+    return "\n".join(values)
+
+
+FeedIngestor.register_scraper("crowdsec_lapi")(_scrape_crowdsec_lapi)
+
+
+# CrowdSec Console "Raw IP List" integration: the blocklists the operator's
+# Console account subscribes to, as plain text behind Basic auth. The two
+# credential vars are declared by the shipped feed, so KeyPolicy binds them to
+# admin.api.crowdsec.net; the integration id (a path segment) comes from the
+# CrowdSec panel, validated as a slug.
+def _scrape_crowdsec_console(self: FeedIngestor, feed: FeedSource):
+    import base64
+    from threatfeedme import crowdsec
+    if not self.crowdsec_console_id:
+        raise RuntimeError(f"{feed.name}: set the Console integration id in the dashboard's "
+                           "CrowdSec panel")
+    url = crowdsec.CONSOLE_CONTENT_URL.format(id=self.crowdsec_console_id)
+    env_vars = [v.strip() for v in (feed.auth_env or "").split(",") if v.strip()]
+    if len(env_vars) != 2 or not all(os.environ.get(v) for v in env_vars):
+        raise RuntimeError(f"{feed.name}: set both Console integration credentials "
+                           f"({', '.join(env_vars) or 'auth_env'}) with Set key")
+    for var in env_vars:
+        if not self.key_policy.may_send(var, url):
+            raise RuntimeError(self.key_policy.send_refusal(var, url))
+    token = base64.b64encode(
+        f"{os.environ[env_vars[0]]}:{os.environ[env_vars[1]]}".encode()).decode()
+    response = self._get_with_retries(url, {"Authorization": f"Basic {token}",
+                                            "User-Agent": "ThreatFeedMe/1.0"})
+    response.raise_for_status()
+    return _read_capped(response, feed.name)
+
+
+FeedIngestor.register_scraper("crowdsec_console")(_scrape_crowdsec_console)
 
 
 # =============================================================================
