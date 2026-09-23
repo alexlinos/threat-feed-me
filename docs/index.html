@@ -3,20 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threat Feed Me! A carnivorous blocklist for your firewall</title>
-<meta name="description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 22 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
+<title>Threat Feed Me! The open-source MineMeld replacement</title>
+<meta name="description" content="The open-source MineMeld replacement: an on-prem threat-intel aggregator that turns 22 free, keyless feeds into consensus-scored block lists for firewalls and DNS filters, a TAXII 2.1 server for SIEMs, and direct publishing to CrowdSec and UniFi. One Docker container, no API keys.">
 <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
 
 <!-- Open Graph / social -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
-<meta property="og:description" content="On-prem threat-intel aggregator that normalizes, dedupes, and scores 22 free, keyless threat feeds — malicious IPs and domains — into High/Medium/Low confidence tiers, served as URLs your firewall and DNS filter poll. Docker, single container, no API keys.">
-<meta property="og:url" content="https://threatfeedme.app/">
-<meta property="og:image" content="https://threatfeedme.app/assets/social-preview.png">
+<!-- Absolute github.io URLs on purpose: threatfeedme.app is a registrar
+     redirect that drops the path, so /assets/... under it 302'd to the front
+     page and every social preview image was broken. -->
+<link rel="canonical" href="https://alexlinos.github.io/threat-feed-me/">
+<meta property="og:title" content="Threat Feed Me! The open-source MineMeld replacement">
+<meta property="og:description" content="22 free, keyless threat feeds turned into consensus-scored block lists for firewalls and DNS filters, TAXII 2.1 for SIEMs, and direct publishing to CrowdSec and UniFi. One container, on-prem, no API keys.">
+<meta property="og:url" content="https://alexlinos.github.io/threat-feed-me/">
+<meta property="og:image" content="https://alexlinos.github.io/threat-feed-me/assets/social-preview.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Threat Feed Me! A carnivorous blocklist for your firewall">
-<meta name="twitter:description" content="On-prem threat-intel aggregator: 22 free, keyless feeds — malicious IPs and domains — deduped and scored into confidence tiers, served as URLs your firewall and DNS filter poll.">
-<meta name="twitter:image" content="https://threatfeedme.app/assets/social-preview.png">
+<meta name="twitter:title" content="Threat Feed Me! The open-source MineMeld replacement">
+<meta name="twitter:description" content="Consensus-scored block lists for firewalls and DNS filters, TAXII 2.1 for SIEMs, publishing to CrowdSec and UniFi. On-prem, one container, no API keys.">
+<meta name="twitter:image" content="https://alexlinos.github.io/threat-feed-me/assets/social-preview.png">
 
 <style>
   :root{
@@ -177,7 +181,28 @@
   footer a{color:var(--muted)}
   footer .logo{height:30px;width:auto;margin-bottom:14px;opacity:.9}
 
+  /* ---- MineMeld mapping + integrations ---- */
+  .kicker{display:inline-block;font-family:var(--mono);font-size:.78rem;color:var(--green-bright);
+    border:1px solid #123a2c;border-radius:999px;padding:4px 12px;margin:0 auto 14px;background:#0b1712}
+  .center{text-align:center}
+  .map{width:100%;border-collapse:collapse;font-size:.92rem;background:var(--panel);
+    border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .map th,.map td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--border-soft);vertical-align:top}
+  .map th{font-family:var(--mono);font-size:.78rem;color:var(--muted);font-weight:600;background:var(--panel-2)}
+  .map td:first-child{color:var(--muted);width:38%}
+  .map tr:last-child td{border-bottom:0}
+  .map code{font-family:var(--mono);font-size:.85em;color:var(--green-bright)}
+  .note{color:var(--muted);font-size:.9rem;margin-top:14px}
+  .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px}
+  .card h3{margin:0 0 6px;font-size:1.02rem}
+  .card p{margin:0;color:var(--muted);font-size:.92rem}
+  .card .tag{font-family:var(--mono);font-size:.7rem;color:var(--amber);border:1px solid #3a2f12;
+    border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:2px}
+  .table-wrap{overflow-x:auto}
+
   @media (max-width:720px){
+    .cards{grid-template-columns:1fr}
     .tiers{grid-template-columns:1fr}
     .fw-grid{grid-template-columns:1fr}
     header{padding:32px 0 4px}
@@ -191,27 +216,55 @@
   <div class="wrap">
     <img class="banner" src="assets/banner.svg" alt="Threat Feed Me! A carnivorous blocklist for your firewall">
     <p class="pitch">
-      An <b>on-prem threat-intelligence aggregator</b> that normalizes, dedupes, and scores
-      <b>22 free, keyless threat feeds</b> — malicious <b>IPs</b> and <b>domains</b> —
-      into High/Medium/Low confidence tiers, then serves them as
-      <b>URLs your firewall and DNS filter poll</b>.
+      <b>The open-source MineMeld replacement.</b> Threat Feed Me pulls <b>22 free, keyless
+      threat feeds</b>, works out which malicious <b>IPs</b> and <b>domains</b> independent
+      sources genuinely agree on, and delivers the result the way your stack consumes it:
+      <b>block-list URLs</b> for firewalls and DNS filters, <b>TAXII 2.1</b> for SIEMs, and
+      direct publishing to <b>CrowdSec</b> and <b>UniFi</b>.
     </p>
     <p class="tagline">// Feed it threats. It's always hungry.</p>
     <div class="cta-row">
       <a class="btn primary" href="#deploy">Deploy in one command</a>
+      <a class="btn ghost" href="#minemeld">Coming from MineMeld?</a>
       <a class="btn ghost" href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">View on GitHub →</a>
     </div>
     <div class="chips" style="justify-content:center;margin-top:22px">
-      <span class="chip"><b>Docker</b> · single container</span>
-      <span class="chip">FastAPI + <b>SQLite</b></span>
+      <span class="chip"><b>Docker</b> · one container, amd64 + arm64</span>
       <span class="chip">No accounts · <b>no API keys</b></span>
-      <span class="chip">Auto-refresh every <b>60 min</b></span>
+      <span class="chip"><b>TAXII 2.1</b> / STIX 2.1</span>
+      <span class="chip">Publishes to <b>CrowdSec</b> &amp; <b>UniFi</b></span>
       <span class="chip">Everything stays <b>on-prem</b></span>
     </div>
   </div>
 </header>
 
 <main>
+
+  <!-- MINEMELD -->
+  <section id="minemeld">
+    <div class="wrap">
+      <h2><span class="hash">&gt;</span>Coming from MineMeld?</h2>
+      <p class="sub">Palo Alto Networks retired MineMeld (hosted end of life: 1 August 2021) and
+        archived the open-source project in March 2023. Threat Feed Me does the job most MineMeld
+        deployments did, aggregate public intel and hand it to firewalls and SIEMs, with nothing to wire.</p>
+      <div class="table-wrap">
+      <table class="map">
+        <thead><tr><th>MineMeld</th><th>Threat Feed Me</th></tr></thead>
+        <tbody>
+          <tr><td>Miners, one per feed</td><td>22 curated feeds built in, plus any URL or uploaded list, added from the dashboard</td></tr>
+          <tr><td>Aggregator processors</td><td>Dedupe across feeds, then overlap-discounted consensus scoring into High / Medium / Everything</td></tr>
+          <tr><td>Whitelist miners</td><td>Whitelist IPs, CIDRs, domains or <code>*.wildcards</code>, globally, per feed or per tier</td></tr>
+          <tr><td>EDL feed outputs</td><td>Plain one-per-line lists at <code>/feeds/…</code> that PAN-OS External Dynamic Lists (and every other firewall) take as-is</td></tr>
+          <tr><td>TAXII DataFeed (TAXII 1.1 / STIX 1.x)</td><td>A read-only <b>TAXII 2.1</b> server of <b>STIX 2.1</b> Indicators</td></tr>
+          <tr><td>A node graph you build and maintain</td><td>Nothing to wire: add a feed and it votes</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="note">Not included: arbitrary processing graphs, TAXII 1.x, or writes over TAXII. Need a full
+        threat-intel platform with case management? Pair it with OpenCTI or MISP; Threat Feed Me is the light
+        piece that turns public intel into lists your devices enforce.</p>
+    </div>
+  </section>
 
   <!-- DEPLOY -->
   <section id="deploy">
@@ -234,9 +287,10 @@
         Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
         On first start it fetches the 22 feeds (16 IP feeds plus URLhaus, OpenPhish,
         Phishing Army, HaGeZi TIF, Phishunt, and DRB-Ra C2 domain feeds), dedupes and scores them, and begins serving block lists,
-        then auto-refreshes every 60 minutes. Opt-in integrations with free API keys:
-        <a href="https://honeydb.io" target="_blank" rel="noopener">HoneyDB</a> (honeypot sensor
-        network, including sensors <i>you</i> operate voting as a source) and AlienVault OTX.
+        then auto-refreshes every 60 minutes. Opt-in sources: your own
+        <a href="https://www.crowdsec.net" target="_blank" rel="noopener">CrowdSec</a> detections and blocklists,
+        <a href="https://honeydb.io" target="_blank" rel="noopener">HoneyDB</a> (including sensors <i>you</i>
+        operate) and AlienVault OTX.
         Prefer compose? See the
         <a href="https://github.com/alexlinos/threat-feed-me#deploy" target="_blank" rel="noopener">README</a>.
       </p>
@@ -252,7 +306,7 @@
       <div class="tiers">
         <div class="tier high">
           <h3>High <span class="badge">strictest</span></h3>
-          <p>More than two independent sources agree (overlap-discounted), threat-intel validated. The cleanest list.</p>
+          <p>More than two independent sources agree (overlap-discounted), threat-intel validated, or a primary curator such as URLhaus lists the domain. The smallest list, for strict or capacity-capped devices.</p>
           <div class="url">/feeds/high.txt</div>
         </div>
         <div class="tier med">
@@ -270,7 +324,8 @@
       <ul class="scoring">
         <li><b>Is it a real agreement?</b> Two feeds that are mostly the same list are one witness, not two, so overlapping lists get discounted. <code>spamhaus + et + bbcan177</code> agreeing on a DROP range is worth ~1.1 votes, not 3.</li>
         <li><b>Is the witness reliable?</b> Every feed starts at full weight. Flag a false positive and that feed's weight drops, so its IPs score lower until you stop seeing mistakes.</li>
-        <li><b>Is the sighting fresh?</b> A scan from three days ago matters less than one from an hour ago. Age halves an indicator's score every 72 hours.</li>
+        <li><b>Is the sighting fresh?</b> A scan from three days ago matters less than one from an hour ago. The recency part of the score halves every 72 hours.</li>
+        <li><b>Does the witness still say so?</b> A feed's vote lasts while it lists an indicator and for 3 days after, so a feed that dropped an IP long ago stops vouching for it.</li>
       </ul>
       <p class="sub"><b>Tiers come from the shape of the crowd.</b> Every IP gets one number: how many genuinely independent, reputable, fresh witnesses it has. The tier lines are drawn at natural gaps in that distribution, and held stable so live firewall IPs don't reshuffle as feeds cycle in and out. They only move when the vote distribution actually shifts, or a feed is added, removed, or resized.</p>
       <p class="after-code" style="margin-top:18px">
@@ -278,8 +333,32 @@
         The same tiers exist for <b>malicious domains</b> at <code>/feeds/domains/high.txt</code>,
         <code>medium</code>, and <code>all</code> — for the DNS-filter side of the firewall (or
         Pi-hole / AdGuard Home). IP URLs never contain a domain and vice versa.
-        <code>.csv</code> and <code>.json</code> variants are available for SIEM use.
+        <code>.csv</code> and <code>.json</code> variants are available for SIEM use, and
+        <code>?limit=N</code> serves the strongest N entries for firewalls with an entry cap.
       </p>
+    </div>
+  </section>
+
+  <!-- DELIVERY -->
+  <section id="delivery">
+    <div class="wrap">
+      <h2><span class="hash">~</span>Beyond the firewall</h2>
+      <p class="sub">The same consensus lists, delivered to the rest of your stack.</p>
+      <div class="cards">
+        <div class="card"><h3>CrowdSec<span class="tag">v2.5</span></h3>
+          <p>Publishes your chosen tier into your CrowdSec Local API as ban decisions, so every bouncer you
+            run (nginx, Traefik, Cloudflare, iptables) enforces it. Pulls your own CrowdSec detections, the
+            community blocklist and Console lists back in as independent votes, and never counts its own.</p></div>
+        <div class="card"><h3>TAXII 2.1 for SIEMs<span class="tag">v2.5</span></h3>
+          <p>Six read-only collections of STIX 2.1 Indicators with confidence, sources and expiry, for
+            Microsoft Sentinel, QRadar, Splunk, MISP and OpenCTI. Stable IDs, so indicators update in place.</p></div>
+        <div class="card"><h3>UniFi gateways</h3>
+          <p>UDMs can't poll a URL, so Threat Feed Me pushes the lists into UniFi network lists after every
+            refresh, for IPs and domains, no CyberSecure required.</p></div>
+        <div class="card"><h3>Proof it's working</h3>
+          <p>Every URL on the dashboard says when it was last polled and by what ("by FortiGate"), and every
+            feed shows its health, uniqueness and overlap, so a dead feed or a typo'd URL can't hide.</p></div>
+      </div>
     </div>
   </section>
 
@@ -294,12 +373,13 @@
         <div class="fw"><span class="name">FortiGate</span><span class="path">Security Fabric → External Connectors → IP Address / Domain Name Threat Feed</span></div>
         <div class="fw"><span class="name">Sophos Firewall (SFOS 21.0+)</span><span class="path">Active threat response → Third-party threat feeds → Add</span></div>
         <div class="fw"><span class="name">SonicWall (SonicOS 7)</span><span class="path">Object → Match Objects → Dynamic External Object</span></div>
-        <div class="fw"><span class="name">Palo Alto</span><span class="path">Objects → External Dynamic Lists → IP List</span></div>
+        <div class="fw"><span class="name">Palo Alto</span><span class="path">Objects → External Dynamic Lists → IP List / Domain List (MineMeld EDLs map one-to-one)</span></div>
         <div class="fw"><span class="name">Cisco Secure Firewall (FMC)</span><span class="path">Objects → Security Intelligence → Network Lists and Feeds</span></div>
         <div class="fw"><span class="name">Check Point (R81+)</span><span class="path">Threat Prevention → Indicators → External IOC Feed</span></div>
         <div class="fw"><span class="name">pfSense (pfBlockerNG)</span><span class="path">IPv4 sources · domain feeds → DNSBL Groups</span></div>
         <div class="fw"><span class="name">OPNsense</span><span class="path">Firewall → Aliases → URL Table (IPs)</span></div>
         <div class="fw"><span class="name">Pi-hole / AdGuard Home</span><span class="path">Adlists / DNS blocklists → add a domain feed URL</span></div>
+        <div class="fw"><span class="name">CrowdSec bouncers</span><span class="path">Built-in publishing: nginx, Traefik, HAProxy, Cloudflare, iptables/nftables</span></div>
       </div>
     </div>
   </section>
