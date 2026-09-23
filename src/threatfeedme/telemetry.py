@@ -11,6 +11,9 @@ Everything here is derived from data already on disk (see the FEED TELEMETRY
 section of database.py) — there is no history table to accumulate and no cold
 start on a fresh install.
 """
+import copy
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -91,6 +94,40 @@ def _health(feed, stat, new_count: int) -> Dict[str, Any]:
     return {"state": "ok", "level": "good", "detail": "fetching and contributing"}
 
 
+# The five aggregates below are full scans of indicator_sources (~3.8 s
+# together at 890k indicators, measured on the v2.5.0 canary) and every
+# dashboard view recomputed them, though they only move when the corpus does.
+# Cached on the corpus fingerprint (count + max rowid of indicators,
+# indicator_sources and feedback) with a 5-minute ceiling for the time-windowed
+# counts (first reports in 7d, new in 24h). Health is still derived live.
+_AGG_TTL_S = 300
+_agg_lock = threading.Lock()
+_agg_cache: Dict[str, Any] = {"key": None, "at": 0.0, "value": None}
+
+
+def _aggregates(db: Database):
+    key = (getattr(db, "db_path", None), db.corpus_change_key())
+    now = time.monotonic()
+    with _agg_lock:
+        if _agg_cache["key"] == key and now - _agg_cache["at"] < _AGG_TTL_S:
+            return copy.deepcopy(_agg_cache["value"])
+    value = (
+        db.get_feed_report_counts(),
+        db.get_feed_exclusive_counts(),
+        db.get_feed_first_report_counts(since=_iso_ago(days=FIRST_REPORT_WINDOW_DAYS)),
+        db.get_feed_new_counts(since=_iso_ago(hours=NEW_WINDOW_HOURS)),
+        db.get_feed_overlap(),
+    )
+    with _agg_lock:
+        _agg_cache.update(key=key, at=now, value=value)
+    return copy.deepcopy(value)     # callers annotate the overlap dicts in place
+
+
+def invalidate_cache() -> None:
+    with _agg_lock:
+        _agg_cache.update(key=None, at=0.0, value=None)
+
+
 def feed_telemetry(db: Database) -> Dict[str, Any]:
     """Per-feed contribution and health, plus notable feed pairs.
 
@@ -99,12 +136,7 @@ def feed_telemetry(db: Database) -> Dict[str, Any]:
     """
     feeds = {f.name: f for f in db.get_feed_sources()}
     stats = {s.feed_name: s for s in db.get_feed_stats()}
-    reported = db.get_feed_report_counts()
-    exclusive = db.get_feed_exclusive_counts()
-    firsts = db.get_feed_first_report_counts(
-        since=_iso_ago(days=FIRST_REPORT_WINDOW_DAYS))
-    new = db.get_feed_new_counts(since=_iso_ago(hours=NEW_WINDOW_HOURS))
-    overlap = db.get_feed_overlap()
+    reported, exclusive, firsts, new, overlap = _aggregates(db)
 
     rows = []
     for name, feed in feeds.items():

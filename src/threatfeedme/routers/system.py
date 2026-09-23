@@ -154,6 +154,27 @@ _OUTPUTS_CONTAINING = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
                        for t in ConfidenceTier}
 
 
+_COUNTS_TTL_S = 300
+_counts_cache = {"key": None, "at": 0.0, "value": None}
+
+
+def _served_counts_cached(db, wl_map):
+    """_served_counts keyed on serve_fingerprint (rows, the rescore stamp, the
+    whitelist): it moves exactly when a served list can. ~1.6 s per dashboard
+    view at 890k indicators before this. The TTL covers whitelist entries that
+    expire by the clock without changing the fingerprint."""
+    import copy
+    import time
+    key = (getattr(db, "db_path", None), db.serve_fingerprint())
+    now = time.monotonic()
+    c = _counts_cache
+    if c["key"] == key and now - c["at"] < _COUNTS_TTL_S:
+        return copy.deepcopy(c["value"])
+    value = _served_counts(db, wl_map)
+    c.update(key=key, at=now, value=value)
+    return copy.deepcopy(value)
+
+
 def _served_counts(db, wl_map):
     """(served, total_inds) per kind for the feed matrix.
 
@@ -251,7 +272,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # CUMULATIVE_TIERS; tier-scoped whitelist exclusions apply per output.
     # Streamed, not materialized: a full-table model list on every dashboard
     # view was one of the allocations that OOMed 2 GB deployments.
-    served, total_inds = _served_counts(core.db, wl_map)
+    served, total_inds = _served_counts_cached(core.db, wl_map)
 
     # ---- Feed matrix (the hero of the page; D2 revised) ----
     # Rows = tiers, columns = kinds; each cell is a URL + the count it serves.
