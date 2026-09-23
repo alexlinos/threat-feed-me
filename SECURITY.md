@@ -35,7 +35,7 @@ What the software stores, sends and logs, and to whom, is documented in
 ## Hardening measures in place
 
 Verified in code review (adversarial passes, 2026-08 and 2026-09; the
-2026-09 review's fixes shipped in v2.4.19):
+2026-09 review's fixes shipped in v2.4.19 and v2.5.0):
 
 - **Container runs as a non-root user** (`appuser`), single process, no shell
   services.
@@ -49,7 +49,31 @@ Verified in code review (adversarial passes, 2026-08 and 2026-09; the
 - **SSRF guard**: remote feed URLs whose host resolves to private/internal
   address space are refused (`safety.allow_private_feed_urls: false` by
   default), so a dashboard user cannot point a "feed" at cloud metadata or
-  internal hosts.
+  internal hosts. Since v2.5.0 the check is pinned to the connection: each
+  hop resolves once, the addresses are validated, and the socket connects to
+  exactly the validated address, so a DNS-rebinding host cannot answer
+  public at check time and private at connect time. Adding a feed also runs
+  the check up front, refusing an internal URL with a reason.
+- **Host-header allowlist** (v2.5.0): the dashboard and API answer only to
+  hostnames you allow (`TFM_ALLOWED_HOSTS`, or one click from the dashboard
+  banner), which stops DNS-rebinding pages in a LAN browser from driving
+  the API. IP literals and localhost always work; `/feeds`, `/healthz` and
+  static files are exempt so firewalls keep polling. Report-only until
+  configured, so an upgrade behind a proxy never locks you out.
+- **Request bodies are capped** before authentication (1 MB, 6 MB for list
+  uploads), by declared length and by counting streamed bytes.
+- **Least privilege in the image** (v2.5.0): the runtime user owns only
+  `data/` and `output/`; application code and config are read-only to it,
+  and the `.env` temp file is created 0600.
+- **CrowdSec credentials are bound to the LAPI** (v2.5.0): the machine login
+  and bouncer key are sent only to the configured LAPI, never along a
+  redirect or through an environment proxy, and are cleared when the LAPI
+  address changes. The LAPI is an operator-configured LAN service, so the
+  crowdsec scrapers are exempt from the feed SSRF guard for exactly that
+  host; feed URLs cannot retarget the key (the scraper takes host and path
+  from the integration, not the feed), and no feed may name the CrowdSec
+  variables as its key. Decisions threat-feed-me published are excluded
+  from the pull, so the tool can never corroborate itself.
 - **Output safety filters**: any entry that *overlaps* IANA special-purpose
   space (RFC1918, CGNAT, loopback, link-local, multicast, documentation,
   IPv4-mapped/NAT64/ULA and other IPv6 special ranges) is refused, as are
@@ -126,6 +150,10 @@ you believe it is reachable, not just the CVE id.
 - No rate limiting or brute-force lockout on Basic auth — front with a
   reverse proxy if you need either.
 - Basic auth is the only built-in dashboard authentication (no OIDC/SSO).
+- The UniFi gateway and CrowdSec LAPI are LAN hosts set from the dashboard,
+  so anyone who can use the dashboard can point those integrations (and
+  the credentials you saved for them, until the address change clears
+  them) at a LAN host. Enable dashboard auth where that matters.
 - Feed endpoints intentionally leak the block list to anyone who can reach
   the port; if that matters on your network, restrict reachability at the
   firewall.

@@ -24,9 +24,9 @@ published compose file). Nothing is written anywhere else.
 | Feed telemetry | Per-feed fetch times, counts, HTTP status, overlap and reputation metrics | `feeds`, `feed_stats`, `deleted_feeds` | Until the feed is deleted, then a tombstone with the name only |
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
-| Settings | Tier boundaries, refresh interval, retention, UniFi and predictor toggles | `settings` | Until changed |
+| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostname allowlist, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
 | Uploaded lists | Custom indicator lists you upload through the dashboard, as text files | `uploads/` under the data directory | Until you delete the feed |
-| Credentials | Feed API keys and UniFi credentials you save from the dashboard, as `KEY=value` lines | `.env` next to the database, plain text | Until you remove them |
+| Credentials | Feed API keys, UniFi credentials and CrowdSec credentials (machine login, bouncer key, Console integration login) you save from the dashboard, as `KEY=value` lines | `.env` next to the database, plain text | Until you remove them |
 
 The indicators are third-party threat intelligence about hosts on the
 public internet. Under some privacy laws an IP address is personal data. If
@@ -41,7 +41,7 @@ gateway (see `pusher_unifi.py`).
 ## What the software sends, and to whom
 
 All outbound traffic is initiated by the feed ingestor and, if you enable
-it, the UniFi pusher. Both are in `src/threatfeedme/`.
+them, the UniFi and CrowdSec integrations. All are in `src/threatfeedme/`.
 
 **To the threat feed providers you enable.** On every refresh the ingestor
 makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent
@@ -66,14 +66,26 @@ never sent to a host other than the one it was entered for. Certificate
 verification is off by default because UDM certificates are self-signed;
 turn it on if your gateway has a real one.
 
+**To your CrowdSec Local API, only if you configure it.** Publishing sends
+the chosen block-list tier (IP addresses and CIDR ranges, each as a ban
+decision under a `threatfeedme/` scenario) and the machine login you saved
+to the LAPI address you configured, on your own network. The `crowdsec_*`
+feeds send the bouncer key you saved to the same address to read its
+decisions. Changing the LAPI address clears all three credentials, so they
+are never sent to a host other than the one they were entered for, and no
+redirect is followed. The optional `crowdsec_console` feed sends its Console
+integration login to `admin.api.crowdsec.net` (CrowdSec's servers) to
+download the blocklists your Console account subscribes to; CrowdSec's
+privacy policy governs that request.
+
 **To nobody else.** The software does not contact the project, the
 maintainer, a licensing server, an analytics endpoint or an update service.
 Country lookups for the dashboard heatmap use an offline table derived from
 the DB-IP Lite database and shipped inside the image; no geolocation
 service is called at runtime. The map outline is served by the application
 itself, not fetched from a CDN. You can confirm all of this with an egress
-rule that allows only your enabled feed hosts and your gateway: the
-software works normally behind it.
+rule that allows only your enabled feed hosts, your gateway and your
+CrowdSec LAPI: the software works normally behind it.
 
 ## What the software exposes to the network
 
