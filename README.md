@@ -4,7 +4,51 @@
 
 # Threat Feed Me!
 
-On-prem threat intelligence aggregator that normalizes, dedupes, and scores threat feeds into confidence tiers, then serves them as one URL your firewall polls — malicious **IPs** for the packet filter and malicious **domains** for the DNS filter, as separate feeds that never mix. Feed it threats. It's always hungry.
+**The open-source MineMeld replacement.** An on-prem threat-intelligence
+aggregator that pulls 22 free, keyless feeds, works out which indicators
+*independent* sources genuinely agree on, and serves the result the way your
+security stack consumes it: block-list URLs for firewalls and DNS filters,
+TAXII 2.1 for SIEMs, and direct publishing to CrowdSec bouncers and UniFi
+gateways. One container, no accounts, no API keys. Feed it threats. It's
+always hungry.
+
+- **Consensus, not just aggregation.** Public feeds copy each other, so raw
+  source counts lie. Threat Feed Me discounts overlapping feeds, weighs each
+  feed by its false-positive record, and draws High / Medium / Everything from
+  the actual shape of the evidence ([how](#how-confidence-tiering-works)).
+- **Served every way you need it.** Plain-text URLs any firewall can poll
+  (FortiGate, Palo Alto EDL, pfSense, OPNsense, Sophos, SonicWall, Check Point,
+  Cisco), domain lists for the DNS filter, CSV/JSON, and a read-only
+  **TAXII 2.1** server of STIX 2.1 Indicators.
+- **Pushes where polling can't.** Publishes your chosen tier to **CrowdSec**
+  (every bouncer you run enforces it) and to **UniFi** gateways, and pulls
+  CrowdSec's own detections back in as votes.
+- **Safe by default.** A poisoned upstream can't make your firewall block its
+  own network: private, reserved and known-good infrastructure is filtered out
+  of every list, and whitelists apply everywhere, per tier or per feed.
+- **Knows when something's wrong.** Per-feed health, uniqueness and overlap,
+  "last polled by FortiGate" beside every URL, and nothing phones home.
+
+### Coming from MineMeld?
+
+Palo Alto Networks retired MineMeld (the hosted version reached end of life on
+1 August 2021) and archived the open-source project in March 2023. Threat Feed
+Me covers the job most MineMeld deployments did, aggregate public intel and
+hand it to firewalls and SIEMs, with less to maintain:
+
+| MineMeld | Threat Feed Me |
+|---|---|
+| Miners, one per feed | 22 curated feeds built in, plus any URL or uploaded list you add from the dashboard |
+| Aggregator processors (dedupe, merge) | Dedupe across feeds, then overlap-discounted consensus scoring into confidence tiers |
+| Whitelist miners | Whitelist by IP, CIDR, domain or `*.wildcard`, scoped globally, per feed or per tier |
+| EDL feed outputs (PAN-OS) | `/feeds/{high,medium,all}.txt` and `/feeds/domains/...`: plain one-per-line lists that PAN-OS External Dynamic Lists and every other firewall accept |
+| TAXII DataFeed output (TAXII 1.1 / STIX 1.x) | TAXII **2.1** / STIX **2.1**, read-only, six collections |
+| Node graph you wire and maintain | Nothing to wire: add a feed, it votes |
+
+What it doesn't do: build arbitrary processing graphs, speak TAXII 1.x, or
+accept writes over TAXII. If you need a full threat-intel platform with case
+management, look at OpenCTI or MISP; Threat Feed Me is the lightweight piece
+that turns public intel into lists your devices enforce.
 
 ## Deploy
 
@@ -100,9 +144,28 @@ image. Feed URLs stay open so firewalls can poll them.
   (self-heals when the whitelist entry is removed). Click a feed's **⚠ N FP** badge to review what
   it was penalized for and forgive individual flags or all of them; the
   whitelist entries stay in place, only the blame is withdrawn.
-- **Multi-format Export**: Text files, CSV, JSON for firewall/SIEM integration
-- **Basic Dashboard**: Web UI for viewing feeds, managing whitelists, seeing stats
-- **Containerized**: Docker deployment for easy on-prem install
+- **Votes that expire** *(v2.5)*: a feed's vote on an indicator lasts while
+  it lists it and for 3 days after (`scoring.vote_grace_days`), so a feed that
+  dropped an IP long ago stops corroborating it
+- **TAXII 2.1 server** *(v2.5)*: the same six lists as STIX 2.1 Indicators for
+  SIEMs and TIPs (Sentinel, QRadar, Splunk, MISP, OpenCTI); see
+  [TAXII 2.1](#taxii-21-for-siems-and-tips)
+- **CrowdSec, both directions** *(v2.5)*: publish a tier to your CrowdSec
+  bouncers, and pull your CrowdSec detections, the community blocklist and
+  Console lists back in as votes; see [CrowdSec](#crowdsec)
+- **UniFi push**: UDM gateways can't poll a URL, so the lists are pushed into
+  UniFi network lists after every refresh
+- **Multi-format export**: text, CSV and JSON; `?limit=N` serves the strongest
+  N entries for firewalls with an entry cap; ETags so unchanged lists cost a
+  304
+- **Operations dashboard**: feed health with inline errors, uniqueness and
+  overlap per feed, "last polled by …" beside every URL, a System panel (DB
+  size, backups, predictor, TAXII), and an ops pulse row
+- **Hardened**: SSRF guard pinned to the connected address, a Host-header
+  allowlist against DNS rebinding (`TFM_ALLOWED_HOSTS`), capped request
+  bodies, CSRF on every mutating call, write-only credentials, non-root image
+  with an SBOM; see [SECURITY.md](SECURITY.md)
+- **Containerized**: one multi-arch Docker image (amd64/arm64) for any on-prem box
 
 ## Architecture
 
@@ -129,9 +192,13 @@ image. Feed URLs stay open so firewalls can poll them.
 │  └── Whitelist + Safety Filtering (per kind)               │
 ├─────────────────────────────────────────────────────────────┤
 │  Output Tiers (per kind: /feeds/* and /feeds/domains/*)    │
-│  ├── High: >2 independent votes + threat-intel validated   │
+│  ├── High: >2 independent votes (or a primary curator)     │
 │  ├── Medium: >1 independent vote (overlap-discounted)      │
-│  └── Low: everything deduped (including custom)            │
+│  └── Everything: all deduped indicators (incl. custom)     │
+├─────────────────────────────────────────────────────────────┤
+│  Delivery                                                   │
+│  ├── Pull: firewall/DNS URLs (txt, csv, json), TAXII 2.1    │
+│  └── Push: CrowdSec LAPI decisions, UniFi network lists     │
 ├─────────────────────────────────────────────────────────────┤
 │  Storage                                                    │
 │  └── SQLite (indicators, sources, scores, whitelist, ...)  │
@@ -169,8 +236,8 @@ goes through three checks:
    weight drops automatically, so its IPs score lower until you stop seeing
    mistakes from it.
 3. **Is the sighting fresh?** *(recency weight)*: A scan from three days ago
-   matters less than one from an hour ago. Age halves an indicator's score
-   every 72 hours.
+   matters less than one from an hour ago. The recency part of the score
+   halves every 72 hours (`scoring.decay_half_life_hours`).
 4. **Does the witness still say so?** *(current listings, v2.5.0)*: A feed
    votes for an IP while it lists it, and for `scoring.vote_grace_days`
    (default 3) after it drops it. Most feeds publish short windows (HoneyDB
@@ -188,7 +255,12 @@ find the natural gaps in the crowd, and draw the cut lines there:
 - **Medium**: more than one real, independent vote (corroborated by
   something non-redundant).
 - **High**: more than two independent votes, plus at least one curated
-  threat-intel feed (`require_threat_intel`). The cleanest list.
+  threat-intel feed (`require_threat_intel`). The cleanest list. For
+  **domains**, where blocklists aggregate each other so heavily that
+  corroboration collapses toward one witness, a primary curator
+  (`authoritative_domain_feeds`: URLhaus, CERT.PL) also puts a domain in
+  High on its own word, and loses that privilege if its false-positive rate
+  degrades.
 
 A fresh or tiny database falls back to exactly these floors.
 
@@ -255,6 +327,14 @@ address-type feed import fed the wrong kind errors out on most firewalls.
 The on-disk exports split the same way (`*_confidence_ips.*` /
 `*_confidence_domains.*`).
 
+**Entry caps.** Firewalls limit external lists (a mid-range FortiGate takes
+about 131k entries per connector; PAN-OS EDLs have per-model limits). Add
+`?limit=N` to any URL to serve only the N highest-confidence entries, e.g.
+`/feeds/all.txt?limit=100000`. Lists carry an ETag, so a firewall re-polling
+an unchanged list gets a cheap `304 Not Modified`. Each URL on the dashboard
+shows when it was last polled and by what, so you can confirm your firewall is
+really pulling it.
+
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
   [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP
@@ -262,7 +342,7 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
   the dashboard.
 - **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block)
 - **SonicWall** (SonicOS 7): Object → Match Objects → Dynamic External Object (HTTPS URL)
-- **Palo Alto:** Objects → External Dynamic Lists → *IP List*
+- **Palo Alto:** Objects → External Dynamic Lists → *IP List* (domain URLs as a *Domain List*); the lists are EDL-native, so a MineMeld EDL output maps one-to-one
 - **Cisco Secure Firewall (FMC):** Objects → Object Management → Security Intelligence → Network Lists and Feeds
 - **Check Point** (R81+): Security Policies → Threat Prevention → Custom Policy Tools → Indicators → External IOC Feed
 - **pfSense (pfBlockerNG):** Firewall → pfBlockerNG → IPv4 → add the URL as a source
@@ -317,6 +397,49 @@ filtering off-gateway? A Pi-hole or AdGuard Home polling
 `/feeds/domains/medium.txt` works as well — that path uses the plain
 feed URLs instead of the push.
 
+### CrowdSec
+
+Threat Feed Me talks to your own CrowdSec **Local API**, in both directions,
+from the dashboard's **CrowdSec integration** panel:
+
+- **Publish:** after every refresh, the tier you choose (Medium by default)
+  is written into the LAPI as ban decisions, so every CrowdSec bouncer you
+  already run (nginx, Traefik, HAProxy, Cloudflare, iptables/nftables, ...)
+  enforces it with no per-device setup. Each publish replaces the previous one
+  with no enforcement gap. Decisions last 24 hours (configurable) and are
+  refreshed well before that, so if Threat Feed Me stops, its bans lapse
+  instead of staying forever. On the CrowdSec host:
+  `cscli machines add threatfeedme --password '<password>' -f /dev/null`, then
+  enter that login under **Set credentials**.
+- **Pull:** `cscli bouncers add threatfeedme`, enter the key, and enable any
+  of these feeds. Each votes as its own witness: `crowdsec_local` (your
+  engine's detections and manual bans: a sensor you run), `crowdsec_community`
+  (the community blocklist, for enrolled engines) and `crowdsec_lists`
+  (blocklists subscribed in the Console). Decisions Threat Feed Me published
+  are never read back as votes.
+- **Console lists without an engine:** create a *Raw IP List* integration in
+  the CrowdSec Console, put its id in the panel and its username and password
+  under the `crowdsec_console` feed's **Set key**.
+
+The LAPI URL and credentials are bound together: change the URL and the saved
+credentials are cleared. **Don't publish into a honeypot's CrowdSec**; a
+honeypot needs attackers to reach it. Pull from it instead.
+`python -m threatfeedme.main --push-crowdsec` publishes once from the CLI.
+
+### TAXII 2.1 for SIEMs and TIPs
+
+`http://<server>:8080/taxii2/` is a read-only TAXII 2.1 server. It has six
+collections, one per feed URL (High, Medium and Everything, for IPs and for
+domains), with the same content and whitelist rules as the matching `.txt`
+list. Each indicator is a STIX 2.1 Indicator with its pattern, a 0-100
+confidence, a description naming the feeds that reported it, tier and source
+labels, and a `valid_until` a week past its last sighting so your SIEM expires
+what stops being reported. IDs are stable across polls, so indicators update
+in place. `added_after` and paging are supported. Point Microsoft Sentinel's
+*Threat Intelligence - TAXII* connector, QRadar, Splunk, MISP or OpenCTI at the
+discovery URL; the System panel shows it with a Copy button. Like the feed
+URLs, it's unauthenticated by design, so restrict who can reach the port.
+
 ### Custom lists
 
 Add your own feeds from the dashboard: a remote **URL feed**, or **upload a list**
@@ -348,8 +471,10 @@ in config also forces it, and fails closed if the credentials are missing).
 ### Backups
 
 The database is backed up automatically (online, WAL-safe) on the schedule set
-in `config.yaml` under `database.backup` (default: every 24h, keep 7, to
-`data/backups/`, on the same persistent volume). Trigger one on demand with
+in `config.yaml` under `database.backup` (default: every 24h, keep 7, to a
+`backups/` folder beside the database, i.e. `data/backups/` on the same
+persistent volume). The dashboard's System panel shows the last backup and has
+a **Back up now** button. Trigger one on demand with
 `POST /api/backup` or `python -m threatfeedme.main --backup`. **Restore:** stop the app and
 copy a backup file over `data/threatfeedme.db`.
 
@@ -407,6 +532,24 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
+**Upgrading to 2.5.** Two changes you will notice:
+
+- **High gets smaller, on purpose.** A feed's vote now expires 3 days after the
+  feed drops an indicator, where before it lasted until the indicator aged out.
+  On one production install IP High fell from about 36.8k to 11k. The
+  indicators that left were mostly corroborated only by feeds that stopped
+  listing them days earlier. Set `scoring.votes_require_current_listing: false`
+  to keep the old behaviour.
+- **Dashboard hostnames.** A Host-header allowlist protects the dashboard
+  against DNS rebinding. It starts in report-only mode, showing a banner with
+  the hostnames you reach it by and a one-click lock, so upgrading never locks
+  you out. Feed URLs and TAXII are never affected. Set `TFM_ALLOWED_HOSTS`
+  (comma-separated) to lock it from the environment instead.
+
+If you run the offline predictor, retrain right after upgrading
+(`scripts/predictor.sh both`): its features were redefined to remove a
+training leak, and an old model is refused rather than misused.
+
 Schema migrations run automatically and are additive. Running from a plain
 checkout instead of Docker? Same story: `git pull` never touches the `data/`
 directory.
@@ -456,8 +599,8 @@ precedence over the file, so it survives restarts without editing config.
 Threat Feed Me runs where you install it and phones home to nobody: no
 telemetry, no analytics, no update check. What it stores on your data
 volume, what it sends to the feed providers you enable and to your UniFi
-gateway, and what it exposes on the network are spelled out, component by
-component, in [PRIVACY.md](PRIVACY.md).
+gateway or CrowdSec LAPI, and what it exposes on the network (feed URLs and
+TAXII) are spelled out, component by component, in [PRIVACY.md](PRIVACY.md).
 
 ## License
 
