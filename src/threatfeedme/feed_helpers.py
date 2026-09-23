@@ -4,6 +4,7 @@ feed-URL construction, live whitelist-scoped indicator queries, and IP/CIDR
 normalization.
 """
 import ipaddress
+import re
 import socket
 from typing import List, Optional, Tuple, Union
 
@@ -59,26 +60,44 @@ TIER_FEEDS = [
 _FEEDS_BY_NAME = {f["key"]: f for f in TIER_FEEDS}
 
 
-def _feed_base(request: Request, tier_key: str = "") -> str:
+_HOST_CHARS = re.compile(r"^[A-Za-z0-9.\-]+$|^\[[0-9A-Fa-f:.]+\]$")
+
+
+def _feed_base(request: Request, tier_key: str = "", swap_loopback: bool = True) -> str:
     """Build the base feed URL for a tier, respecting X-Forwarded-Proto/Proto
     so a reverse proxy (FortiGate, nginx) preserves HTTPS in the link the
     dashboard hands to the operator.
 
     Returns just the scheme://host[:port] — the caller/template adds the
-    /feeds/... path."""
+    /feeds/... path.
+
+    swap_loopback=False keeps the host the client actually used: right for
+    URLs a CLIENT follows (TAXII discovery), where the LAN-IP swap sent a
+    client that reached us on localhost or through a proxy somewhere else."""
     scheme = request.headers.get("X-Forwarded-Proto") or request.headers.get("Proto") or request.url.scheme
     # The Host / X-Forwarded-Host header already carries the port the client
     # reached us on, so split it out rather than re-appending request.url.port
     # (which would double it, e.g. "host:8080:8080").
     host_hdr = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
-    if host_hdr:
+    if host_hdr and host_hdr.startswith("["):          # [v6]:port
+        hostname, _, rest = host_hdr.partition("]")
+        hostname += "]"
+        port = rest.lstrip(":")
+    elif host_hdr:
         hostname, _, port = host_hdr.partition(":")
     else:
         hostname = request.url.hostname or "localhost"
         port = str(request.url.port or "")
+    # A Host header is client input: anything that isn't a plain hostname or
+    # address (plus a numeric port) falls back to the connection's own host
+    # rather than being echoed into URLs.
+    if not _HOST_CHARS.match(hostname or "") or (port and not port.isdigit()):
+        hostname = request.url.hostname or "localhost"
+        port = str(request.url.port or "")
     # A loopback/wildcard host is unreachable from the firewall polling the URL;
     # swap in this server's LAN IP so the operator can paste it as-is.
-    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "::"):
+    if swap_loopback and hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "::",
+                                      "[::1]", "[::]"):
         hostname = _lan_ip()
     if port and port not in ("80", "443"):
         return f"{scheme}://{hostname}:{port}"

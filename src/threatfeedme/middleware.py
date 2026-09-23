@@ -108,8 +108,9 @@ class BodyLimitMiddleware:
 #
 # Policy (ratified 2026-09-22 for upgrades like the maintainer's: a reverse
 # proxy in front, dashboard reached by name):
-#   * /feeds/*, /healthz and /static/* are NEVER checked — a firewall polling a
-#     feed by name through a proxy can't be broken by this, in any mode.
+#   * /feeds/*, /taxii2/*, /healthz and /static/* are NEVER checked — a
+#     firewall or SIEM polling by name through a proxy can't be broken by
+#     this, in any mode (both are read-only, non-secret, unauthenticated).
 #   * IP-literal and localhost Hosts are ALWAYS allowed, so nobody can lock
 #     themselves out: the server's IP is always a way back in (rebinding needs
 #     the attacker's hostname in Host, never an IP).
@@ -121,7 +122,7 @@ class BodyLimitMiddleware:
 
 ALLOWED_HOSTS_ENV = "TFM_ALLOWED_HOSTS"
 ALLOWED_HOSTS_SETTING = "allowed_hosts"
-_EXEMPT_PREFIXES = ("/feeds/", "/static/")
+_EXEMPT_PREFIXES = ("/feeds/", "/taxii2/", "/static/")
 _EXEMPT_PATHS = frozenset({"/healthz", "/favicon.ico"})
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")

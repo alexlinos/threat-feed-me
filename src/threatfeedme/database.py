@@ -798,6 +798,38 @@ class Database:
         finally:
             conn.close()
 
+    def iter_served_rows_by_added(self, kind: str, tiers, after=None, batch: int = 2000):
+        """The iter_served_rows tuples in TAXII "date added" order: last_seen,
+        then value, starting strictly after the keyset `after` =
+        (last_seen, ip). last_seen is when the indicator was last re-affirmed
+        by a feed, so a poll with added_after gets everything still being
+        reported since then. No index on purpose: last_seen is rewritten for
+        every re-seen row on every refresh, and an index would tax each of
+        those writes; the sort measured ~250 ms per page at 312k rows."""
+        values = [t.value for t in tiers]
+        marks = ",".join("?" * len(values))
+        seen, ip = after if after else ("", "")
+        conn = self._get_connection()
+        try:
+            cur = conn.execute(
+                "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
+                "(SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                " WHERE indicator_id = i.id), "
+                "i.confidence_score, i.tier, i.first_seen, i.last_seen "
+                f"FROM indicators i WHERE i.kind = ? AND i.tier IN ({marks}) "
+                "AND (i.last_seen > ? OR (i.last_seen = ? AND i.ip > ?)) "
+                "ORDER BY i.last_seen, i.ip",
+                [kind] + values + [seen, seen, ip])
+            while True:
+                rows = cur.fetchmany(batch)
+                if not rows:
+                    return
+                for r_ip, cidr, srcs, score, tier, first, last in rows:
+                    yield (r_ip, cidr, srcs.split(",") if srcs else [],
+                           score, tier, first, last)
+        finally:
+            conn.close()
+
     def serve_fingerprint(self) -> str:
         """Cheap version of everything a served feed contains, so a cached
         body is reused until something it depends on changes: indicator rows
