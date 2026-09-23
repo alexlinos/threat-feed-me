@@ -582,7 +582,9 @@ database:
     enabled: true
     interval_hours: 24
     keep: 7
-    dir: ./data/backups
+    # dir: defaults to a "backups" folder beside the database, so it follows
+    # database.path. (A fixed ./data/backups kept writing into the working
+    # directory when the database lived elsewhere.)
 
 dashboard:
 # host/port apply when running `python -m threatfeedme.main --serve` directly.

@@ -48,6 +48,12 @@ def client(tmp_path_factory):
     ConfidenceScorer(db, yaml.safe_load(cfg_path.read_text())).recalculate_all_scores()
 
     from starlette.testclient import TestClient
+    from threatfeedme import core
+    # Initialize core from THIS fixture's config explicitly. Relying on the
+    # first lazy access broke when any earlier test had already touched core:
+    # every test here then ran against that other DB.
+    core.reset()
+    core.init(str(cfg_path))
     from threatfeedme import dashboard
 
     # CSRF is enforced on all mutating endpoints regardless of auth, so the
