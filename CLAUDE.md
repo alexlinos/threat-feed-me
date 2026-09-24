@@ -637,7 +637,10 @@ MIGRATES the log (dropping it would leave the predictor unable to retrain for
 weeks), drops the duplicate `idx_indicators_ip`, strips the never-read
 per-fetch metadata keys, VACUUMs once: 1,858 MB -> 421 MB main + 267 MB churn
 in 124 s; backtest on the migrated copy AUROC 0.814 (unchanged). Health-check
-start period is 300 s so a watchdog can't kill that first start. Skipped: a
+start period is 300 s so a watchdog can't kill that first start. The entrypoint's
+schema step is `main.py --init-db`: logging configured (the old `python -c`
+swallowed INFO), a message BEFORE the long copy, and a static 503 + Retry-After
+holding page on the dashboard host/port until the DB is ready. Skipped: a
 predictive_score column (metadata is ~25 bytes now; no measured gain).
 
 **Parked (maintainer, 2026-09-23)**: 2.5 is complete on `release/2.5.0` and

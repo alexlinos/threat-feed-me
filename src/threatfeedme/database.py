@@ -336,7 +336,12 @@ class Database:
                 if fmt and fmt[0] == 'transitions':
                     # Upgrading from a 2.4.9+ main-file log: carry the history
                     # over (the predictor trains on it; dropping it would leave
-                    # the model unable to retrain for weeks).
+                    # the model unable to retrain for weeks). Said up front:
+                    # this and the VACUUM are the minutes a first start takes.
+                    rows = cursor.execute("SELECT COUNT(*) FROM main.sightings").fetchone()[0]
+                    logger.info(f"[migration] one-time upgrade: moving the churn log ({rows:,} rows) "
+                                f"to {os.path.basename(self.churn_path)} and compacting the database. "
+                                "The dashboard starts when this finishes (a few minutes on large databases).")
                     cursor.execute(
                         "INSERT OR IGNORE INTO churn.sightings (source_name, ip, tick, present) "
                         "SELECT source_name, ip, CAST(strftime('%s', tick) AS INTEGER), present "

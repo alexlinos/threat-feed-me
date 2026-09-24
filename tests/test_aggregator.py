@@ -1149,7 +1149,7 @@ def test_sightings_migration_drops_old_format_once(db, tmp_path):
         assert cur.fetchone()[0] == 2   # A leave + B arrival, kept
 
 
-def test_upgrade_from_2_4_19_moves_the_churn_log_and_slims_the_main_file(tmp_path):
+def test_upgrade_from_2_4_19_moves_the_churn_log_and_slims_the_main_file(tmp_path, caplog):
     """A 2.4.19 database: transition log in the main file, no source_left,
     the duplicate ip index, per-fetch metadata keys. Opening it with 2.5
     moves the log (ticks as epochs) to the churn file, backfills the vote
@@ -1175,7 +1175,11 @@ def test_upgrade_from_2_4_19_moves_the_churn_log_and_slims_the_main_file(tmp_pat
     finally:
         conn.close()
 
-    db = Database(path)
+    import logging
+    with caplog.at_level(logging.INFO, logger="threatfeedme.database"):
+        db = Database(path)
+    # said BEFORE the long copy, so a watched log never looks hung
+    assert "one-time upgrade: moving the churn log (3 rows)" in caplog.text
     conn = _raw(db)
     try:
         rows = sorted(conn.execute("SELECT source_name, ip, tick, present FROM churn.sightings").fetchall())

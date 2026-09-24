@@ -669,9 +669,10 @@ automatically on startup:
   more compactly; a duplicate index and some per-fetch metadata nobody read
   are dropped; then the file is compacted. On one production install the data
   went from 1.86 GB to 0.69 GB (0.42 GB main plus 0.27 GB churn log), in about
-  two minutes. The dashboard and the list URLs come up when it finishes, so
-  firewalls see the server as unreachable for that time and keep their last
-  copy of the list. Have free disk space at least the size of your current
+  two minutes. Meanwhile the dashboard address shows a "starting" page, list
+  URLs answer `503` with `Retry-After` (firewalls keep their last copy of the
+  list), and `docker logs` says what it's doing; the dashboard replaces the page
+  when it finishes. Have free disk space at least the size of your current
   database for the compaction. Backups are now two files (see
   [Backups](#backups)).
 
