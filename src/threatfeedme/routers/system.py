@@ -174,10 +174,13 @@ def _served_counts_cached(db, wl_map):
     expire by the clock without changing the fingerprint."""
     import copy
     import time
+    from threatfeedme.telemetry import refresh_running
     key = (getattr(db, "db_path", None), db.serve_fingerprint())
     now = time.monotonic()
     c = _counts_cache
-    if c["key"] == key and now - c["at"] < _COUNTS_TTL_S:
+    fresh = c["key"] == key and now - c["at"] < _COUNTS_TTL_S
+    # mid-refresh: last numbers, no rebuild (see telemetry.refresh_running)
+    if c["value"] is not None and c["key"][0] == key[0] and (fresh or refresh_running()):
         return copy.deepcopy(c["value"])
     value = _served_counts(db, wl_map)
     c.update(key=key, at=now, value=value)

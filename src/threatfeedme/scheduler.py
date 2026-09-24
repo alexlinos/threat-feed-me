@@ -89,10 +89,28 @@ def _run_refresh_holding_lock(only: Optional[List[str]] = None) -> None:
     except Exception as e:  # keep the scheduler/endpoint alive on failure
         _refresh_state["last_error"] = str(e)
         logger.error(f"Refresh failed: {e}")
+    try:
+        warm_dashboard_caches()     # still "running": the UI keeps its last numbers
+    except Exception as e:   # a cold cache just means the next click pays for it
+        logger.warning(f"Dashboard cache warm-up failed: {e}")
     finally:
         _refresh_state["running"] = False
         _refresh_state["last_finished"] = datetime.now(timezone.utc).isoformat()
         _refresh_lock.release()
+
+
+def warm_dashboard_caches() -> None:
+    """Rebuild the dashboard's telemetry and list counts right after a
+    refresh, in this thread, so the operator's next click finds them ready
+    instead of paying the rebuild (~4 s at 900k indicators on prod)."""
+    from threatfeedme import telemetry
+    from threatfeedme.routers.system import _served_counts_cached
+    telemetry.warming.on = True        # this thread rebuilds; requests keep the old copy
+    try:
+        telemetry.feed_telemetry(core.db)
+        _served_counts_cached(core.db, core.db.get_whitelist_map())
+    finally:
+        telemetry.warming.on = False
 
 
 def _do_refresh(only: Optional[List[str]] = None) -> bool:

@@ -105,11 +105,28 @@ _agg_lock = threading.Lock()
 _agg_cache: Dict[str, Any] = {"key": None, "at": 0.0, "value": None}
 
 
+warming = threading.local()     # set by scheduler.warm_dashboard_caches
+
+
+def refresh_running() -> bool:
+    """True while a feed refresh runs. The dashboard then serves its last
+    numbers instead of rebuilding them: each feed ingested moves the corpus
+    key, so every click during a multi-feed fetch paid a fresh ~4 s rebuild
+    (measured on prod, 2026-09-24). The refresh warms the caches when it
+    finishes (scheduler.warm_dashboard_caches)."""
+    if getattr(warming, "on", False):
+        return False
+    from threatfeedme.scheduler import _refresh_state
+    return bool(_refresh_state.get("running"))
+
+
 def _aggregates(db: Database):
     key = (getattr(db, "db_path", None), db.corpus_change_key())
     now = time.monotonic()
     with _agg_lock:
-        if _agg_cache["key"] == key and now - _agg_cache["at"] < _AGG_TTL_S:
+        have = _agg_cache["value"] is not None and _agg_cache["key"][0] == key[0]
+        if have and ((_agg_cache["key"] == key and now - _agg_cache["at"] < _AGG_TTL_S)
+                     or refresh_running()):
             return copy.deepcopy(_agg_cache["value"])
     value = (
         db.get_feed_report_counts(),
