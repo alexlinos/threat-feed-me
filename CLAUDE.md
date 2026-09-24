@@ -603,7 +603,9 @@ obvious from the code:
   "Name this server" saves a DNS name (enforce untouched) and
   `/api/host-check/resolve` reports whether it resolves to the address in
   use. A missing flag is off, not "legacy locked" (no release ever saved a
-  list before the flag).
+  list before the flag). With auth and the host check both off the app logs
+  a DNS-rebinding warning on every start; NO dashboard banner for it
+  (maintainer, 2026-09-24).
 
 **TAXII 2.1 as a feed (2.5, `stix_ingest.py` + the `taxii21` scraper)**:
 operator adds a collection URL with format `taxii21` (a closed map in
