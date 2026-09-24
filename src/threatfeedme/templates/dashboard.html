@@ -423,8 +423,10 @@
         Most firewalls re-poll on their own schedule (e.g. every 5–60 min). Start with the <b>Medium</b> feeds.
         <b>FortiGate note:</b> external resources are capped per model (commonly ~131k entries / 10 MB);
         the domain <i>Everything</i> feed can exceed that, so point FortiGate DNS filters at the
-        Medium or High domain feed. If a URL shows a loopback address, replace the host with this
-        server's LAN IP or hostname.
+        Medium or High domain feed. <b>Any firewall with an entry limit:</b> add <code>?limit=N</code> to a
+        list URL (for example <code>/feeds/medium.txt?limit=100000</code>) to get only the N strongest
+        entries, so the list fits instead of being cut off wherever the firewall stops reading.
+        If a URL shows a loopback address, replace the host with this server's LAN IP or hostname.
     </details>
 
     <details class="panel" open id="taxii-panel">
