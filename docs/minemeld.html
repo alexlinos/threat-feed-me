@@ -212,7 +212,7 @@
           <tr><td><b>Whitelists</b><span class="mm">Whitelist nodes in the graph</span></td><td><span class="st st-ok">Covered</span></td><td>IPs, CIDRs, domains and <code>*.wildcards</code>, everywhere or per tier; flagging a false positive lowers the reporting feed's weight</td></tr>
           <tr><td><b>TAXII / STIX feeds in</b><span class="mm">TAXII 1.x miners for ISAC, AIS and vendor feeds</span></td><td><span class="st st-part">Partly</span></td><td>TAXII <b>2.1</b> collections as feeds (MISP, OpenCTI, any 2.1 server); only unconditional indicator patterns are read. TAXII 1.x is not supported</td></tr>
           <tr><td><b>TAXII out to a SIEM</b><span class="mm">TAXII DataFeed output (STIX 1.x)</span></td><td><span class="st st-ok">Covered</span></td><td>Read-only TAXII 2.1 server of STIX 2.1 Indicators: six collections mirroring the list URLs</td></tr>
-          <tr><td><b>EDLs for PAN-OS and other firewalls</b><span class="mm">EDL output nodes</span></td><td><span class="st st-ok">Covered</span></td><td>Plain one-per-line lists that PAN-OS External Dynamic Lists take as-is, plus FortiGate, Check Point, Cisco, Sophos, SonicWall, pfSense, OPNsense, Pi-hole; <code>?limit=N</code> for EDL capacity limits</td></tr>
+          <tr><td><b>EDLs for PAN-OS and other firewalls</b><span class="mm">EDL output nodes</span></td><td><span class="st st-ok">Covered</span></td><td>Plain one-per-line lists that PAN-OS External Dynamic Lists take as-is, plus FortiGate, Check Point, Cisco, Sophos, SonicWall, pfSense, OPNsense, Pi-hole; add <code>?limit=N</code> to get only the N strongest entries when a firewall limits list size</td></tr>
           <tr><td><b>Manual and incident-response lists</b><span class="mm">localDB miner with an API and automatic aging</span></td><td><span class="st st-part">Partly</span></td><td>Add or remove indicators from the dashboard or API; manual entries never age out on their own (no per-entry expiry yet)</td></tr>
           <tr><td><b>Office 365 / Microsoft 365 allow-lists</b><span class="mm">The O365 miner (the most-published MineMeld article)</span></td><td><span class="st st-road">2.6 roadmap</span></td><td>Planned for 2.6 as application lists, kept separate from threat scoring. Until then: Palo Alto's EDL Hosting Service</td></tr>
           <tr><td><b>AWS, Azure and Google Cloud IP ranges</b><span class="mm">Cloud-provider miners with region and service filters</span></td><td><span class="st st-road">2.6 roadmap</span></td><td>Planned for 2.6 with the application lists</td></tr>
@@ -239,7 +239,8 @@
         <li><b>Swap the EDL source:</b> in PAN-OS, <i>Objects → External Dynamic Lists</i>, edit each list that pointed
           at a MineMeld output and paste the matching URL: <code>/feeds/high.txt</code>, <code>/feeds/medium.txt</code>
           or <code>/feeds/all.txt</code> as an <i>IP List</i>, and <code>/feeds/domains/…</code> as a <i>Domain List</i>.
-          Medium is the usual choice; if a list hits your model's EDL capacity, add <code>?limit=N</code>.</li>
+          Medium is the usual choice. If your model limits how many entries one list can hold, add
+          <code>?limit=N</code> to get only the N strongest, so the list fits instead of being cut off.</li>
         <li><b>Carry your whitelist over:</b> the entries from your MineMeld whitelist nodes go in on the Indicators page
           (or <code>POST /api/whitelist</code>): IPs, CIDRs, domains or <code>*.wildcards</code>, everywhere or per tier.</li>
         <li><b>Bring your TAXII feeds:</b> if your ISAC or TIP serves TAXII 2.1, add each collection as a feed

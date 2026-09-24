@@ -383,9 +383,11 @@
         The same tiers exist for <b>malicious domains</b> at <code>/feeds/domains/high.txt</code>,
         <code>medium</code>, and <code>all</code> — for the DNS-filter side of the firewall (or
         Pi-hole / AdGuard Home). IP URLs never contain a domain and vice versa.
-        <code>.csv</code> and <code>.json</code> variants are available for SIEM use, and
-        <code>?limit=N</code> serves the strongest N entries for firewalls with an entry cap.
+        <code>.csv</code> and <code>.json</code> variants are available for SIEM use.
       </p>
+      <p class="after-code">Many firewalls limit how many entries one list can hold (a mid-range FortiGate takes about
+        131,000). Add <code>?limit=N</code> to any URL to get only the N strongest entries, so the list fits instead of
+        being cut off wherever the firewall stops reading.</p>
     </div>
   </section>
 

@@ -228,9 +228,9 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
   Console lists back in as votes; see [CrowdSec](#crowdsec)
 - **UniFi push**: UDM gateways can't poll a URL, so the lists are pushed into
   UniFi network lists after every refresh
-- **Multi-format export**: text, CSV and JSON; `?limit=N` serves the strongest
-  N entries for firewalls with an entry cap; ETags so unchanged lists cost a
-  304
+- **Multi-format export**: text, CSV and JSON; `?limit=N` returns only the N
+  strongest entries, for firewalls that limit list size; ETags so unchanged
+  lists cost a 304
 - **Operations dashboard** *(redesigned in v2.5)*: a guided first-run set-up,
   feed health with inline errors, uniqueness and overlap per feed, "last
   polled by …" beside every URL, a System view (DB size, backups, predictor,
@@ -402,10 +402,11 @@ address-type feed import fed the wrong kind errors out on most firewalls.
 The on-disk exports split the same way (`*_confidence_ips.*` /
 `*_confidence_domains.*`).
 
-**Entry caps.** Firewalls limit external lists (a mid-range FortiGate takes
-about 131k entries per connector; PAN-OS EDLs have per-model limits). Add
-`?limit=N` to any URL to serve only the N highest-confidence entries, e.g.
-`/feeds/all.txt?limit=100000`. Lists carry an ETag, so a firewall re-polling
+**List size limits.** Many firewalls limit how many entries one list can hold
+(a mid-range FortiGate takes about 131,000 per connector; PAN-OS limits depend
+on the model). Add `?limit=N` to any URL to get only the N strongest entries,
+e.g. `/feeds/all.txt?limit=100000`, so the list fits instead of being cut off
+wherever the firewall stops reading. Lists carry an ETag, so a firewall re-polling
 an unchanged list gets a cheap `304 Not Modified`. Each URL on the dashboard
 shows when it was last polled and by what, so you can confirm your firewall is
 really pulling it.
