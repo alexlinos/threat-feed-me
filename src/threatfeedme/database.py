@@ -1097,8 +1097,16 @@ class Database:
     def set_indicator_score(self, ip: str, score: float, tier: str,
                             votes: float = None) -> None:
         """Persist a single indicator's recalculated score/tier (and, when
-        provided, its overlap-discounted effective-vote count)."""
+        provided, its overlap-discounted effective-vote count).
+
+        An in-place tier change is invisible to serve_fingerprint's row count
+        and rowid, so this bumps the serve stamp in the same transaction:
+        otherwise a manual re-add or whitelist edit that moves an EXISTING row
+        between tiers left cached feed bodies (and their ETags) serving the
+        old list until the next full rescore."""
         with self._cursor() as cur:
+            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('serve_stamp', ?)",
+                        (_utcnow_iso(),))
             if votes is None:
                 cur.execute(
                     "UPDATE indicators SET confidence_score = ?, tier = ? WHERE ip = ?",

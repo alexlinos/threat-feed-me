@@ -119,3 +119,26 @@ def test_real_requests_connections_go_through_the_guard(monkeypatch):
             fi._ssrf_guard.active = False
     finally:
         srv.shutdown()
+
+
+def test_env_proxies_are_ignored_while_the_guard_is_on(tmp_path, monkeypatch):
+    """Through an env proxy the connect-time pin would check the PROXY and the
+    proxy would re-resolve the target: guarded fetches must go direct. An
+    install that opted into private feed URLs (no guard) keeps its proxy."""
+    from threatfeedme import feed_ingestor as fi
+    from threatfeedme.database import Database
+    seen = []
+
+    class _Resp:
+        status_code, headers = 200, {}
+
+    def fake_get(url, **kw):
+        seen.append(kw.get("proxies"))
+        return _Resp()
+    monkeypatch.setattr(fi.requests, "get", fake_get)
+    monkeypatch.setattr(fi, "_require_public_url", lambda url: None)
+    monkeypatch.setenv("HTTPS_PROXY", "http://203.0.113.9:3128")
+    db = Database(str(tmp_path / "t.db"))
+    fi.FeedIngestor(db)._get_following_redirects("https://feeds.example.org/l.txt", {})
+    fi.FeedIngestor(db, allow_private_urls=True)._get_following_redirects("https://feeds.example.org/l.txt", {})
+    assert seen == [fi._NO_PROXIES, None]

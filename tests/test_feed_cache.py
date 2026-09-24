@@ -170,3 +170,15 @@ def test_concurrent_polls_build_once(db, monkeypatch):
     for t in threads:
         t.join()
     assert len(builds) == 1
+
+
+def test_an_in_place_tier_change_moves_the_serve_fingerprint(tmp_path):
+    """Manual re-add / whitelist edits rescore ONE existing row in place: no
+    row count or rowid change, so without the stamp the cached list (and its
+    ETag) kept serving the pre-edit tier."""
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("198.51.100.7", "feed_a", {})
+    before = db.serve_fingerprint()
+    db.set_indicator_score("198.51.100.7", 0.9, "high")
+    assert db.serve_fingerprint() != before

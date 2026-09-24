@@ -84,6 +84,11 @@ def _assert_public(host: str, addresses: List[str]) -> None:
             )
 
 
+# requests merges env proxies with setdefault, then drops None values, so
+# naming every scheme (and ALL_PROXY's "all") as None disables them all.
+_NO_PROXIES = {"http": None, "https": None, "all": None}
+
+
 def _require_public_url(url: str) -> None:
     """SSRF guard: reject a URL whose host is (or resolves to) a non-public
     address. Feed URLs can be added at runtime from the dashboard, so without
@@ -475,8 +480,15 @@ class FeedIngestor:
             # request, not the API key.
             hop_headers = headers if same_origin(origin, url) else {
                 k: v for k, v in headers.items() if k.lower() in CROSS_ORIGIN_SAFE_HEADERS}
+            # Env proxies (HTTP(S)_PROXY / ALL_PROXY) are ignored while the
+            # SSRF guard is on: through a proxy the guard would pin the PROXY's
+            # address, and the proxy re-resolves the target itself, reopening
+            # the check-then-connect rebinding window. An install that opted
+            # into private feed URLs has no guard to protect, so it keeps its
+            # proxy.
             response = requests.get(url, headers=hop_headers, timeout=30,
-                                    stream=True, allow_redirects=False)
+                                    stream=True, allow_redirects=False,
+                                    proxies=None if self.allow_private_urls else _NO_PROXIES)
             if response.status_code in _REDIRECT_STATUSES:
                 location = response.headers.get('Location')
                 response.close()

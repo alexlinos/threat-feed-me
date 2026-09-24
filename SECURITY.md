@@ -54,7 +54,11 @@ Verified in code review (adversarial passes, 2026-08 and 2026-09; the
   hop resolves once, the addresses are validated, and the socket connects to
   exactly the validated address, so a DNS-rebinding host cannot answer
   public at check time and private at connect time. Adding a feed also runs
-  the check up front, refusing an internal URL with a reason.
+  the check up front, refusing an internal URL with a reason. While the guard
+  is on, `HTTP(S)_PROXY` / `ALL_PROXY` are ignored for feed fetches: through a
+  proxy the pin would check the proxy's address and the proxy would
+  re-resolve the target itself (external review, 2026-09-24). Installs that
+  set `allow_private_feed_urls` have no guard to protect and keep their proxy.
 - **Host-header allowlist** (v2.5.0, opt-in): switched on, the dashboard
   and API answer only to hostnames you allow, which stops DNS-rebinding
   pages in a LAN browser from driving the API. **Off by default and after an
@@ -163,6 +167,15 @@ you believe it is reachable, not just the CVE id.
   so anyone who can use the dashboard can point those integrations (and
   the credentials you saved for them, until the address change clears
   them) at a LAN host. Enable dashboard auth where that matters.
+- With dashboard auth AND the host check both off (the defaults), a web
+  page opened by anyone on your network can drive the dashboard through DNS
+  rebinding: the browser treats the rebound page as same-origin, so the CSRF
+  header check doesn't stop it. The app logs a warning on every start in
+  that state. Set `DASHBOARD_USER`/`DASHBOARD_PASSWORD`, or switch on the
+  host check once the names you use are listed.
+- Credentials you save from the dashboard live in plain text in the data
+  volume's `.env` (created 0600 on Linux; Windows ignores that mode).
+  Protect the volume like any file holding secrets.
 - Feed endpoints intentionally leak the block list to anyone who can reach
   the port; if that matters on your network, restrict reachability at the
   firewall.

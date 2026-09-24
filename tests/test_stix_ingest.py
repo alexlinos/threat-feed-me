@@ -56,7 +56,10 @@ def test_unconditional_values_are_read(pattern, expected):
     "ipv4-addr:value = '198.51.100.1'",           # no brackets
     "[ipv4-addr:value = '198.51.100.1'] ; DROP",  # junk
     "",
-    "[" + "ipv4-addr:value = '1.1.1.1' OR " * 2000 + "ipv4-addr:value = '1.1.1.1']",   # oversized
+    # oversized; a short id, since pytest puts the id in PYTEST_CURRENT_TEST and
+    # Windows caps an environment value at 32,767 characters
+    pytest.param("[" + "ipv4-addr:value = '1.1.1.1' OR " * 2000 + "ipv4-addr:value = '1.1.1.1']",
+                 id="oversized-or-list"),
 ])
 def test_conditional_or_malformed_patterns_are_skipped(pattern):
     with pytest.raises(_Skip):
