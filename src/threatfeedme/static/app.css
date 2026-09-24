@@ -46,14 +46,6 @@ tr.row-problem td { box-shadow: inset 3px 0 0 var(--amber); }
   .feeding .prey { display:none; }
   .feeding { animation:pulse 1.8s ease-in-out infinite; }
 }
-/* "nom nom nom" under the chomper while a refresh runs. Base content is the
-   full phrase, so a browser that won't animate `content` still reads right;
-   the keyframes just make it chew up to the phrase and repeat. */
-.nomming::after { content:"nom nom nom"; animation:nomnom 1.4s steps(1,end) infinite; }
-@keyframes nomnom { 0%{content:"nom";} 33%{content:"nom nom";} 66%,100%{content:"nom nom nom";} }
-@media (prefers-reduced-motion: reduce) {
-  .nomming::after { animation:none; content:"nom nom nom"; }
-}
 .badge { padding:2px 9px; border-radius:6px; font-size:.78em; font-weight:600; font-family:var(--mono); border:1px solid transparent; white-space:nowrap; display:inline-block; }
 .badge-success { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
 .badge-error { background:rgba(248,113,113,.1); color:var(--red); border-color:rgba(248,113,113,.3); }

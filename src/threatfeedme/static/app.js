@@ -508,9 +508,12 @@ function updateRefreshPulse() {
     fetch('/api/refresh/status').then(r => r.json()).then(j => {
         const n = document.getElementById('pulse-refresh-n');
         const sub = document.getElementById('pulse-refresh-sub');
+        // Plain words while a run is going: this is one line of inline text,
+        // and the old chomper + "nom nom nom" collided with it. The rail's
+        // logo chomps meanwhile (setBrandState), so the motion isn't lost.
+        document.getElementById('pulse-refresh-idle').hidden = !!j.running;
+        document.getElementById('pulse-refresh-run').hidden = !j.running;
         if (j.running) {
-            n.innerHTML = '<span class="feeding"><span class="chomp"><i></i><b></b></span></span>';
-            sub.innerHTML = '<span class="nomming"></span>';
             card.classList.remove('warn');
             setBrandState('running');
             return;
