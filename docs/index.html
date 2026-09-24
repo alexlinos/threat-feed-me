@@ -83,7 +83,8 @@
   .chip b{color:var(--green-bright);font-weight:650}
   .shot{margin:44px 0 0;border-radius:16px;border:1px solid var(--border-2);overflow:hidden;
     box-shadow:0 30px 80px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.02)}
-  .shot img{display:block;width:100%;height:auto}
+  .shot img,.shot video{display:block;width:100%;height:auto}
+  .tour-cap{margin:12px 0 0;color:var(--dim);font-size:.88rem;text-align:center}
 
   /* ---- sections ---- */
   section{padding:64px 0;border-top:1px solid var(--border)}
@@ -232,6 +233,15 @@
     <div class="wrap">
       <h2>From docker run to blocking in five minutes</h2>
       <p class="sub">The dashboard walks you through it. Every screen below is the real v2.5 interface.</p>
+      <!-- The promo, rendered with HyperFrames. preload="none": nothing past the
+           poster downloads until the visitor presses play. -->
+      <figure class="shot tour">
+        <video controls playsinline preload="none" width="1920" height="1080" poster="assets/tour-poster.jpg"
+               aria-label="A 42-second tour of Threat Feed Me: how it works, then the Guide, Lists, Feeds and Connect views">
+          <source src="assets/tour.mp4" type="video/mp4">
+        </video>
+      </figure>
+      <p class="tour-cap">The tour in 42 seconds (no sound).</p>
       <div class="steps">
         <div class="step">
           <div class="step-text"><span class="step-num">01 · GUIDE</span>
