@@ -1,4 +1,5 @@
 """Whitelist management endpoints."""
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -10,6 +11,8 @@ from threatfeedme import core
 from threatfeedme.feed_helpers import _normalize_indicator
 from threatfeedme.models import ALL_FEEDS, WHITELIST_REASONS, REASON_FALSE_POSITIVE
 from threatfeedme.schemas import WhitelistRequest, WhitelistResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -58,8 +61,14 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
     # (WhitelistMatcher builds range rules from those keys). A bare host or
     # exact domain is stored as-is.
     wl_key = pattern or stored_ip
+    # A bad date is the caller's error (400). Everything below that fails is
+    # ours: 500, logged, and not reported as HTTP 200 {"success": false},
+    # which scripts and monitors read as success (review 2026-09-22).
     try:
         expires = datetime.fromisoformat(request.expires_at) if request.expires_at else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="expires_at must be an ISO-8601 date/time")
+    try:
         feed_name = request.feed_name or ALL_FEEDS
 
         # Capture which feeds are "blamed" for a false positive BEFORE any
@@ -118,8 +127,9 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
         else:
             scope = f"feed '{feed_name}'"
         return WhitelistResponse(success=True, message=f"{wl_key} whitelisted from {scope}")
-    except Exception as e:
-        return WhitelistResponse(success=False, message=str(e))
+    except Exception:
+        logger.exception("[whitelist] adding %s failed", wl_key)
+        raise HTTPException(status_code=500, detail="Could not add the whitelist entry; see the server log")
 
 
 @router.delete("/api/whitelist")

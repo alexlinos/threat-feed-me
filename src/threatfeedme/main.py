@@ -8,10 +8,12 @@ Usage:
     python -m threatfeedme.main --full           # Run complete pipeline
     python -m threatfeedme.main --serve          # Start web UI now, fetch feeds in background
     python -m threatfeedme.main --stats          # Show statistics
+    python -m threatfeedme.main --init-db        # Open (and migrate) the DB behind a holding page
 """
 import argparse
 import os
 import sys
+import threading
 import yaml
 import logging
 
@@ -107,6 +109,66 @@ def _serve(cfg, config_path=None):
     uvicorn.run("threatfeedme.app:app", host=host, port=port)
 
 
+# Served while --init-db runs: a first start after an upgrade can spend minutes
+# migrating the database, and a dashboard that just refuses connections reads
+# as broken. Static, no request data reflected, no external resources.
+_HOLDING_PAGE = b"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="20">
+<title>Threat Feed Me! is starting</title></head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0e131a;color:#e4e9f0;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif">
+<main style="max-width:520px;padding:32px;text-align:center">
+<h1 style="margin:0 0 12px;font-size:26px">Threat Feed Me<span style="color:#f87171">!</span> is starting</h1>
+<p style="margin:0 0 10px;color:#b9c4d2">After an upgrade the first start updates the database once. On a large
+install that takes a few minutes; the dashboard appears here when it's done.</p>
+<p style="margin:0;color:#93a0b2;font-size:14px">Your firewalls keep enforcing their last copy of the lists
+meanwhile. This page reloads itself.</p></main></body></html>"""
+
+
+def _init_db(cfg, db_path):
+    """--init-db, the container entrypoint's step before --serve: open the
+    database (running any one-time migration) while a holding page answers
+    503 + Retry-After on the dashboard's own host and port, so a browser shows
+    why nothing is up yet and a firewall poll gets a clean "try later". The
+    page closes the moment the database is ready, freeing the port for the
+    app. If the port can't be bound, the migration runs anyway."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Holding(BaseHTTPRequestHandler):
+        def _reply(self, body):
+            self.send_response(503)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Retry-After", "30")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(_HOLDING_PAGE)))
+            self.end_headers()
+            if body:
+                self.wfile.write(_HOLDING_PAGE)
+
+        def do_GET(self):
+            self._reply(True)
+
+        do_POST = do_PUT = do_DELETE = do_PATCH = do_GET
+
+        def do_HEAD(self):
+            self._reply(False)
+
+        def log_message(self, *args):
+            pass
+
+    server = None
+    try:
+        server = ThreadingHTTPServer(_resolve_host_port(cfg), Holding)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    except OSError as e:
+        logger.warning(f"Holding page not started ({e}); opening the database anyway")
+    try:
+        Database(db_path)
+    finally:
+        if server:
+            server.shutdown()
+            server.server_close()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Threat Feed Me! - threat feed aggregator')
     parser.add_argument('--fetch', action='store_true', help='Fetch all feeds')
@@ -119,17 +181,23 @@ def main():
     parser.add_argument('--backup', action='store_true', help='Take a database backup now')
     parser.add_argument('--push-unifi', action='store_true',
                         help='Push the configured tier into UniFi firewall groups now (integrations.unifi)')
+    parser.add_argument('--push-crowdsec', action='store_true',
+                        help='Publish the configured tier into the CrowdSec LAPI now (integrations.crowdsec)')
+    parser.add_argument('--init-db', action='store_true',
+                        help='Open the database, running any one-time migration, behind a holding page')
     parser.add_argument('--config', default='config.yaml', help='Config file path')
 
     args = parser.parse_args()
 
-    if not any([args.fetch, args.score, args.export, args.full,
-                args.serve, args.stats, args.backup, args.push_unifi]):
+    if not any([args.fetch, args.score, args.export, args.full, args.serve, args.stats,
+                args.backup, args.push_unifi, args.push_crowdsec, args.init_db]):
         parser.print_help()
         return
 
     cfg = yaml.safe_load(open(args.config))
     db_path = cfg.get('database', {}).get('path', './data/threatfeedme.db')
+    if args.init_db:
+        return _init_db(cfg, db_path)
     db = Database(db_path)
 
     seeded = db.seed_feeds_from_config(cfg)
@@ -174,6 +242,17 @@ def main():
             logger.error("UniFi push is not enabled - set integrations.unifi in config.yaml")
             sys.exit(2)
         logger.info(f"UniFi push complete: {summary}")
+
+    if args.push_crowdsec:
+        from threatfeedme.core import load_env_file
+        load_env_file(os.path.join(os.path.dirname(db_path) or ".", ".env"))
+        from threatfeedme.crowdsec import push_to_crowdsec
+        summary = push_to_crowdsec(db, cfg, force=True)
+        if summary is None:
+            logger.error("CrowdSec publish is not enabled or has no LAPI URL "
+                         "(dashboard CrowdSec panel, or integrations.crowdsec in config.yaml)")
+            sys.exit(2)
+        logger.info(f"CrowdSec publish complete: {summary}")
 
 
 

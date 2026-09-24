@@ -10,9 +10,10 @@ import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from threatfeedme.database import Database
+from threatfeedme import jobs
+from threatfeedme.database import Database, MEMBERSHIP_STAMP_KEY
 from threatfeedme.feed_ingestor import FeedIngestor
-from threatfeedme.scorer import ConfidenceScorer
+from threatfeedme.scorer import ConfidenceScorer, current_votes_enabled, vote_grace_days
 from threatfeedme.safety import SafetyFilter
 from threatfeedme.exporter import _write_text, _write_csv, _write_json, is_included
 from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS
@@ -34,6 +35,13 @@ def scorer_config(db: Database, config: Dict) -> Dict:
             {'name': f.name, 'weight': f.weight}
             for f in db.get_feed_sources()
         ],
+        # The CONFIGURED feed URLs: the trust anchor domain authority is
+        # verified against (scorer.authoritative_sources). 'feeds' above is
+        # rebuilt from the DB and carries no URL, so without this every
+        # authoritative feed failed verification and live domain HIGH would
+        # have silently emptied (caught before release, v2.5.0).
+        'config_feed_urls': {f.get('name'): f.get('url')
+                             for f in config.get('feeds', []) or [] if isinstance(f, dict)},
     }
 
 
@@ -72,11 +80,15 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
     set has no business being."""
     safety_cfg = config.get('safety', {}) or {}
     from threatfeedme.credentials import KeyPolicy
+    from threatfeedme import crowdsec
     ingestor = FeedIngestor(
         db,
         safety=SafetyFilter.from_config(config),
         allow_private_urls=bool(safety_cfg.get('allow_private_feed_urls', False)),
         key_policy=KeyPolicy.from_config(config),
+        crowdsec_lapi=crowdsec.lapi_url(db, config),
+        crowdsec_console_id=crowdsec.console_integration_id(db, config),
+        crowdsec_verify_ssl=bool(crowdsec.effective_block(db, config).get('verify_ssl', True)),
     )
     feeds = db.get_feed_sources(enabled_only=True)
     if only is not None:
@@ -98,9 +110,20 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
 
 
 def recalculate(db: Database, config: Dict) -> int:
-    """Recalculate confidence scores for all indicators."""
-    scorer = ConfidenceScorer(db, scorer_config(db, config))
-    return scorer.recalculate_all_scores()
+    """Recalculate confidence scores for all indicators. Serialized with every
+    other heavy writer (jobs.write_lock): a request-triggered rescore waits
+    for a running one instead of racing it with stale reads."""
+    with jobs.write_lock:
+        # The grace lives in source_left's contents, so expire it first:
+        # otherwise a recalc between refreshes scores last hour's grace.
+        db.prune_left_memberships(vote_grace_days(config))
+        scorer = ConfidenceScorer(db, scorer_config(db, config))
+        count = scorer.recalculate_all_scores()
+        # Tiers and scores changed in place — invisible to row counts — so tell
+        # the feed cache its bodies are stale (feed_cache.serve_fingerprint).
+        from threatfeedme.feed_cache import mark_scores_changed
+        mark_scores_changed(db)
+        return count
 
 
 # ---- Export (inlined from the Exporter class) ----
@@ -178,6 +201,7 @@ def export_tiers_async(db: Database, config: Dict) -> None:
                         push_to_unifi(db, config)
                 except Exception:
                     logger.exception("[unifi] push after whitelist/export change failed")
+                _push_crowdsec(db, config)
         finally:
             with _export_state_lock:
                 _export_running = False
@@ -195,39 +219,21 @@ def export_tiers(db: Database, config: Dict) -> Dict:
     output_dir = config.get('output', {}).get('base_dir', './output')
     formats = config.get('output', {}).get('formats', ['text'])
     results = {}
-    for fmt in formats:
-        tier_results = {}
-        for tier in ConfidenceTier:
-            tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt, kind="ip")
-            tier_results[f"{tier.value}_domains"] = _export_tier(
-                db, tier, output_dir, format=fmt, kind="domain")
-        results[fmt] = tier_results
+    with jobs.write_lock:   # never interleave with a rescore rewriting tiers
+        for fmt in formats:
+            tier_results = {}
+            for tier in ConfidenceTier:
+                tier_results[tier.value] = _export_tier(db, tier, output_dir, format=fmt, kind="ip")
+                tier_results[f"{tier.value}_domains"] = _export_tier(
+                    db, tier, output_dir, format=fmt, kind="domain")
+            results[fmt] = tier_results
     return results
-
-
-def get_export_stats(db: Database) -> Dict:
-    """Get statistics about exported data, per kind. The historical unsuffixed
-    keys stay IP-only (they describe the *_confidence_ips files)."""
-    stats = {}
-    wl_map = db.get_whitelist_map()
-    for tier in ConfidenceTier:
-        # Cumulative, matching the exported files (low_count == everything).
-        stats[f"{tier.value}_count"] = sum(
-            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind="ip")
-            if is_included(i, wl_map))
-        stats[f"{tier.value}_domain_count"] = sum(
-            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind="domain")
-            if is_included(i, wl_map))
-    stats["total_unique_ips"] = stats.get("low_count", 0)
-    stats["total_unique_domains"] = stats.get("low_domain_count", 0)
-    stats["whitelisted_count"] = len(db.get_whitelist())
-    return stats
 
 
 # ---- Retention ----
 
 RETENTION_MAX_AGE_KEY = "retention_max_age_days"
-DEFAULT_RETENTION_DAYS = 7  # fallback if neither the DB setting nor config sets it
+DEFAULT_RETENTION_DAYS = 14  # fallback if neither the DB setting nor config sets it (see config.yaml)
 
 # Settings key holding the scoring-input fingerprint (scoring_input_key) as of
 # the last rescore, so run_refresh can skip the full recompute when nothing
@@ -269,6 +275,11 @@ def scoring_input_key(db: Database, config: Dict) -> str:
         "catalog": catalog,
         "whitelist": whitelist,
         "predict_stamp": db.get_setting(PREDICT_STAMP_KEY),
+        # With current-listing votes a leave removes a vote without touching
+        # any attribution row. Only then: some feed churns almost every
+        # refresh, so folding it in unconditionally would disable the gate.
+        "membership": (db.get_setting(MEMBERSHIP_STAMP_KEY)
+                       if current_votes_enabled(config) else None),
     }, sort_keys=True, default=str)
     digest = hashlib.sha256(blob.encode()).hexdigest()[:16]
     return ",".join(str(n) for n in db.corpus_change_key()) + ":" + digest
@@ -291,6 +302,18 @@ def retention_max_age_days(db: Database, config: Dict) -> int:
 
 
 # ---- Full refresh ----
+
+def _push_crowdsec(db: Database, config: Dict) -> None:
+    """Publish to the operator's CrowdSec LAPI when configured. Guarded like
+    the UniFi push: an unreachable LAPI never breaks a refresh or an export,
+    and unconfigured deployments skip it without a login attempt."""
+    try:
+        from threatfeedme import crowdsec
+        if crowdsec.push_ready(db, config):
+            crowdsec.push_to_crowdsec(db, config)
+    except Exception:
+        logger.exception("[crowdsec] push failed (the served lists are unaffected)")
+
 
 def churn_log_exclude(config: Dict) -> set:
     """Feed names whose churn transitions should NOT be written to `sightings`.
@@ -345,6 +368,15 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     results."""
     fetched_values: Dict = {}
     fetched = fetch_feeds(db, config, only=only, collect_values=fetched_values)
+    # Network fetching stays outside the write lock (a slow feed must never
+    # block a rescore or a whitelist export); everything from here rewrites
+    # scoring state, so it runs serialized with the other heavy writers.
+    with jobs.write_lock:
+        return _after_fetch(db, config, fetched, fetched_values)
+
+
+def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict) -> Dict:
+    """run_refresh's post-fetch phase (caller holds jobs.write_lock)."""
     tick = datetime.now(timezone.utc).isoformat()
     # Churn ground truth, transition format: diff each cleanly-fetched
     # source's ACTUAL ingested values against its last snapshot and record
@@ -372,6 +404,9 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     # window so a leave-then-return WITHIN that window stays observable; floor
     # at 30d so a disabled/short retention still leaves usable churn history.
     db.prune_sightings(max(2 * max_age_days, 30) if max_age_days > 0 else 30)
+    # Expire drops past the vote grace BEFORE the gate key is read: an expiry
+    # is a vote change with no attribution change, and must force the rescore.
+    db.prune_left_memberships(vote_grace_days(config))
     # Re-apply the safety filter to what is already stored: a filter fix or a
     # new operator known-good entry must take effect now, not when the rows age
     # out. A non-empty sweep changes the corpus key, so it forces the rescore.
@@ -399,6 +434,10 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
     key = scoring_input_key(db, config)
     if key == db.get_setting(_RESCORE_KEY):
         logger.info("[refresh] no scoring-relevant change; skipped rescore/export/push")
+        # CrowdSec decisions EXPIRE (UniFi groups don't): an unchanged corpus
+        # must still be re-published before its duration runs out. The push
+        # is a no-op until then.
+        _push_crowdsec(db, config)
         return fetched
     recalculate(db, config)
     export_tiers(db, config)
@@ -413,5 +452,6 @@ def run_refresh(db: Database, config: Dict, only: Optional[List[str]] = None) ->
             push_to_unifi(db, config)
     except Exception:
         logger.exception("[unifi] push failed (refresh itself succeeded)")
+    _push_crowdsec(db, config)
     db.set_setting(_RESCORE_KEY, key)
     return fetched

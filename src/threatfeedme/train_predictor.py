@@ -22,17 +22,27 @@ Dataset design (rolling-origin sampling):
   - Positive = a leave followed by a return with absence gap >= MIN_GAP_H.
     The floor matters: sub-hour gaps are feed-cadence artifacts, not repeat
     offender behavior.
-  - Population = ips with >=1 event at or before T (an unobserved ip has no
-    history to score); negatives are stride-sampled per snapshot to bound
-    work, with scale_pos_weight compensating the known sampling rate.
+  - Population = IPs IN THE CORPUS AT T (listed by some feed then, or dropped
+    within the retention window before it), the population serving scores.
+    It used to be every ip with any event at or before T: long-gone ips
+    (easy negatives serving never sees), domains (serving scores IPs only),
+    and never baseline-only IPs (listed since before the log, no events),
+    which serving scores every day. Negatives are stride-sampled per
+    snapshot to bound work, with scale_pos_weight compensating the known
+    sampling rate.
   - Train/holdout split is DISJOINT BY SNAPSHOT TIME (last HOLDOUT_FRACTION
     of snapshots are holdout), not random.
   - churn_log_exclude feeds are dropped from both events and labels; their
     rotation is list churn, not ip churn.
 
-Known anachronism (documented, acceptable for a dark predictor): prefix
-density and country rank come from the CURRENT corpus, not the corpus as of
-T, and indicators evicted by retention read source_count=0 at past snapshots.
+Point-in-time features (v2.5.0): live_source_count and first_seen_age_h are
+reconstructed as of T from membership history (FeatureBuilder), where they
+used to be read from TODAY's tables, so an ip evicted since T (typically one
+that never returned) read 0 and the features partly encoded the label; every
+AUROC measured before this was inflated by it. Remaining anachronism: prefix
+density and country rank come from the current corpus (density excludes the
+ip itself, which removes its direct eviction signal; neighbours' eviction is
+a weaker, regional effect).
 """
 from __future__ import annotations
 
@@ -54,20 +64,17 @@ def _event_stream(db, exclude_sources: Set[str]):
     # present DESC: arrivals before leaves within one tick, so a same-tick
     # leave cannot be swallowed by a same-tick return and erase the pair
     # (A2A review 2026-09-11, finding 8; FeatureBuilder orders identically).
-    sql = ("SELECT ip, tick, present FROM sightings "
+    sql = ("SELECT ip, tick, present FROM churn.sightings "
            "ORDER BY tick, present DESC, source_name, ip")
     params: Tuple = ()
     if exclude_sources:
         marks = ",".join("?" * len(exclude_sources))
-        sql = sql.replace("FROM sightings",
-                          f"FROM sightings WHERE source_name NOT IN ({marks})")
+        sql = sql.replace("FROM churn.sightings",
+                          f"FROM churn.sightings WHERE source_name NOT IN ({marks})")
         params = tuple(sorted(exclude_sources))
     with db._cursor() as cur:
         for row in cur.execute(sql, params):
-            ts = datetime.fromisoformat(row["tick"])
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            yield row["ip"], ts, int(row["present"])
+            yield row["ip"], datetime.fromtimestamp(row["tick"], timezone.utc), int(row["present"])
 
 
 def collect_labels(db, exclude_sources: Set[str],
@@ -112,7 +119,7 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     # predictable churn, and both must drop from labels AND features or the
     # dataset would train on transitions serving won't see (train/serve skew).
     exclude = churn_log_exclude(config) | db.local_file_feed_names()
-    first_event, churn_returns, t_min, t_max = collect_labels(db, exclude, min_gap_h)
+    _first, churn_returns, t_min, t_max = collect_labels(db, exclude, min_gap_h)
     if t_min is None or t_max is None:
         raise SystemExit("sightings log is empty; nothing to train on")
     horizon = timedelta(hours=horizon_h)
@@ -123,22 +130,17 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     snap_ix: List[int] = []
 
     fb = FeatureBuilder(db, config, exclude_sources=exclude)
-    # MUST be sorted by first-event TIME, not by IP string: the cursor below
-    # advances monotonically and assumes chronological order. Lexicographic
-    # sort stalls the cohort at the first out-of-order IP (found running this
-    # against the real 21-day log; synthetic tests share one first tick and
-    # cannot see it).
-    observed = sorted(first_event, key=lambda ip: (first_event[ip], ip))
+    from .pipeline import retention_max_age_days
+    days = retention_max_age_days(db, config)
+    retention_s = days * 86400.0 if days > 0 else float("inf")
+    candidates = sorted(fb.candidate_ips())
     # first snapshot at t_min + step: at T == t_min every feature clamps to
     # before the FIRST logged event, i.e. an all-zero vector with some rows
     # labeled positive, pure label noise (A2A review finding 3)
     T = t_min + step
-    # monotonic cursors over the chronologically sorted population
-    obs_i = 0
     while T <= t_max:
-        while obs_i < len(observed) and first_event[observed[obs_i]] <= T:
-            obs_i += 1
-        cohort = observed[:obs_i]  # observed at T (first_event <= T)
+        t = T.timestamp()
+        cohort = [ip for ip in candidates if fb.in_corpus_at(ip, t, retention_s)]
         pos: List[str] = []
         neg: List[str] = []
         for ip in cohort:
@@ -379,7 +381,7 @@ def backtest(db_path: str, config_path: str, model_path: str = "",
     rand_auc = _auc(y[hold], rand_scores)
     rand_recall = _recall_at(rand_scores, y[hold])
 
-    # Source-count baseline (feature index 0 = FEATURE_NAMES[0] = source_count)
+    # Source-count baseline (feature index 0 = FEATURE_NAMES[0] = live_source_count)
     sc_scores = X[hold][:, 0]
     sc_auc = _auc(y[hold], sc_scores)
     sc_recall = _recall_at(sc_scores, y[hold])

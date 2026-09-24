@@ -16,6 +16,12 @@ from threatfeedme.models import (ThreatIndicator, WhitelistEntry, ConfidenceTier
 from .geo.data import CountryBuckets
 
 
+def _epoch(tick: str) -> int:
+    """Churn-log tick (the refresh's ISO-8601 UTC time) -> epoch seconds."""
+    t = datetime.fromisoformat(tick)
+    return int((t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp())
+
+
 def _utcnow_iso() -> str:
     """Timezone-aware UTC timestamp as an ISO string."""
     return datetime.now(timezone.utc).isoformat()
@@ -65,17 +71,77 @@ def _feed_fingerprint(feed: FeedSource) -> str:
     }, sort_keys=True)
 
 
+# A feed's VOTE on an indicator lasts while the feed lists it and for a short
+# grace after it drops it (v2.5.0, scoring.vote_grace_days, default 3).
+# indicator_sources is add-only attribution history: it never forgets an IP a
+# feed has since dropped, so before this a feed that listed an IP once kept
+# corroborating it until retention aged the row out — for a windowed feed
+# (honeydb 24h, abuseipdb 3d), 14 days of votes for an IP it stopped
+# reporting after one. A HARD cut was measured on prod first and rejected:
+# most feeds publish short windows, so most real corroboration is two feeds
+# seeing an IP days apart (IP HIGH 36.8k -> 5.0k). The grace keeps that and
+# ends the long tail. source_state is each feed's membership as of its last
+# clean fetch and source_left holds what it dropped within the grace (pruned
+# each refresh, so presence there IS "inside the grace"). An attribution
+# counts when (a) the feed's state holds the value, (b) the feed dropped it
+# within the grace, or (c) the feed was never seeded (source_seeded) —
+# never cleanly fetched since the transition log shipped, or the 'manual'
+# pseudo-source — where history is the only evidence there is. A feed whose
+# list is now EMPTY is seeded and votes for nothing. Errors, 304s and the collapse
+# guard never touch source_state, so a bad fetch can't strip votes.
+# Attribution itself is kept: it drives "who ever reported this", first-
+# reporter telemetry and FP-rate denominators, which are history by design.
+# Both probes are primary-key lookups.
+CURRENT_ATTRIBUTION_SQL = (
+    "(EXISTS (SELECT 1 FROM source_state ss "
+    "WHERE ss.source_name = s.source_name AND ss.ip = i.ip) "
+    "OR EXISTS (SELECT 1 FROM source_left sl "
+    "WHERE sl.source_name = s.source_name AND sl.ip = i.ip) "
+    "OR NOT EXISTS (SELECT 1 FROM source_seeded sd "
+    "WHERE sd.source_name = s.source_name))")
+
+
+def _sources_sql(current: bool) -> str:
+    """Correlated subquery producing an indicator row's comma-joined sources
+    (all attribution, or only current listings). Internal constants only."""
+    extra = f" AND {CURRENT_ATTRIBUTION_SQL}" if current else ""
+    return ("(SELECT GROUP_CONCAT(s.source_name) FROM indicator_sources s "
+            f"WHERE s.indicator_id = i.id{extra})")
+
+
+# Upgrade backfill horizon for source_left: comfortably past any sane grace;
+# the first refresh's prune trims it to the configured one.
+_BACKFILL_DAYS = 14
+
+# Settings key bumped whenever any feed's current membership changes, so the
+# refresh's rescore gate sees a leave even when no attribution row moved.
+MEMBERSHIP_STAMP_KEY = "membership_stamp"
+
+
 class Database:
     def __init__(self, db_path: str = "./data/threatfeedme.db"):
         self.db_path = db_path
+        # The churn log (sightings) lives in its own file beside the main DB
+        # (v2.5.0): it was 69% of prod's database, and every backup, VACUUM
+        # and read of the main file paid for it. Attached as `churn` on every
+        # connection, so queries still see one database.
+        self.churn_path = os.path.splitext(db_path)[0] + "-churn.db"
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._init_schema()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+    def _get_connection(self, any_thread: bool = False) -> sqlite3.Connection:
+        """any_thread=True is for connections owned by a GENERATOR (the
+        streaming iterators below): the web server resumes a streamed
+        response on whichever worker thread is free and may finalize it on
+        another, so SQLite's same-thread check made a resumed stream fail and
+        an abandoned one leak its connection and read snapshot (v2.5.0
+        canary). A generator is consumed strictly sequentially, never
+        concurrently, which is all that check protects."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=not any_thread)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("ATTACH DATABASE ? AS churn", (self.churn_path,))
         return conn
 
     @contextmanager
@@ -216,15 +282,20 @@ class Database:
                 )
             """)
 
+            # Churn log, in the attached churn file. One WITHOUT ROWID b-tree
+            # keyed (source, ip, tick) with the tick as integer epoch seconds:
+            # the old rowid table, its UNIQUE autoindex and a tick index held
+            # the same three columns three times (1,281 MB on prod for 6.6M
+            # rows), and the ISO tick alone was 32 bytes a row.
+            cursor.execute("PRAGMA churn.journal_mode = WAL")
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS sightings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS churn.sightings (
                     source_name TEXT NOT NULL,
                     ip TEXT NOT NULL,
-                    tick TEXT NOT NULL,
+                    tick INTEGER NOT NULL,
                     present INTEGER NOT NULL,
-                    UNIQUE(source_name, ip, tick)
-                )
+                    PRIMARY KEY (source_name, ip, tick)
+                ) WITHOUT ROWID
             """)
 
             # Per-source membership as of the last successful snapshot — the
@@ -239,6 +310,84 @@ class Database:
                     PRIMARY KEY (source_name, ip)
                 ) WITHOUT ROWID
             """)
+            # Which sources HAVE a membership baseline. "Has state rows" can't
+            # answer that: a feed whose list empties has none left and would
+            # read as never-fetched — and the never-fetched fallback (history
+            # counts) would hand it back every stale vote. Backfilled once from
+            # source_state for deployments upgrading from 2.4.x.
+            had_seeded = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'source_seeded'").fetchone()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS source_seeded (
+                    source_name TEXT PRIMARY KEY
+                ) WITHOUT ROWID
+            """)
+            if not had_seeded:
+                cursor.execute("INSERT OR IGNORE INTO source_seeded "
+                               "SELECT DISTINCT source_name FROM source_state")
+            legacy_log = cursor.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE type = 'table' "
+                "AND name = 'sightings'").fetchone()
+            migrated = False
+            if legacy_log:
+                cursor.execute("SELECT value FROM settings WHERE key = 'sightings_format'")
+                fmt = cursor.fetchone()
+                if fmt and fmt[0] == 'transitions':
+                    # Upgrading from a 2.4.9+ main-file log: carry the history
+                    # over (the predictor trains on it; dropping it would leave
+                    # the model unable to retrain for weeks). Said up front:
+                    # this and the VACUUM are the minutes a first start takes.
+                    rows = cursor.execute("SELECT COUNT(*) FROM main.sightings").fetchone()[0]
+                    logger.info(f"[migration] one-time upgrade: moving the churn log ({rows:,} rows) "
+                                f"to {os.path.basename(self.churn_path)} and compacting the database. "
+                                "The dashboard starts when this finishes (a few minutes on large databases).")
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO churn.sightings (source_name, ip, tick, present) "
+                        "SELECT source_name, ip, CAST(strftime('%s', tick) AS INTEGER), present "
+                        "FROM main.sightings")
+                    logger.info(f"[migration] churn log moved to {os.path.basename(self.churn_path)}: "
+                                f"{cursor.rowcount} transitions")
+                else:
+                    # 2.4.2-2.4.8 presence snapshots: incompatible with the
+                    # transition queries (the v2.4.9 rule). Nothing to keep,
+                    # and the membership baselines built from them go too.
+                    cursor.execute("DELETE FROM source_state")
+                    cursor.execute("DELETE FROM source_seeded")
+                cursor.execute("DROP TABLE main.sightings")
+                migrated = True
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
+            # What each source dropped, and when: the vote grace window (see
+            # CURRENT_ATTRIBUTION_SQL). Bounded by prune_left_memberships.
+            had_left = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'source_left'").fetchone()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS source_left (
+                    source_name TEXT NOT NULL,
+                    ip TEXT NOT NULL,
+                    left_at TEXT NOT NULL,
+                    PRIMARY KEY (source_name, ip)
+                ) WITHOUT ROWID
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_left_at "
+                           "ON source_left(left_at)")
+            if not had_left:
+                # Upgrading: recover recent leave times from the churn log so
+                # the grace applies from day one. Feeds excluded from the log
+                # (churn_log_exclude) have no events; their old drops simply
+                # get no grace, and new ones are tracked from here. The
+                # refresh's prune trims this to the configured grace.
+                cutoff = int((datetime.now(timezone.utc) - timedelta(days=_BACKFILL_DAYS)).timestamp())
+                cursor.execute(
+                    "INSERT OR IGNORE INTO source_left (source_name, ip, left_at) "
+                    "SELECT sg.source_name, sg.ip, "
+                    "strftime('%Y-%m-%dT%H:%M:%S+00:00', MAX(sg.tick), 'unixepoch') "
+                    "FROM churn.sightings sg "
+                    "WHERE sg.present = 0 AND sg.tick >= ? AND NOT EXISTS "
+                    "(SELECT 1 FROM source_state ss WHERE ss.source_name = sg.source_name "
+                    "AND ss.ip = sg.ip) GROUP BY sg.source_name, sg.ip", (cutoff,))
 
             # Legacy whitelist migration
             existing_cols = [r[1] for r in cursor.execute("PRAGMA table_info(whitelist)").fetchall()]
@@ -341,56 +490,38 @@ class Database:
                 except sqlite3.OperationalError:
                     pass
 
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_ip ON indicators(ip)")
+            # `ip` is UNIQUE, so SQLite already keeps an index on it; this one
+            # duplicated it (24 MB on prod) and cost every insert twice.
+            cursor.execute("DROP INDEX IF EXISTS idx_indicators_ip")
             # The indicators page orders by score with LIMIT/OFFSET; without
             # this index every page request re-sorts the whole table (multi-
             # second at 600k+ rows, live-observed struggling on prod).
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_score ON indicators(confidence_score DESC, ip)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
+            # The pulse row's "new in 24h" range count. first_seen is written
+            # on insert only, so upserts of existing rows never touch it.
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_first_seen ON indicators(first_seen)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
-            # The churn-log ring prune deletes by tick every refresh; index it
-            # so that DELETE is a range scan, not a full table scan.
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
-
-            # --- Sightings format migration (v2.4.9) -------------------------
-            # Versions 2.4.2-2.4.8 recorded FULL per-tick presence snapshots:
-            # ~50M rows/day on a mid-size roster, ~10 GB/day of database (and
-            # backups to match) — live-measured filling the prod disk within
-            # days. The transition format records only arrivals/leaves. The
-            # old rows are semantically incompatible with transition queries,
-            # so on first start after upgrade: DROP the bloated table (a
-            # row-wise DELETE would balloon the WAL by the table's size on a
-            # disk that is already under pressure), recreate it empty, and
-            # VACUUM once to shrink the file — otherwise the freed pages keep
-            # inflating every subsequent backup. Guarded by a settings flag so
-            # it runs exactly once; fresh installs stamp the flag and skip.
-            cursor.execute("SELECT value FROM settings WHERE key = 'sightings_format'")
-            fmt = cursor.fetchone()
-            if not fmt or fmt[0] != 'transitions':
-                cursor.execute("SELECT MAX(id) FROM sightings")
-                had_rows = (cursor.fetchone()[0] or 0) > 0
-                cursor.execute("DROP TABLE sightings")
-                cursor.execute("""
-                    CREATE TABLE sightings (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        source_name TEXT NOT NULL,
-                        ip TEXT NOT NULL,
-                        tick TEXT NOT NULL,
-                        present INTEGER NOT NULL,
-                        UNIQUE(source_name, ip, tick)
-                    )
-                """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
-                cursor.execute("DELETE FROM source_state")
+            # Per-fetch metadata (v2.5.0): feed_type, feed_weight and
+            # fetched_at were rewritten into every row on every fetch and read
+            # by nothing (94 MB on prod). Strip them once; the VACUUM below
+            # reclaims the space along with the moved churn log.
+            cursor.execute("SELECT value FROM settings WHERE key = 'metadata_slim'")
+            if not cursor.fetchone():
                 cursor.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
-                conn.commit()
-                if had_rows:
-                    logger.info("[migration] sightings: presence-snapshot rows dropped; "
-                                "VACUUM to reclaim disk (one-time, may take minutes)...")
-                    conn.execute("VACUUM")
-                    logger.info("[migration] sightings VACUUM done")
+                    "UPDATE indicators SET metadata = json_remove(metadata, "
+                    "'$.feed_type', '$.feed_weight', '$.fetched_at') "
+                    "WHERE metadata LIKE '%fetched_at%'")
+                migrated = migrated or cursor.rowcount > 0
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('metadata_slim', '1')")
+            conn.commit()
+            if migrated:
+                # A DROP only frees pages inside the file; without this the
+                # main file (and every backup) stays at its old size.
+                logger.info("[migration] VACUUM to reclaim the space (one-time, may take minutes)...")
+                conn.execute("VACUUM")
+                logger.info("[migration] VACUUM done")
 
             conn.commit()
         finally:
@@ -506,12 +637,25 @@ class Database:
             cur.execute("SELECT ip FROM source_state WHERE source_name = ?",
                         (source_name,))
             prior = {row["ip"] for row in cur.fetchall()}
+            # A clean fetch, even an empty one, is a baseline: from here on
+            # this source votes by membership, not history (source_seeded).
+            newly_seeded = cur.execute(
+                "INSERT OR IGNORE INTO source_seeded (source_name) VALUES (?)",
+                (source_name,)).rowcount > 0
 
+            # Empty prior (first sight, or a list that emptied and is back):
+            # re-baseline without events. A refill after an accepted collapse
+            # is the feed recovering, not a wave of genuine returns.
             if not prior:
                 if current_values:
                     cur.executemany(
                         "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
                         [(source_name, v) for v in current_values])
+                    cur.executemany(
+                        "DELETE FROM source_left WHERE source_name = ? AND ip = ?",
+                        [(source_name, v) for v in current_values])
+                if current_values or newly_seeded:
+                    self._bump_membership_stamp(cur)
                 return {"arrived": 0, "left": 0, "baseline": len(current_values)}
 
             arrived = current_values - prior
@@ -519,22 +663,42 @@ class Database:
             if arrived:
                 if record:
                     cur.executemany(
-                        "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                        "INSERT OR REPLACE INTO churn.sightings (source_name, ip, tick, present) "
                         "VALUES (?, ?, ?, 1)",
-                        [(source_name, v, tick) for v in arrived])
+                        [(source_name, v, _epoch(tick)) for v in arrived])
                 cur.executemany(
                     "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
+                    [(source_name, v) for v in arrived])
+                cur.executemany(      # back on the list: no longer in grace
+                    "DELETE FROM source_left WHERE source_name = ? AND ip = ?",
                     [(source_name, v) for v in arrived])
             if left:
                 if record:
                     cur.executemany(
-                        "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                        "INSERT OR REPLACE INTO churn.sightings (source_name, ip, tick, present) "
                         "VALUES (?, ?, ?, 0)",
-                        [(source_name, v, tick) for v in left])
+                        [(source_name, v, _epoch(tick)) for v in left])
                 cur.executemany(
                     "DELETE FROM source_state WHERE source_name = ? AND ip = ?",
                     [(source_name, v) for v in left])
+                cur.executemany(
+                    "INSERT OR REPLACE INTO source_left (source_name, ip, left_at) "
+                    "VALUES (?, ?, ?)",
+                    [(source_name, v, tick) for v in left])
+            if arrived or left:
+                self._bump_membership_stamp(cur)
             return {"arrived": len(arrived), "left": len(left), "baseline": 0}
+
+    @staticmethod
+    def _bump_membership_stamp(cur) -> None:
+        """Membership moved: votes (CURRENT_ATTRIBUTION_SQL) moved with it. A leave
+        deletes no attribution row, so corpus_change_key alone would let the
+        rescore gate skip exactly the rescore that drops the stale vote."""
+        cur.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = "
+            "CAST(COALESCE(CAST(settings.value AS INTEGER), 0) + 1 AS TEXT)",
+            (MEMBERSHIP_STAMP_KEY, "1"))
 
     def detect_leaves(self, source_name: str, window_days: int) -> Dict[str, List[str]]:
         """Churn labels from the transition log.
@@ -554,39 +718,56 @@ class Database:
                        seeded as baseline state, not an arrival event, so it
                        can never read as a return.
         """
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        cutoff = int((datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp())
         with self._cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT ip FROM sightings s1 "
+                "SELECT DISTINCT ip FROM churn.sightings s1 "
                 "WHERE s1.source_name = ? AND s1.present = 0 AND s1.tick >= ? "
-                "AND NOT EXISTS (SELECT 1 FROM sightings s2 "
+                "AND NOT EXISTS (SELECT 1 FROM churn.sightings s2 "
                 "  WHERE s2.source_name = s1.source_name AND s2.ip = s1.ip "
                 "  AND s2.tick > s1.tick)",
                 (source_name, cutoff))
             left = sorted(row["ip"] for row in cur.fetchall())
             cur.execute(
-                "SELECT DISTINCT ip FROM sightings s1 "
+                "SELECT DISTINCT ip FROM churn.sightings s1 "
                 "WHERE s1.source_name = ? AND s1.present = 1 AND s1.tick >= ? "
-                "AND EXISTS (SELECT 1 FROM sightings s2 "
+                "AND EXISTS (SELECT 1 FROM churn.sightings s2 "
                 "  WHERE s2.source_name = s1.source_name AND s2.ip = s1.ip "
                 "  AND s2.present = 0 AND s2.tick < s1.tick)",
                 (source_name, cutoff))
             returned = sorted(row["ip"] for row in cur.fetchall())
         return {"left": left, "returned": returned}
 
+    def prune_left_memberships(self, grace_days: float) -> int:
+        """Expire drops older than the vote grace. Presence in source_left is
+        what CURRENT_ATTRIBUTION_SQL reads as "inside the grace", so this runs
+        before every rescore; an expiry changes votes without touching any
+        attribution row, so it bumps the membership stamp for the rescore
+        gate. grace_days <= 0 is a hard cut (every drop expires at once)."""
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=max(0.0, grace_days))).isoformat()
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM source_left WHERE left_at < ?", (cutoff,))
+            n = cur.rowcount
+            if n:
+                self._bump_membership_stamp(cur)
+            return n
+
     def prune_sightings(self, keep_days: int) -> int:
         """Ring-window prune of the churn log: drop transition events older
         than keep_days. The transition format grows at churn rate, so this is
         a light guard rather than the load-bearing bound it was for the old
-        presence-snapshot format. tick is an ISO-8601 UTC string, so a lexical
-        '< cutoff' is a chronological compare; idx_sightings_tick makes it an
-        index range delete rather than a full scan each refresh.
+        presence-snapshot format. tick is epoch seconds.
+
+        ponytail: no tick index, so this scans the log (~6.6M rows on prod,
+        about a second). The key is (source, ip, tick) for the per-IP reads;
+        add an index on tick if the prune ever shows up in refresh timings.
         """
         if keep_days <= 0:
             return 0
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        cutoff = int((datetime.now(timezone.utc) - timedelta(days=keep_days)).timestamp())
         with self._cursor() as cur:
-            cur.execute("DELETE FROM sightings WHERE tick < ?", (cutoff,))
+            cur.execute("DELETE FROM churn.sightings WHERE tick < ?", (cutoff,))
             return cur.rowcount
 
     def corpus_change_key(self) -> Tuple[int, ...]:
@@ -612,17 +793,83 @@ class Database:
                 parts.extend((n, top))
         return tuple(parts)
 
-    def get_indicators_by_kind(self, kind: str = "ip") -> List[ThreatIndicator]:
-        """All indicators of a specific kind (used by the kind-filtered
-        feed URLs; IP and domain populations never bleed into each other)."""
+    def iter_served_rows(self, kind: str, tiers, batch: int = 5000):
+        """Lean stream for the firewall feed URLs: plain tuples
+        (ip, cidr, sources, confidence_score, tier, first_seen, last_seen) in
+        score order — no ThreatIndicator object and no json.loads of every
+        row's metadata. Building a model per row made a /feeds/low.txt poll
+        over ~560k IPs peak around 1.6 GB, so two overlapping polls could
+        exceed the container's memory cap (review 2026-09-22). `ip` breaks
+        score ties so ?limit=N is deterministic."""
+        values = [t.value for t in tiers]
+        marks = ",".join("?" * len(values))
+        conn = self._get_connection(any_thread=True)
+        try:
+            cur = conn.execute(
+                "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
+                "(SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                " WHERE indicator_id = i.id), "
+                "i.confidence_score, i.tier, i.first_seen, i.last_seen "
+                f"FROM indicators i WHERE i.kind = ? AND i.tier IN ({marks}) "
+                "ORDER BY i.confidence_score DESC, i.ip",
+                [kind] + values)
+            while True:
+                rows = cur.fetchmany(batch)
+                if not rows:
+                    return
+                for ip, cidr, srcs, score, tier, first, last in rows:
+                    yield (ip, cidr, srcs.split(",") if srcs else [],
+                           score, tier, first, last)
+        finally:
+            conn.close()
+
+    def iter_served_rows_by_added(self, kind: str, tiers, after=None, batch: int = 2000):
+        """The iter_served_rows tuples in TAXII "date added" order: last_seen,
+        then value, starting strictly after the keyset `after` =
+        (last_seen, ip). last_seen is when the indicator was last re-affirmed
+        by a feed, so a poll with added_after gets everything still being
+        reported since then. No index on purpose: last_seen is rewritten for
+        every re-seen row on every refresh, and an index would tax each of
+        those writes; the sort measured ~250 ms per page at 312k rows."""
+        values = [t.value for t in tiers]
+        marks = ",".join("?" * len(values))
+        seen, ip = after if after else ("", "")
+        conn = self._get_connection(any_thread=True)
+        try:
+            cur = conn.execute(
+                "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
+                "(SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
+                " WHERE indicator_id = i.id), "
+                "i.confidence_score, i.tier, i.first_seen, i.last_seen "
+                f"FROM indicators i WHERE i.kind = ? AND i.tier IN ({marks}) "
+                "AND (i.last_seen > ? OR (i.last_seen = ? AND i.ip > ?)) "
+                "ORDER BY i.last_seen, i.ip",
+                [kind] + values + [seen, seen, ip])
+            while True:
+                rows = cur.fetchmany(batch)
+                if not rows:
+                    return
+                for r_ip, cidr, srcs, score, tier, first, last in rows:
+                    yield (r_ip, cidr, srcs.split(",") if srcs else [],
+                           score, tier, first, last)
+        finally:
+            conn.close()
+
+    def serve_fingerprint(self) -> str:
+        """Cheap version of everything a served feed contains, so a cached
+        body is reused until something it depends on changes: indicator rows
+        (count + max rowid catch adds, purges and sweeps), the rescore stamp
+        (tiers and scores change in place), and the live whitelist."""
         with self._cursor() as cur:
-            cur.execute(
-                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
-                "WHERE indicator_id = i.id) AS sources_str "
-                "FROM indicators i WHERE i.kind = ? ORDER BY i.confidence_score DESC",
-                (kind,),
-            )
-            return [self._row_to_indicator(r) for r in cur.fetchall()]
+            n, top = cur.execute(
+                "SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM indicators").fetchone()
+            stamp = cur.execute(
+                "SELECT value FROM settings WHERE key = 'serve_stamp'").fetchone()
+            wl = cur.execute(
+                "SELECT COUNT(*), COALESCE(MAX(rowid), 0), "
+                "COALESCE(MIN(expires_at), '') FROM whitelist "
+                "WHERE expires_at IS NULL OR expires_at > ?", (_utcnow_iso(),)).fetchone()
+        return f"{n}:{top}:{stamp[0] if stamp else ''}:{wl[0]}:{wl[1]}:{wl[2]}"
 
     def get_indicators_by_kind_and_tiers(self, kind: str, tiers,
                                          batch: int = 5000) -> List[ThreatIndicator]:
@@ -671,27 +918,21 @@ class Database:
                 counts[tld] = counts.get(tld, 0) + 1
         return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
-    def get_indicator(self, ip: str) -> Optional[ThreatIndicator]:
-        """Get a single indicator by its value (IP address or domain)."""
+    def get_indicator(self, ip: str, current_sources: bool = False) -> Optional[ThreatIndicator]:
+        """Get a single indicator by its value (IP address or domain).
+        `current_sources` restricts .sources to feeds still listing it (see
+        CURRENT_ATTRIBUTION_SQL); the default is full attribution history."""
         with self._cursor() as cur:
             cur.execute(
-                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                f"SELECT i.*, {_sources_sql(current_sources)} AS sources_str "
                 "FROM indicators i WHERE i.ip = ?", (ip,))
             row = cur.fetchone()
             if not row:
                 return None
             return self._row_to_indicator(row)
 
-    def get_all_indicators_by_tier(self, tier: ConfidenceTier) -> List[ThreatIndicator]:
-        """Get all indicators in a specific confidence tier"""
-        return self.get_all_indicators_by_tiers((tier,))
-
-    def get_all_indicators_by_tiers(self, tiers) -> List[ThreatIndicator]:
-        """Indicators whose tier is in `tiers` (for cumulative feed serving:
-        medium.txt is every high- OR medium-tier indicator)."""
-        return list(self.iter_indicators_by_tiers(tiers))
-
-    def iter_indicators_by_tiers(self, tiers, batch: int = 5000, kind: str = None):
+    def iter_indicators_by_tiers(self, tiers, batch: int = 5000, kind: str = None,
+                                 current_sources: bool = False):
         """Stream indicators whose tier is in `tiers`, in score order.
 
         Generator so the tier-file exports never hold the whole table as
@@ -702,17 +943,20 @@ class Database:
         `kind` filters to one indicator kind ('ip' or 'domain'); None streams
         both. The on-disk tier exports pass it so the *_ips files never
         contain a domain and vice versa (same never-bleed rule as the URLs).
+
+        `current_sources` (the scorer's read) restricts each row's sources to
+        feeds that still list it; see CURRENT_ATTRIBUTION_SQL.
         """
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
         kind_sql = " AND i.kind = ?" if kind is not None else ""
         if kind is not None:
             values = values + [kind]
-        conn = self._get_connection()
+        conn = self._get_connection(any_thread=True)
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
+                f"SELECT i.*, {_sources_sql(current_sources)} AS sources_str "
                 f"FROM indicators i WHERE i.tier IN ({marks}){kind_sql} ORDER BY i.confidence_score DESC",
                 values)
             while True:
@@ -723,14 +967,6 @@ class Database:
                     yield self._row_to_indicator(r)
         finally:
             conn.close()
-
-    def get_all_indicators(self) -> List[ThreatIndicator]:
-        """Get all indicators regardless of tier"""
-        with self._cursor() as cur:
-            cur.execute(
-                "SELECT i.*, (SELECT GROUP_CONCAT(source_name) FROM indicator_sources WHERE indicator_id = i.id) AS sources_str "
-                "FROM indicators i ORDER BY i.confidence_score DESC")
-            return [self._row_to_indicator(r) for r in cur.fetchall()]
 
     def query_indicators(self, q: str = None, limit: int = 50, offset: int = 0,
                          include_whitelisted: bool = False) -> Dict:
@@ -861,8 +1097,16 @@ class Database:
     def set_indicator_score(self, ip: str, score: float, tier: str,
                             votes: float = None) -> None:
         """Persist a single indicator's recalculated score/tier (and, when
-        provided, its overlap-discounted effective-vote count)."""
+        provided, its overlap-discounted effective-vote count).
+
+        An in-place tier change is invisible to serve_fingerprint's row count
+        and rowid, so this bumps the serve stamp in the same transaction:
+        otherwise a manual re-add or whitelist edit that moves an EXISTING row
+        between tiers left cached feed bodies (and their ETags) serving the
+        old list until the next full rescore."""
         with self._cursor() as cur:
+            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('serve_stamp', ?)",
+                        (_utcnow_iso(),))
             if votes is None:
                 cur.execute(
                     "UPDATE indicators SET confidence_score = ?, tier = ? WHERE ip = ?",
@@ -971,13 +1215,15 @@ class Database:
         churn_log_exclude ones), and a 304 means that membership is unchanged,
         so it is exactly the set to keep current.
 
-        Fallback: a feed with no source_state rows (never cleanly fetched since
-        the transition log shipped) keeps the old attribution-based touch —
-        refreshing nothing would age out everything it still serves."""
+        Fallback: a feed never seeded (never cleanly fetched since the
+        transition log shipped) keeps the old attribution-based touch —
+        refreshing nothing would age out everything it still serves. Keyed on
+        source_seeded, not "has state rows": a feed whose list emptied has no
+        rows, and the fallback would have revived everything it ever listed."""
         now = _utcnow_iso()
         with self._cursor() as cur:
             seeded = cur.execute(
-                "SELECT 1 FROM source_state WHERE source_name = ? LIMIT 1",
+                "SELECT 1 FROM source_seeded WHERE source_name = ?",
                 (feed_name,)).fetchone()
             if seeded:
                 cur.execute(
@@ -1014,16 +1260,6 @@ class Database:
                     reason_code = excluded.reason_code
             """, (ip, feed_name, reason, added_by, now, expires, reason_code))
             return True
-
-    def is_whitelisted(self, ip: str) -> bool:
-        """True if the IP is globally (ALL_FEEDS) whitelisted and not expired."""
-        now = _utcnow_iso()
-        with self._cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM whitelist WHERE ip = ? AND feed_name = ? AND (expires_at IS NULL OR expires_at > ?)",
-                (ip, ALL_FEEDS, now),
-            )
-            return cur.fetchone() is not None
 
     def get_whitelisted_ips(self) -> Set[str]:
         """Set of IPs whitelisted from ALL feeds (globally), non-expired."""
@@ -1236,6 +1472,16 @@ class Database:
                 (since,),
             )
             return {r['source_name']: r['n'] for r in cur.fetchall()}
+
+    def get_new_indicator_counts(self, since: str) -> Dict[str, int]:
+        """{kind: n} of indicators NEW TO THE CORPUS since `since`. Distinct
+        by construction; summing get_feed_new_counts instead counted an ip
+        once per feed that newly reported it."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(kind, 'ip') AS k, COUNT(*) AS n FROM indicators "
+                "WHERE first_seen >= ? GROUP BY k", (since,))
+            return {r['k']: r['n'] for r in cur.fetchall()}
 
     def get_tier_kind_counts(self) -> Dict:
         """{(kind, tier): count} in one SQL aggregation. The dashboard's
@@ -1564,6 +1810,11 @@ class Database:
                     (name, _utcnow_iso()),
                 )
             cur.execute("DELETE FROM indicator_sources WHERE source_name = ?", (name,))
+            # Its membership baseline goes too: a feed re-added under the same
+            # name must start fresh, not diff against the deleted one's list.
+            cur.execute("DELETE FROM source_state WHERE source_name = ?", (name,))
+            cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (name,))
+            cur.execute("DELETE FROM source_left WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
             cur.execute(
                 "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
@@ -1612,20 +1863,23 @@ class Database:
     # ==================== BACKUP ====================
 
     def backup_database(self, dest_dir: str, keep: int = 7) -> str:
-        """Write a consistent, WAL-safe snapshot of the DB to dest_dir."""
+        """Write consistent, WAL-safe snapshots of the DB and its churn log to
+        dest_dir (threat_feeds-<ts>.db and threat_feeds-<ts>.churn.db). The
+        churn log is the predictor's ground truth: weeks to rebuild."""
         os.makedirs(dest_dir, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         dest = os.path.join(dest_dir, f'threat_feeds-{ts}.db')
-
-        src = sqlite3.connect(self.db_path)
-        try:
-            dst = sqlite3.connect(dest)
+        for path, out in ((self.db_path, dest),
+                          (self.churn_path, os.path.join(dest_dir, f'threat_feeds-{ts}.churn.db'))):
+            src = sqlite3.connect(path)
             try:
-                src.backup(dst)
+                dst = sqlite3.connect(out)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
             finally:
-                dst.close()
-        finally:
-            src.close()
+                src.close()
 
         self._prune_backups(dest_dir, keep)
         return dest
@@ -1642,13 +1896,14 @@ class Database:
             # backups share an mtime (fast successive writes) or a file's
             # mtime is bumped by a copy/restore — either of which made the
             # mtime sort keep the wrong files.
-            files = sorted(
-                f for f in os.listdir(dest_dir)
-                if f.startswith('threat_feeds-') and f.endswith('.db')
-            )
+            names = [f for f in os.listdir(dest_dir) if f.startswith('threat_feeds-')]
         except OSError:
             return
-        for stale in files[:-keep]:
+        # Main snapshots and churn-log snapshots are pruned as separate sets,
+        # so `keep` means that many backups of each, not of both combined.
+        churn = sorted(f for f in names if f.endswith('.churn.db'))
+        main = sorted(f for f in names if f.endswith('.db') and f not in churn)
+        for stale in churn[:-keep] + main[:-keep]:
             try:
                 os.remove(os.path.join(dest_dir, stale))
             except OSError:

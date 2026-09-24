@@ -1,10 +1,12 @@
 """The HTML dashboard page plus stats, settings, backup, and rescore endpoints."""
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
@@ -68,6 +70,76 @@ def _geo_counts(db):
     _geo_cache["key"] = key
     return data
 
+def _human_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+
+
+def _age_text(iso) -> str:
+    try:
+        dt = datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    m = max(0, int((datetime.now(timezone.utc) - dt).total_seconds() // 60))
+    if m < 1:
+        return "just now"
+    if m < 60:
+        return f"{m}m ago"
+    if m < 60 * 48:
+        return f"{m // 60}h ago"
+    return f"{m // 1440}d ago"
+
+
+def _system_info(request: Request, poll_log: dict) -> dict:
+    """The System panel: the operational facts that were only reachable by
+    SSH before (DB size, last backup, predictor state), plus the TAXII URL.
+    Everything read-only here; actions go through existing endpoints."""
+    from threatfeedme import __version__
+    from threatfeedme.scheduler import LAST_BACKUP_KEY
+    from threatfeedme.scorer import current_votes_enabled, predictor_live, vote_grace_days
+    size = 0
+    for path in (core.db_path, core.db.churn_path):      # main DB + churn log
+        for suffix in ("", "-wal"):
+            try:
+                size += os.path.getsize(path + suffix)
+            except OSError:
+                pass
+    last_backup = core.db.get_setting(LAST_BACKUP_KEY)
+    pcfg = core.config.get("predictor", {}) or {}
+    model_path = pcfg.get("model_path", "data/predictor_model.txt")
+    try:
+        model_age = _age_text(datetime.fromtimestamp(os.path.getmtime(model_path),
+                                                     timezone.utc).isoformat())
+    except OSError:
+        model_age = ""
+    predict_stamp = core.db.get_setting(pipeline.PREDICT_STAMP_KEY)
+    taxii_polls = sorted(
+        ((k.split(":", 1)[1], v) for k, v in poll_log.items() if k.startswith("taxii:")),
+        key=lambda kv: kv[1].get("at", ""), reverse=True)
+    from threatfeedme import polls
+    return {
+        "version": __version__,
+        "db_size": _human_bytes(size),
+        "last_backup": _age_text(last_backup) if last_backup else "",
+        "predictor": {
+            "enabled": bool(pcfg.get("enabled")),
+            "live": predictor_live(core.config),
+            "weight": (core.config.get("scoring", {}) or {}).get("predictor_weight", 0),
+            "model_age": model_age,
+            "last_pass": _age_text(predict_stamp) if predict_stamp else "",
+        },
+        "vote_grace_days": vote_grace_days(core.config) if current_votes_enabled(core.config) else None,
+        "retention_days": retention_max_age_days(core.db, core.config),
+        "taxii_url": f"{_feed_base(request)}/taxii2/",
+        "taxii_polls": [{"collection": c, "age": _age_text(v.get("at")),
+                         "by": polls.agent_label(v.get("agent", ""))} for c, v in taxii_polls[:6]],
+    }
+
+
 def _compact(n: int) -> str:
     """Human-compact count for the matrix's narrow layout (42.4k, 1.2M)."""
     if n >= 1_000_000:
@@ -80,6 +152,27 @@ def _compact(n: int) -> str:
 _OUTPUTS_CONTAINING = {t: tuple(out for out, members in CUMULATIVE_TIERS.items()
                                 if t in members)
                        for t in ConfidenceTier}
+
+
+_COUNTS_TTL_S = 300
+_counts_cache = {"key": None, "at": 0.0, "value": None}
+
+
+def _served_counts_cached(db, wl_map):
+    """_served_counts keyed on serve_fingerprint (rows, the rescore stamp, the
+    whitelist): it moves exactly when a served list can. ~1.6 s per dashboard
+    view at 890k indicators before this. The TTL covers whitelist entries that
+    expire by the clock without changing the fingerprint."""
+    import copy
+    import time
+    key = (getattr(db, "db_path", None), db.serve_fingerprint())
+    now = time.monotonic()
+    c = _counts_cache
+    if c["key"] == key and now - c["at"] < _COUNTS_TTL_S:
+        return copy.deepcopy(c["value"])
+    value = _served_counts(db, wl_map)
+    c.update(key=key, at=now, value=value)
+    return copy.deepcopy(value)
 
 
 def _served_counts(db, wl_map):
@@ -169,7 +262,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     #
     # Load the indicator list ONCE and derive every (tier x kind) count from
     # that single pass. The old code re-fetched the full table per tier
-    # (get_all_indicators_by_tier) and again for total_inds — each fetch runs
+    # (the old per-tier full-table query) and again for total_inds — each fetch runs
     # a correlated GROUP_CONCAT subquery per row, so with tens of thousands
     # of indicators the dashboard was spending seconds just to count.
     wl_map = core.db.get_whitelist_map()
@@ -179,7 +272,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # CUMULATIVE_TIERS; tier-scoped whitelist exclusions apply per output.
     # Streamed, not materialized: a full-table model list on every dashboard
     # view was one of the allocations that OOMed 2 GB deployments.
-    served, total_inds = _served_counts(core.db, wl_map)
+    served, total_inds = _served_counts_cached(core.db, wl_map)
 
     # ---- Feed matrix (the hero of the page; D2 revised) ----
     # Rows = tiers, columns = kinds; each cell is a URL + the count it serves.
@@ -200,6 +293,22 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "ip": legacy or core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY) is not None,
         "domain": legacy or core.db.get_setting(ConfidenceScorer.TIER_BREAKS_KEY_DOMAINS) is not None,
     }
+    from threatfeedme import polls
+    poll_log = polls.snapshot(core.db)
+
+    def _last_poll(kind: str, key: str):
+        """Most recent poll of this cell's URL in any format; the Everything
+        cell also counts its low.txt alias."""
+        names = [key] + (["low"] if key == "all" else [])
+        pre = "domains/" if kind == "domain" else ""
+        hits = [poll_log[f"{pre}{n}.{ext}"] for n in names for ext in ("txt", "csv", "json")
+                if f"{pre}{n}.{ext}" in poll_log]
+        if not hits:
+            return None
+        last = max(hits, key=lambda e: e.get("at", ""))
+        return {"age_min": polls.age_minutes(last), "by": polls.agent_label(last.get("agent", "")),
+                "count": sum(int(e.get("count", 0)) for e in hits)}
+
     matrix_rows = []
     for f in TIER_FEEDS:
         if f.get("hidden"):
@@ -214,6 +323,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
                 "compact": _compact(n),
                 "processing": (key != "all" and n == 0 and total_inds[kind] > 0
                                and not kind_scored[kind]),
+                "polled": _last_poll(kind, key),
             }
         matrix_rows.append({
             "name": key,
@@ -249,7 +359,9 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "url": fsrc.url,
             "feed_type": fsrc.feed_type.value,
             "kind": fsrc.indicator_kind or "ip",
-            "source_kind": "file" if fsrc.local_file else "url",
+            "source_kind": ("file" if fsrc.local_file
+                            else "taxii 2.1" if fsrc.scraper == "taxii21" else "url"),
+            "taxii": fsrc.scraper == "taxii21",
             "weight": fsrc.weight,
             "enabled": fsrc.enabled,
             "status": st.status if st else None,          # None = never run
@@ -304,11 +416,21 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # NO corpus sizes — the matrix below owns those (the old stat tiles died
     # for duplicating them).
     enabled_tele = [r for r in telemetry["rows"] if r["enabled"]]
+    last_fin = _refresh_state.get("last_finished")
+    # "never run" = no successful fetch yet. Before any refresh has finished
+    # that is just pending; after one, the feed had its chance and has
+    # nothing, which is a problem (it used to count as healthy, so a feed
+    # failing since day one sat inside "all feeds reporting").
+    never = [r for r in enabled_tele if r["health"]["state"] == "never run"]
     problem_rows = [r for r in enabled_tele if r["health"]["state"] in ("error", "stale")]
+    pending_rows = []
+    if last_fin:
+        problem_rows += never
+    else:
+        pending_rows = never
     interval_min = _refresh_interval_minutes()
     refresh_age_min = refresh_next_min = None
     refresh_overdue = False
-    last_fin = _refresh_state.get("last_finished")
     if last_fin:
         try:
             fin = datetime.fromisoformat(last_fin)
@@ -340,23 +462,64 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "age_min": push_age_min,
             "tier": pusher_unifi.effective_block(core.db, core.config).get("tier", "high"),
         }
+    crowdsec_pulse = None
+    from threatfeedme import crowdsec
+    if crowdsec.push_ready(core.db, core.config):
+        cs_last = crowdsec._last(core.db)
+        crowdsec_pulse = {
+            "ok": (not cs_last.get("error")) if cs_last else None,
+            "tier": crowdsec.effective_block(core.db, core.config).get("tier", "medium"),
+        }
+    system_info = _system_info(request, poll_log)
+    new24 = core.db.get_new_indicator_counts(
+        (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat())
     pulse = {
         "feeds_total": len(enabled_tele),
-        "feeds_healthy": len(enabled_tele) - len(problem_rows),
+        "feeds_healthy": len(enabled_tele) - len(problem_rows) - len(pending_rows),
         "first_problem": problem_rows[0]["name"] if problem_rows else None,
+        "problem_count": len(problem_rows),
+        "pending_count": len(pending_rows),
         "refresh_age_min": refresh_age_min,
         "refresh_next_min": refresh_next_min,
         "refresh_overdue": refresh_overdue,
-        "new24_ip": sum((r["new"] or 0) for r in enabled_tele if r["kind"] == "ip"),
-        "new24_domain": sum((r["new"] or 0) for r in enabled_tele if r["kind"] == "domain"),
+        "new24_ip": new24.get("ip", 0),
+        "new24_domain": new24.get("domain", 0),
         "whitelist_count": len(core.db.get_whitelist()),
         "fp_total": fp_total,
         "unifi": unifi_pulse,
+        "crowdsec": crowdsec_pulse,
+    }
+
+    # ---- First-run guide (v2.5 "Guided" view) ----
+    # Each step is answered from facts the page already has: a firewall has
+    # "pulled" once any IP URL was polled, DNS is covered once a domain URL
+    # was. The guide is the default view until the first IP poll, after
+    # which the block lists are (the operator can reopen the guide any time).
+    def _latest_poll(kind):
+        polled = [(row, row[kind]["polled"]) for row in matrix_rows if row[kind]["polled"]]
+        if not polled:
+            return None
+        row, p = min(polled, key=lambda rp: rp[1]["age_min"] if rp[1]["age_min"] >= 0 else 10**9)
+        return {"tier": row["label"].replace(" Confidence", ""), **p}
+    medium = next((r for r in matrix_rows if r["name"] == "medium"), matrix_rows[0] if matrix_rows else None)
+    high = next((r for r in matrix_rows if r["name"] == "high"), None)
+    ip_poll, dom_poll = _latest_poll("ip"), _latest_poll("domain")
+    guide = {
+        "feeds_in": (total_inds["ip"] + total_inds["domain"]) > 0,
+        "ip_poll": ip_poll,
+        "dom_poll": dom_poll,
+        "integrations": bool(unifi_pulse or crowdsec_pulse or system_info["taxii_polls"]),
+        "medium": medium,
+        "high": high,
+        "default": ip_poll is None,
     }
 
     return core.templates.TemplateResponse(request, "dashboard.html", {
         "page": "dashboard",
         "pulse": pulse,
+        "guide": guide,
+        "system": system_info,
+        "first_run": (total_inds["ip"] + total_inds["domain"]) == 0,
         "telemetry": telemetry,
         "feed_base": feed_base,
         "matrix_rows": matrix_rows,
@@ -475,6 +638,112 @@ def update_settings(request: SettingsRequest, _=Depends(require_auth), _csrf=Dep
         "refresh_interval_minutes": _refresh_interval_minutes(),
         "retention_max_age_days": retention_max_age_days(core.db, core.config),
     }
+
+
+class HostCheckRequest(BaseModel):
+    allowed: List[str] = []
+    # None keeps the current lock state; the first-run guide sends False so a
+    # name the operator is about to create never starts refusing anything.
+    enforce: Optional[bool] = None
+
+
+class HostResolveRequest(BaseModel):
+    name: str
+
+
+_RESOLVE_TIMEOUT_S = 3.0
+
+
+def _host_check_status(request: Request) -> dict:
+    from threatfeedme import middleware as mw
+    env = sorted(mw.env_allowed_hosts())
+    configured = mw.configured_hosts(core.db)
+    current = mw.host_of_header(request.headers.get("host"))
+    enforcing = bool(mw.effective_allowlist(core.db))
+    return {
+        "mode": "enforcing" if enforcing else "report-only",
+        "env": env,                  # TFM_ALLOWED_HOSTS (read-only here)
+        "configured": configured,    # the dashboard-managed list
+        "locked": bool(configured) and mw.enforce_configured(core.db),
+        "seen": [s for s in mw.seen_hosts()
+                 if s["host"] not in env and s["host"] not in configured],
+        "current_host": current,
+        "current_is_ip": mw.always_allowed(current),
+    }
+
+
+@router.get("/api/host-check")
+def host_check_status(request: Request, _=Depends(require_auth)):
+    """Host-header allowlist state: mode, allowed names, and the hostnames
+    that have reached the dashboard (so the operator locks to real ones)."""
+    return _host_check_status(request)
+
+
+@router.post("/api/host-check")
+def host_check_update(body: HostCheckRequest, request: Request,
+                      _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Replace the dashboard-managed allowlist and, optionally, switch the
+    host check on or off. `enforce` omitted keeps the current switch; the
+    switch is OFF by default (upgrades and fresh installs refuse nothing).
+    An empty list is always off. The hostname this request arrived on is
+    always kept, so switching on can never lock out the page doing it."""
+    from threatfeedme import middleware as mw
+    names = []
+    for value in body.allowed[:64]:
+        name = mw.normalize_hostname(value)
+        if name is None:
+            raise HTTPException(status_code=400, detail=f"Not a valid hostname: {value!r}")
+        names.append(name)
+    current = mw.host_of_header(request.headers.get("host"))
+    if names and not mw.always_allowed(current):
+        names.append(current)
+    enforce = mw.enforce_configured(core.db) if body.enforce is None else body.enforce
+    core.db.set_setting(mw.ALLOWED_HOSTS_SETTING, json.dumps(sorted(set(names))))
+    core.db.set_setting(mw.ENFORCE_SETTING, "1" if (enforce and names) else "0")
+    mw.invalidate_allowlist_cache()
+    return _host_check_status(request)
+
+
+@router.post("/api/host-check/resolve")
+def host_check_resolve(body: HostResolveRequest, request: Request,
+                       _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Does a name the operator wants to use resolve, and to this server?
+
+    A DNS lookup only (no connection is made), of a syntactically valid
+    hostname, bounded by a short timeout. The answer is compared with the
+    address the operator is using right now when that is an IP: a name that
+    resolves elsewhere would hand firewalls a URL pointing at another box.
+    """
+    import concurrent.futures
+    import ipaddress
+    import socket
+    from threatfeedme import middleware as mw
+    name = mw.normalize_hostname(body.name)
+    if name is None or mw.always_allowed(name):
+        raise HTTPException(status_code=400, detail="Enter a DNS name, e.g. threatfeedme.lan")
+    current = mw.host_of_header(request.headers.get("host"))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(socket.getaddrinfo, name, None, 0, socket.SOCK_STREAM)
+    addresses, error = [], None
+    try:
+        infos = fut.result(timeout=_RESOLVE_TIMEOUT_S)
+        addresses = sorted({i[4][0] for i in infos})[:8]
+    except concurrent.futures.TimeoutError:
+        error = "timed out"
+    except socket.gaierror:
+        error = "does not resolve"
+    except (OSError, UnicodeError):
+        error = "does not resolve"
+    finally:
+        pool.shutdown(wait=False)
+    matches = None
+    try:
+        cur_ip = ipaddress.ip_address(current)
+        matches = any(ipaddress.ip_address(a) == cur_ip for a in addresses)
+    except ValueError:
+        pass
+    return {"name": name, "resolves": bool(addresses), "addresses": addresses,
+            "error": error, "current_host": current, "matches_current": matches}
 
 
 @router.post("/api/recalculate-scores")

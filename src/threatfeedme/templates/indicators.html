@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Indicators: Threat Feed Me!{% endblock %}
-{% block subtitle %}The deduplicated result across all feeds. Search for an IP or domain, add one manually,
-   or remove one (removing globally whitelists it so a refresh won't bring it back).{% endblock %}
-
 {% block content %}
-    <h2>Merged indicators</h2>
+    <div class="view-head">
+        <h1>Indicators</h1>
+        <p class="hint">The deduplicated result across all feeds. Search for an IP or domain, add one manually,
+           or remove one (removing whitelists it everywhere, so a refresh won't bring it back).</p>
+    </div>
     <div class="toolbar">
         <input id="ind-q" type="text" class="text-input" placeholder="Search IP / domain…" value="{{ q }}">
         <form onsubmit="return addIndicator(event)" style="display:flex;gap:8px;align-items:center">
@@ -25,7 +26,7 @@
     </table>
     </div>
 
-    <h2>Whitelist</h2>
+    <h2 class="section-title" id="whitelist">Whitelist</h2>
     <p class="hint">Whitelist an entry from <b>all tiers</b> (excluded everywhere) or from a
        <b>single tier</b> (only that tier's feed drops it; the others still list it).
        Accepts an IP, a CIDR, a domain, or a wildcard like <code>*.example.com</code>
@@ -38,7 +39,11 @@
             <option value="tier:medium">Medium only</option>
             <option value="tier:low">Low only</option>
         </select>
-        <select id="wl-reason-code" title="Reason">
+        {# No preselected reason: "False positive" sorts first and lowers the
+           reporting feeds' reputation, so defaulting to it penalized feeds
+           whenever an operator just wanted an internal host allowed. #}
+        <select id="wl-reason-code" title="Reason" required>
+            <option value="" disabled selected>Reason…</option>
             {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
         </select>
         <input class="reason" id="wl-reason" type="text" placeholder="Note (optional)">
@@ -66,7 +71,7 @@
 {% endblock %}
 
 {% block modals %}
-<div class="modal-overlay" id="wl-modal">
+<div class="modal-overlay" id="wl-modal" role="dialog" aria-modal="true" aria-label="Whitelist indicator">
     <div class="modal">
         <h3>Whitelist indicator</h3>
         <p class="muted" id="wl-modal-ip"></p>
@@ -80,7 +85,8 @@
         </div>
         <div class="field">
             <label>Reason</label>
-            <select id="wl-modal-reason">
+            <select id="wl-modal-reason" required>
+                <option value="" disabled selected>Choose a reason…</option>
                 {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
             </select>
         </div>

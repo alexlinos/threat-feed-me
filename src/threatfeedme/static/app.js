@@ -15,8 +15,13 @@ function apiFetch(url, opts = {}) {
 // form field values (including the file input) across a reload, so a form
 // that was just submitted comes back still populated, looking like the
 // action didn't take. Reset the forms, then navigate fresh.
+// The dashboard's view lives in the URL hash, and a navigation to the same
+// URL plus a hash is a fragment jump, not a reload — so the view rides
+// across in sessionStorage and the inline script in dashboard.html restores it.
 function reloadPage() {
     document.querySelectorAll('form').forEach(f => f.reset());
+    const view = document.documentElement.getAttribute('data-view');
+    if (view) { try { sessionStorage.setItem('tfm.return', view); } catch (e) {} }
     location.replace(location.pathname + location.search);
 }
 
@@ -34,6 +39,10 @@ function fallback(url, done) {
 }
 async function addWl(e) {
     e.preventDefault();
+    if (!document.getElementById('wl-reason-code').value) {
+        alert('Choose a reason. Only "False positive" lowers the reporting feeds\' reputation.');
+        return false;
+    }
     const body = {
         ip: document.getElementById('wl-ip').value.trim(),
         feed_name: document.getElementById('wl-feed').value,
@@ -69,11 +78,23 @@ async function addFeed(e) {
         feed_type: document.getElementById('f-type').value,
         weight: isNaN(w) ? 1.0 : w,
         indicator_kind: document.getElementById('f-kind').value,
+        format: document.getElementById('f-format').value,
     };
-    const r = await apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    const j = await r.json().catch(() => ({}));
+    // A keyed TAXII feed gets its own TFM_FEED_<NAME> variable (the only kind
+    // of custom key the server accepts, credentials.py); Set key fills it in.
+    if (body.format === 'taxii21' && document.getElementById('f-needs-key').checked) {
+        body.auth_env = 'TFM_FEED_' + body.name.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    }
+    const post = () => apiFetch('/api/feeds', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    let r = await post();
+    let j = await r.json().catch(() => ({}));
+    if (r.status === 409 && confirm((j.detail || 'A feed with this name exists.') + '\n\nReplace it?')) {
+        body.overwrite = true;
+        r = await post();
+        j = await r.json().catch(() => ({}));
+    }
     if (r.ok && j.success !== false) { reloadPage(); }
-    else { alert('Could not add feed: ' + (j.message || j.detail || r.status)); }
+    else if (r.status !== 409) { alert('Could not add feed: ' + (j.message || j.detail || r.status)); }
     return false;
 }
 async function uploadFeed(e) {
@@ -115,28 +136,89 @@ async function toggleFeed(el, name) {
         el.disabled = false;
     }
 }
-async function setApiKey(name, envVar) {
-    // auth_env may declare several credentials (comma-separated, e.g.
-    // HoneyDB's id+key pair) — prompt for each in turn. Cancel on any
-    // prompt aborts the whole operation; nothing is saved.
-    const vars = envVar.split(',').map(v => v.trim()).filter(Boolean);
-    const keys = {};
-    for (let i = 0; i < vars.length; i++) {
-        const step = vars.length > 1 ? ' (' + (i + 1) + ' of ' + vars.length + ')' : '';
-        const val = prompt(vars[i] + ' for "' + name + '"' + step +
-            '\n\nSaved server-side to the data volume\'s .env and applied immediately.' +
-            '\nLeave empty and press OK to clear this credential.');
-        if (val === null) return; // cancelled — abort without saving anything
-        keys[vars[i]] = val;
+function feedFormatChanged(sel) {
+    const taxii = sel.value === 'taxii21';
+    document.getElementById('f-key-wrap').hidden = !taxii;
+    document.getElementById('f-url').placeholder = taxii
+        ? 'https://taxii.example.org/api/collections/<id>/' : 'https://example.com/blocklist.txt';
+}
+// API keys go through a masked modal. They used to be typed into prompt(),
+// which echoes the secret in plain text on screen and in screen shares.
+// auth_env may declare several credentials (comma-separated, e.g. HoneyDB's
+// id + key): one password field each; Cancel saves nothing.
+let keyModalFeed = null;
+function setApiKey(name, envVar, taxii) {
+    keyModalFeed = name;
+    // TAXII servers differ in how they take a key, and the value is sent
+    // verbatim as the Authorization header, so say what to paste.
+    const hint = document.getElementById('key-modal-hint');
+    if (hint) {
+        hint.hidden = !taxii;
+        hint.textContent = taxii ? 'Paste the whole Authorization header value: "Bearer <token>" for OpenCTI, ' +
+            'the API key for MISP, or "Basic <base64 of user:password>".' : '';
     }
-    const r = await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/api-key', {
+    const box = document.getElementById('key-modal-fields');
+    box.replaceChildren();
+    envVar.split(',').map(v => v.trim()).filter(Boolean).forEach((v, i) => {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.htmlFor = 'key-field-' + i;
+        label.textContent = v;
+        const input = document.createElement('input');
+        input.type = 'password'; input.id = 'key-field-' + i;
+        input.autocomplete = 'new-password'; input.dataset.var = v;
+        field.append(label, input);
+        box.append(field);
+    });
+    document.getElementById('key-modal-title').textContent = 'API key for ' + name;
+    openModal('key-modal');
+}
+function closeKeyModal() {
+    document.getElementById('key-modal-fields').replaceChildren();  // never linger in the DOM
+    closeModal('key-modal');
+    keyModalFeed = null;
+}
+async function saveKeyModal() {
+    if (!keyModalFeed) return;
+    const keys = {};
+    document.querySelectorAll('#key-modal-fields input').forEach(i => { keys[i.dataset.var] = i.value; });
+    const r = await apiFetch('/api/feeds/' + encodeURIComponent(keyModalFeed) + '/api-key', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({keys: keys}),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { reloadPage(); }
+    if (r.ok) { closeKeyModal(); reloadPage(); }
     else { alert('Could not save key: ' + (j.detail || r.status)); }
 }
+
+// ---- Modal accessibility: focus in on open, Esc closes, focus returns ----
+let _modalOpener = null;
+function openModal(id) {
+    _modalOpener = document.activeElement;
+    const m = document.getElementById(id);
+    m.classList.add('open');
+    const first = m.querySelector('input, select, textarea, button');
+    if (first) first.focus();
+}
+function closeModal(id) {
+    document.getElementById(id).classList.remove('open');
+    if (_modalOpener && document.body.contains(_modalOpener)) _modalOpener.focus();
+    _modalOpener = null;
+}
+const _MODAL_CLOSERS = {
+    'key-modal': () => closeKeyModal(),
+    'unifi-creds-modal': () => closeUnifiCredsModal(),
+    'cs-creds-modal': () => closeCsCredsModal(),
+    'fp-modal': () => (typeof closeFpModal === 'function' ? closeFpModal()
+                       : document.getElementById('fp-modal').classList.remove('open')),
+    'wl-modal': () => closeWlModal(),
+};
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const open = document.querySelector('.modal-overlay.open');
+    if (open && _MODAL_CLOSERS[open.id]) { e.preventDefault(); _MODAL_CLOSERS[open.id](); }
+});
 async function saveInterval() {
     const v = parseInt(document.getElementById('interval-min').value, 10);
     if (!v || v < 1) { alert('Enter a whole number of minutes (>= 1)'); return; }
@@ -339,7 +421,7 @@ async function openFpModal(feed) {
     document.getElementById('fp-modal-summary').textContent = '';
     const list = document.getElementById('fp-modal-list');
     list.textContent = 'Loading…';
-    document.getElementById('fp-modal').classList.add('open');
+    openModal('fp-modal');
     try {
         const j = await (await fetch('/api/feeds/' + encodeURIComponent(feed) + '/false-positives')).json();
         document.getElementById('fp-modal-summary').textContent =
@@ -371,6 +453,7 @@ async function openWhitelistModal(ip) {
     wlModalIp = ip;
     document.getElementById('wl-modal-ip').textContent = ip;
     document.getElementById('wl-modal-note').value = '';
+    document.getElementById('wl-modal-reason').value = '';   // never carry a reason over
     const scope = document.getElementById('wl-modal-scope');
     const srcBox = document.getElementById('wl-modal-sources');
     scope.innerHTML = '<option value="*">All tiers</option>' +
@@ -390,11 +473,17 @@ async function openWhitelistModal(ip) {
                 '≈ ' + esc(j.effective_votes.toFixed(1)) + ' independent votes</div>';
         }
     } catch (e) { srcBox.textContent = 'Could not load sources'; }
-    document.getElementById('wl-modal').classList.add('open');
+    openModal('wl-modal');
 }
 function closeWlModal() { document.getElementById('wl-modal').classList.remove('open'); wlModalIp = null; }
 async function confirmWlModal() {
     if (!wlModalIp) return;
+    const reasonSel = document.getElementById('wl-modal-reason');
+    if (!reasonSel.value) {
+        alert('Choose a reason. Only "False positive" lowers the reporting feeds\' reputation.');
+        reasonSel.focus();
+        return;
+    }
     const body = {
         ip: wlModalIp,
         feed_name: document.getElementById('wl-modal-scope').value,
@@ -699,7 +788,7 @@ async function unifiSave(quiet) {
 function openUnifiCredsModal() {
     document.getElementById('unifi-cred-user').value = '';
     document.getElementById('unifi-cred-pass').value = '';
-    document.getElementById('unifi-creds-modal').classList.add('open');
+    openModal('unifi-creds-modal');
 }
 function closeUnifiCredsModal() {
     // Clear the fields on close so the password never lingers in the DOM.
@@ -751,3 +840,350 @@ async function unifiPush(btn) {
         } else { el.textContent = 'Push failed: ' + (j.detail || r.status); }
     } finally { btn.disabled = false; }
 }
+
+// ---- CrowdSec integration panel (v2.5.0) ----
+// Same shape as the UniFi panel. Everything the LAPI or the server says is
+// rendered with textContent (error strings can carry LAPI-controlled text).
+let csLoaded = false;
+
+function csRenderStatus(s) {
+    const el = document.getElementById('cs-status');
+    if (!el) return;
+    const parts = [];
+    parts.push(s.machine_configured ? 'Publish login ✓' : 'Publish login not set');
+    parts.push(s.bouncer_configured ? 'Bouncer key ✓' : 'Bouncer key not set');
+    const btn = document.getElementById('cs-creds-btn');
+    if (btn) btn.textContent = (s.machine_configured || s.bouncer_configured)
+        ? 'Credentials ✓' : 'Set credentials';
+    const last = s.last_push;
+    if (last && last.at) {
+        const at = new Date(last.at).toLocaleString();
+        if (last.error) parts.push('Last publish FAILED ' + at + ': ' + last.error +
+            (last.live_scenario ? ' (the previous list is still enforced)' : ''));
+        else if (last.summary) parts.push('Last publish ' + at + ': ' +
+            last.summary.entries.toLocaleString() + ' ' + last.summary.tier + '-tier IPs, ' +
+            last.summary.duration_h + 'h decisions');
+    } else { parts.push('Not published yet'); }
+    el.textContent = parts.join(' · ');
+}
+
+async function loadCsOnce() {
+    if (csLoaded) return;
+    csLoaded = true;
+    try {
+        const s = await (await apiFetch('/api/integrations/crowdsec')).json();
+        document.getElementById('cs-enabled').checked = !!s.enabled;
+        document.getElementById('cs-lapi').value = s.lapi_url || '';
+        document.getElementById('cs-tier').value = s.tier || 'medium';
+        document.getElementById('cs-duration').value = s.duration_hours || 24;
+        document.getElementById('cs-console').value = s.console_integration_id || '';
+        csRenderStatus(s);
+    } catch (e) {
+        csLoaded = false;
+        const el = document.getElementById('cs-status');
+        if (el) el.textContent = 'Could not load settings: reopen to retry.';
+    }
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const box = document.getElementById('crowdsec-panel');
+    if (box) box.addEventListener('toggle', () => { if (box.open) loadCsOnce(); });
+});
+
+async function csSave(quiet) {
+    const body = {
+        enabled: document.getElementById('cs-enabled').checked,
+        lapi_url: document.getElementById('cs-lapi').value.trim(),
+        tier: document.getElementById('cs-tier').value,
+        duration_hours: parseInt(document.getElementById('cs-duration').value, 10) || 24,
+        console_integration_id: document.getElementById('cs-console').value.trim(),
+    };
+    const r = await apiFetch('/api/integrations/crowdsec', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Could not save: ' + (j.detail || r.status)); return false; }
+    csRenderStatus(j);
+    if (j.credentials_cleared) {
+        alert('The LAPI address changed, so the saved CrowdSec credentials were cleared '
+            + '(they were bound to the old one). Re-enter them with "Set credentials".');
+    } else if (!quiet) { alert('CrowdSec settings saved'); }
+    return true;
+}
+
+function _csCredFields() {
+    return ['cs-cred-machine', 'cs-cred-pass', 'cs-cred-bouncer'].map(id => document.getElementById(id));
+}
+function openCsCredsModal() {
+    _csCredFields().forEach(f => { f.value = ''; });
+    openModal('cs-creds-modal');
+    _csCredFields()[0].focus();
+}
+function closeCsCredsModal() {
+    _csCredFields().forEach(f => { f.value = ''; });   // never linger in the DOM
+    document.getElementById('cs-creds-modal').classList.remove('open');
+}
+async function _postCsCreds(body) {
+    const r = await apiFetch('/api/integrations/crowdsec/credentials', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Could not save credentials: ' + (j.detail || r.status)); return; }
+    closeCsCredsModal();
+    csLoaded = false; loadCsOnce();
+}
+async function saveCsCreds() {
+    const [m, p, b] = _csCredFields();
+    const body = {};                       // empty field = leave unchanged
+    if (m.value.trim()) body.machine_id = m.value.trim();
+    if (p.value) body.machine_password = p.value;
+    if (b.value.trim()) body.bouncer_key = b.value.trim();
+    if (!Object.keys(body).length) { closeCsCredsModal(); return; }
+    await _postCsCreds(body);
+}
+async function csClearCreds() {
+    if (!confirm('Clear the saved CrowdSec machine login and bouncer key?')) return;
+    await _postCsCreds({machine_id: '', machine_password: '', bouncer_key: ''});
+}
+
+async function csTest(btn) {
+    const el = document.getElementById('cs-status');
+    btn.disabled = true; el.textContent = 'Testing…';
+    try {
+        const r = await apiFetch('/api/integrations/crowdsec/test', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? ((j.ok ? '✓ ' : '✗ ') + j.message) : ('Test failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+
+async function csPush(btn) {
+    const el = document.getElementById('cs-status');
+    btn.disabled = true;
+    try {
+        if (!await csSave(true)) return;
+        el.textContent = 'Publishing…';
+        const r = await apiFetch('/api/integrations/crowdsec/push', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) {
+            const s = j.summary;
+            el.textContent = 'Published ' + s.entries.toLocaleString() + ' ' + s.tier +
+                '-tier IPs as ' + s.scenario + ' (' + s.expired_previous.toLocaleString() +
+                ' from the previous publish expired). Your bouncers pick them up on their next pull.';
+        } else { el.textContent = 'Publish failed: ' + (j.detail || r.status); }
+    } finally { btn.disabled = false; }
+}
+
+// ---- System panel actions ----
+async function backupNow(btn) {
+    const el = document.getElementById('system-status');
+    btn.disabled = true; el.textContent = 'Backing up…';
+    try {
+        const r = await apiFetch('/api/backup', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? 'Backup written.' : ('Backup failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+async function recalcNow(btn) {
+    const el = document.getElementById('system-status');
+    btn.disabled = true; el.textContent = 'Recalculating every score (can take a minute on a large corpus)…';
+    try {
+        const r = await apiFetch('/api/recalculate-scores', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? ('Recalculated ' + Number(j.recalculated).toLocaleString() + ' indicators.')
+                              : ('Recalculate failed: ' + (j.detail || r.status));
+    } finally { btn.disabled = false; }
+}
+
+// ---- Views (v2.5 shell) ----------------------------------------------------
+// One page, five views; the hash names the view. The inline script in
+// dashboard.html already picked the first one before paint.
+const VIEWS = ['guide', 'lists', 'feeds', 'integrations', 'system'];
+function showView(v, focus) {
+    if (VIEWS.indexOf(v) < 0) return;
+    const root = document.documentElement;
+    if (!root.hasAttribute('data-view')) return;          // not the dashboard page
+    if (root.getAttribute('data-view') !== v) window.scrollTo(0, 0);
+    root.setAttribute('data-view', v);
+    if (v === 'integrations') { loadUnifiOnce(); loadCsOnce(); }
+    if (focus) {
+        const h = document.querySelector('#view-' + v + ' h1');
+        if (h) { h.setAttribute('tabindex', '-1'); h.focus({preventScroll: true}); }
+    }
+}
+window.addEventListener('hashchange', () => {
+    showView((location.hash || '').replace('#', '').split('/')[0], true);
+});
+document.addEventListener('DOMContentLoaded', () => {
+    const v = document.documentElement.getAttribute('data-view');
+    if (!v) return;
+    // A view restored after a reload (reloadPage) gets its hash back, so the
+    // address bar and the Back button agree with what is on screen.
+    if (!location.hash && v !== 'lists' && v !== 'guide') history.replaceState(null, '', '#' + v);
+    showView(v, false);
+});
+// "I'm set up": the full dashboard becomes the default; Guide stays in the rail.
+function leaveGuide() {
+    try { localStorage.setItem('tfm.guide', 'dismissed'); } catch (e) {}
+    location.hash = 'lists';
+}
+// "/" jumps to the lookup box, unless the operator is typing somewhere.
+document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    const box = document.getElementById('lookup-ip');
+    if (box) { e.preventDefault(); box.focus(); }
+});
+
+// ---- Host check (DNS-rebinding allowlist) ----------------------------------
+// OFF unless the operator switches it on (maintainer, 2026-09-23): an
+// upgrade never starts refusing names. Names can be saved without switching
+// it on, which is what the first-run guide does for a DNS name that may not
+// resolve yet. Hostnames come from request headers (attacker-influenced) and
+// DNS answers: esc() always.
+let hostState = null;
+async function loadHostCheck() {
+    if (!document.getElementById('hostnames-body') && !document.getElementById('step-name')) return;
+    try {
+        const r = await apiFetch('/api/host-check');
+        if (!r.ok) return;
+        hostState = await r.json();
+    } catch (e) { return; }
+    renderHostCheck();
+}
+function _hostPost(allowed, enforce) {
+    const body = {allowed: allowed};
+    if (enforce !== undefined) body.enforce = enforce;
+    return apiFetch('/api/host-check', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify(body)});
+}
+function _chip(host, removable) {
+    return '<span class="host-chip' + (removable ? '' : ' seen') + '">' + esc(host) +
+        (removable ? '<button type="button" aria-label="Remove ' + esc(host) + '" data-rm="' + esc(host) + '">×</button>'
+                   : '<button type="button" aria-label="Add ' + esc(host) + '" data-add="' + esc(host) + '">+</button>') +
+        '</span>';
+}
+function _enforceSwitch(id, s) {
+    const canLock = s.configured.length > 0 || !s.current_is_ip;
+    return '<label class="enforce-row"><span class="switch"><input type="checkbox" id="' + id + '"' +
+        (s.locked ? ' checked' : '') + (canLock ? '' : ' disabled') + ' onchange="setHostEnforce(this)"><span></span></span>' +
+        '<span><b>Only answer to these names</b> (host check). ' +
+        (canLock ? 'Off by default. When on, any other name is refused; the IP address still works.'
+                 : 'Add a name first: the IP address you are using always works, so there is nothing to lock yet.') +
+        '</span></label>';
+}
+function renderHostCheck() {
+    const s = hostState;
+    if (!s) return;
+    const env = s.env.length
+        ? '<p class="hint">Always enforced by <code>TFM_ALLOWED_HOSTS</code>: ' + s.env.map(esc).join(', ') + '</p>' : '';
+    const saved = s.configured.length
+        ? '<div class="host-names">' + s.configured.map(h => _chip(h, true)).join('') + '</div>'
+        : '<p class="muted">No names saved.</p>';
+    const seen = s.seen.length
+        ? '<p class="hint" style="margin:8px 0 2px">Also reached as (not saved):</p><div class="host-names">' +
+          s.seen.map(e => _chip(e.host, false)).join('') + '</div>' : '';
+    const sys = document.getElementById('hostnames-body');
+    if (sys) {
+        sys.innerHTML = '<p><b class="' + (s.mode === 'enforcing' ? 'ok-text' : '') + '">' +
+            (s.mode === 'enforcing' ? 'On: only the names below (and the IP address) reach the dashboard.'
+                                    : 'Off: the dashboard answers to any name.') + '</b></p>' +
+            env + saved + seen + _enforceSwitch('host-enforce-system', s);
+    }
+    const step = document.getElementById('step-name');
+    if (step) {
+        const done = s.configured.length > 0 || s.env.length > 0;
+        step.classList.toggle('done', done);
+        let html = '';
+        if (s.configured.length) html += '<div class="host-names">' + s.configured.map(h => _chip(h, true)).join('') + '</div>';
+        if (!s.current_is_ip && s.configured.indexOf(s.current_host) < 0 && s.env.indexOf(s.current_host) < 0) {
+            html += '<p>You are using <code>' + esc(s.current_host) + '</code> right now. ' +
+                '<button type="button" class="mini-btn" data-add="' + esc(s.current_host) + '">Save it</button></p>';
+        }
+        if (s.configured.length || !s.current_is_ip) html += _enforceSwitch('host-enforce-guide', s);
+        let slot = document.getElementById('guide-name-state');
+        if (!slot) {
+            slot = document.createElement('div');
+            slot.id = 'guide-name-state';
+            slot.className = 'step-body';
+            slot.style.gap = '8px';
+            step.querySelector('.name-form').before(slot);
+        }
+        slot.innerHTML = html;
+        const count = document.getElementById('guide-done');
+        if (count) count.textContent = String(parseInt(count.dataset.serverDone, 10) + (done ? 1 : 0));
+    }
+    document.querySelectorAll('[data-rm]').forEach(b => { b.onclick = () => removeHostName(b.dataset.rm); });
+    document.querySelectorAll('[data-add]').forEach(b => { b.onclick = () => saveHostName(b.dataset.add); });
+}
+async function saveHostName(name) {
+    const names = (hostState ? hostState.configured : []).concat([name]);
+    const r = await _hostPost(names);          // enforce omitted: the switch stays as it is
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Could not save: ' + (j.detail || r.status)); return false; }
+    hostState = j; renderHostCheck();
+    return true;
+}
+async function removeHostName(name) {
+    const names = (hostState ? hostState.configured : []).filter(h => h !== name);
+    const r = await _hostPost(names);
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { hostState = j; renderHostCheck(); } else alert('Could not save: ' + (j.detail || r.status));
+}
+async function setHostEnforce(box) {
+    const s = hostState;
+    if (!s) return;
+    if (box.checked) {
+        const names = s.configured.slice();
+        if (!s.current_is_ip && names.indexOf(s.current_host) < 0) names.push(s.current_host);
+        if (!confirm('Only answer to these names?\n\n  ' + names.join('\n  ') +
+                     '\n\nAny other name will be refused. The IP address always works, and list URLs, ' +
+                     'TAXII and health checks are never affected.')) { box.checked = false; return; }
+    }
+    const r = await _hostPost(s.configured, box.checked);
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { hostState = j; renderHostCheck(); }
+    else { box.checked = !box.checked; alert('Could not save: ' + (j.detail || r.status)); }
+}
+// "Check & add": resolve the name (a DNS lookup only, server-side), say
+// whether it points at this server, then save it WITHOUT switching the
+// host check on. A name that doesn't resolve yet is saved too: the guide
+// is exactly where an operator adds the record they are about to create.
+async function addHostName(e, where) {
+    e.preventDefault();
+    const input = document.getElementById(where + '-hostname');
+    const out = document.getElementById(where + '-name-result');
+    const name = (input.value || '').trim();
+    if (!name) return false;
+    out.textContent = 'Checking ' + name + '…';
+    let res;
+    try {
+        const r = await apiFetch('/api/host-check/resolve', {method: 'POST',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name})});
+        res = await r.json().catch(() => ({}));
+        if (!r.ok) { out.innerHTML = '<span class="warn">' + esc(res.detail || ('Error ' + r.status)) + '</span>'; return false; }
+    } catch (err) { out.textContent = 'Could not check the name.'; return false; }
+    if (!(await saveHostName(res.name))) { out.textContent = ''; return false; }
+    input.value = '';
+    const n = '<code>' + esc(res.name) + '</code>';
+    // Reached over loopback (on the box itself) the current address is no
+    // use in a DNS record; firewalls need the LAN address.
+    const loop = !res.current_host || /^(localhost|127\.|::1$)/.test(res.current_host);
+    const here = loop ? "this server's LAN address" : '<code>' + esc(res.current_host) + '</code>';
+    const addrs = (res.addresses || []).map(a => '<code>' + esc(a) + '</code>').join(', ');
+    const off = hostState && hostState.mode !== 'enforcing' ? ' Nothing is blocked: the host check is off.' : '';
+    let msg;
+    if (!res.resolves) {
+        msg = '<span class="warn">⚠ ' + n + (res.error === 'timed out' ? ' timed out in DNS.' : ' doesn\'t resolve yet.') +
+            '</span> Create an A record for it pointing at ' + here + ' on your DNS server, then run Check again. Saved.' + off;
+    } else if (res.matches_current === false) {
+        msg = '<span class="warn">⚠ ' + n + ' resolves to ' + addrs + ', not ' + here +
+            (loop ? '.' : ', the address you are using now.') + '</span> Firewalls given a URL with this name would poll that box. ' +
+            'Check the DNS record. Saved.' + off;
+    } else {
+        const url = location.protocol + '//' + res.name + (location.port ? ':' + location.port : '') + '/';
+        msg = '<span class="ok">✓ ' + n + ' resolves to ' + addrs + (res.matches_current ? ', this server' : '') +
+            '.</span> Saved.' + off + ' <a href="' + esc(url) + '">Open the dashboard at ' + esc(res.name) +
+            '</a> so the list URLs you copy use the name.';
+    }
+    out.innerHTML = msg;
+    return false;
+}
+document.addEventListener('DOMContentLoaded', loadHostCheck);

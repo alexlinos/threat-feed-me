@@ -1,4 +1,5 @@
 """FastAPI application assembly: lifespan, static assets, and router wiring."""
+import logging
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -10,8 +11,9 @@ from fastapi.staticfiles import StaticFiles
 # Importing `core` triggers lazy init on first attribute access — no work is
 # done at import time. The lifespan below explicitly warms the singletons.
 from threatfeedme import core  # noqa: F401  (module-level __getattr__ lazy init)
+from threatfeedme.middleware import BodyLimitMiddleware, HostCheckMiddleware
 from threatfeedme.scheduler import _scheduler_loop, _scheduler_stop
-from threatfeedme.routers import feeds, indicators, integrations, system, whitelist
+from threatfeedme.routers import feeds, indicators, integrations, system, taxii, whitelist
 
 
 @asynccontextmanager
@@ -20,6 +22,17 @@ async def lifespan(app: FastAPI):
     # that imports `from core import ...` gets a ready state, not a lazy-init
     # that might race with the first request.
     core.init()
+    # Both stay OFF by default (maintainer's call), and together that means any
+    # web page a LAN user opens can drive this dashboard through DNS rebinding
+    # (review 2026-09-24). Behaviour unchanged; say so on every start.
+    from threatfeedme import auth, middleware
+    auth._ensure_auth_config()
+    if not auth._AUTH_REQUIRED and not middleware.effective_allowlist(core.db):
+        logging.getLogger(__name__).warning(
+            "Dashboard auth and the host check are both off: a malicious web page opened on "
+            "this network could use DNS rebinding to change feeds and whitelists. Set "
+            "DASHBOARD_USER and DASHBOARD_PASSWORD, or switch on 'Only answer to these names' "
+            "under System -> Dashboard hostnames.")
     # Start the background auto-refresh scheduler (unless disabled, e.g. tests).
     if os.environ.get("DISABLE_SCHEDULER") != "1":
         threading.Thread(target=_scheduler_loop, name="feed-scheduler", daemon=True).start()
@@ -34,6 +47,16 @@ app = FastAPI(title="Threat Feed Me! Dashboard", lifespan=lifespan)
 # compresses ~4x). Below 1 KB the header overhead is not worth it.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+# Cap request bodies before any route (or its auth dependency) reads them.
+# Added last so it runs outermost: an oversized body is refused before the
+# app — including FastAPI's own body parsing — touches it.
+app.add_middleware(BodyLimitMiddleware)
+
+# Host-header allowlist against DNS rebinding. Added last = outermost, so an
+# unknown hostname is turned away before anything else runs. Report-only
+# until an allowlist is configured; feeds/healthz/static are never checked.
+app.add_middleware(HostCheckMiddleware)
+
 # Static assets (extracted dashboard CSS/JS). Anchored to this module's
 # directory so it works regardless of the process CWD (tests use a temp CWD).
 app.mount("/static",
@@ -45,3 +68,4 @@ app.include_router(system.router)
 app.include_router(feeds.router)
 app.include_router(whitelist.router)
 app.include_router(integrations.router)
+app.include_router(taxii.router)

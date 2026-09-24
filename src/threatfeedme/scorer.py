@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 from threatfeedme.models import ThreatIndicator, ConfidenceTier, FeedType, effective_sources
-from threatfeedme.database import Database
+from threatfeedme.database import Database, CURRENT_ATTRIBUTION_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,50 @@ def predictor_live(config: Dict) -> bool:
     if not pcfg.get('enabled', False):
         return False
     return os.path.exists(pcfg.get('model_path', 'data/predictor_model.txt'))
+
+
+DEFAULT_VOTE_GRACE_DAYS = 3.0
+_MAX_VOTE_GRACE_DAYS = 30.0
+
+
+def current_votes_enabled(config: Dict) -> bool:
+    """Whether votes follow current listings (plus grace) rather than all
+    attribution history. One definition: the scorer, the rescore gate and
+    the grace prune must agree on the default or the gate goes blind."""
+    scoring = (config or {}).get('scoring') or {}
+    return bool(scoring.get('votes_require_current_listing', True))
+
+
+def vote_grace_days(config: Dict) -> float:
+    """Days a feed's vote survives after it drops an indicator. Invalid or
+    negative values fall back to the default rather than silently becoming a
+    hard cut; capped because retention (14d) bounds the corpus anyway."""
+    raw = ((config or {}).get('scoring') or {}).get('vote_grace_days', DEFAULT_VOTE_GRACE_DAYS)
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_VOTE_GRACE_DAYS
+    if not math.isfinite(v) or v < 0:
+        return DEFAULT_VOTE_GRACE_DAYS
+    return min(v, _MAX_VOTE_GRACE_DAYS)
+
+
+def _differs(update, previous, eps: float = 1e-6) -> bool:
+    """Whether a rescore result (score, tier, votes, ip) changes what is
+    stored (score, tier, votes). Never-scored rows (votes None) always count.
+
+    eps is set by what a score is USED for, not float precision: recency
+    decays continuously, so every row's score drifts a hair between any two
+    rescores — even milliseconds apart — and at 1e-9 every row counted as
+    changed, defeating the point. Scores are shown to 2-3 decimals and order
+    the served list; drift under 1e-6 is invisible to both. A tier or vote
+    change is always written, and the error can't accumulate: the next
+    rescore compares against the stored value, so drift past eps is written."""
+    score, tier, votes, _ip = update
+    old_score, old_tier, old_votes = previous
+    if tier != old_tier or old_votes is None or old_score is None:
+        return True
+    return abs(score - old_score) > eps or abs(votes - old_votes) > eps
 
 
 # False-positive penalty tuning. A feed's reputation weight is multiplied by
@@ -95,6 +139,13 @@ class ConfidenceScorer:
         # (and lazily for single-IP scoring); (a, b) keys are stored both ways.
         self._overlap = None
         self._source_sizes = {}
+        # Votes come from what feeds list now plus a short grace after a drop
+        # (database.CURRENT_ATTRIBUTION_SQL; the grace itself is enforced by
+        # pipeline pruning source_left before every rescore). Overlap ratios
+        # stay on attribution history either way: they estimate how
+        # correlated two PUBLISHERS are, and the retention window is a far
+        # larger sample of that than a single snapshot.
+        self.current_votes = current_votes_enabled(config)
 
         # Reputation weights are driven by config/DB (via pipeline.scorer_config)
         # so adding a feed never requires editing this module; sources without
@@ -121,12 +172,38 @@ class ConfidenceScorer:
         # reported them — gone from the higher tiers at the next rescore — and
         # retention ages out whatever it alone listed.
         self.disabled_sources = set()
+        # Domain authority (force-HIGH on one feed's word) is granted by
+        # PROVENANCE, not by name. It used to key on the feed name alone, so a
+        # custom upload named "urlhaus_hostfile", or the real one re-pointed at
+        # another URL, inherited force-HIGH for every domain it listed (review
+        # 2026-09-22). The operator's config is the trust anchor: a configured
+        # authoritative feed counts only while its stored row still matches the
+        # same-named feed in config.feeds — same URL, and not an upload.
+        auth_cfg = set(((scoring.get('high_confidence') or {})
+                        .get('authoritative_domain_feeds')) or [])
+        # pipeline.scorer_config passes the configured URLs explicitly (its
+        # 'feeds' list is rebuilt from the DB, without URLs); direct callers
+        # pass a config whose 'feeds' carry them.
+        config_urls = config.get('config_feed_urls') or {
+            f.get('name'): f.get('url')
+            for f in config.get('feeds', []) or [] if isinstance(f, dict)}
+        self.authoritative_sources = set(auth_cfg)   # no DB (unit tests): trust config
         if self.db is not None:
             try:
+                verified = set()
                 for feed in self.db.get_feed_sources():
                     self.source_types[feed.name] = feed.feed_type.value
                     if not feed.enabled:
                         self.disabled_sources.add(feed.name)
+                    if (feed.name in auth_cfg and not feed.local_file
+                            and config_urls.get(feed.name) == feed.url):
+                        verified.add(feed.name)
+                for name in sorted(auth_cfg - verified):
+                    logger.warning(
+                        f"[score] {name} is listed as authoritative but its stored "
+                        f"feed no longer matches the configured one (URL changed, "
+                        f"an upload, or not configured); it gets no force-HIGH")
+                self.authoritative_sources = verified
             except Exception:
                 logger.exception("[score] could not load the feed roster; "
                                  "feed types and enabled state unknown this rescore")
@@ -164,7 +241,7 @@ class ConfidenceScorer:
         Tier boundaries come from the last full rescore (persisted in
         settings); before any rescore has run, the configured floors apply.
         """
-        indicator = self.db.get_indicator(ip)
+        indicator = self.db.get_indicator(ip, current_sources=self.current_votes)
         if not indicator:
             return 0.0, ConfidenceTier.LOW
 
@@ -181,10 +258,11 @@ class ConfidenceScorer:
     def recalculate_all_scores(self) -> int:
         """Recalculate scores for all indicators.
 
-        Data is loaded once and written back in a single transaction. With
-        effective-votes tiering this is a two-pass computation: evidence for
-        every indicator first, then tier boundaries from the resulting vote
-        distribution (natural breaks over the floors), then tiers.
+        Data is loaded once. With effective-votes tiering this is a two-pass
+        computation: evidence for every indicator first, then tier boundaries
+        from the resulting vote distribution (natural breaks over the floors),
+        then tiers. Only rows whose score, tier or votes actually changed are
+        written, in short chunked transactions (_write_changes).
         """
         whitelist_map = self.db.get_whitelist_map()
         netblocks = self._load_netblock_sources()
@@ -194,11 +272,15 @@ class ConfidenceScorer:
         # the largest allocation in the process, which starved 2 GB hosts
         # (small Synology/NAS deployments) during the hourly rescore.
         evidence = []
+        previous = []   # (score, tier, votes) as stored, aligned with evidence
         count = 0
-        for indicator in self.db.iter_indicators_by_tiers(tuple(ConfidenceTier)):
+        for indicator in self.db.iter_indicators_by_tiers(
+                tuple(ConfidenceTier), current_sources=self.current_votes):
             count += 1
             score, votes, sources = self._evidence(indicator, netblocks, whitelist_map)
             evidence.append((indicator.ip, score, votes, sources, indicator.kind))
+            previous.append((indicator.confidence_score, indicator.tier.value,
+                             indicator.effective_votes))
 
         if self.tier_method == 'legacy':
             updates = [
@@ -242,19 +324,30 @@ class ConfidenceScorer:
                 for ip, score, votes, sources, kind in evidence
             ]
 
-        if updates:
-            conn = self.db._get_connection()
-            try:
-                conn.executemany(
+        changed = [u for u, prev in zip(updates, previous) if _differs(u, prev)]
+        self._write_changes(changed)
+        logger.info(f"[score] rescored {count} indicators; {len(changed)} changed")
+        return count
+
+    # Rows per write transaction, and how long one waits on a busy writer.
+    _WRITE_CHUNK = 5000
+    _WRITE_BUSY_TIMEOUT_MS = 120000
+
+    def _write_changes(self, changed) -> None:
+        """Write rescore results in short transactions. This used to be ONE
+        executemany over every row — 10-20 s at ~760k indicators — which held
+        SQLite's single writer lock past the 5 s busy_timeout, so any other
+        writer (an API edit, the offline predict pass) could fail with
+        "database is locked" (review 2026-09-22). Most rows don't move between
+        rescores, so writing only the changed ones also shrinks the work."""
+        for i in range(0, len(changed), self._WRITE_CHUNK):
+            with self.db._cursor() as cur:
+                cur.execute(f"PRAGMA busy_timeout = {self._WRITE_BUSY_TIMEOUT_MS}")
+                cur.executemany(
                     "UPDATE indicators SET confidence_score = ?, tier = ?, "
                     "effective_votes = ? WHERE ip = ?",
-                    updates,
+                    changed[i:i + self._WRITE_CHUNK],
                 )
-                conn.commit()
-            finally:
-                conn.close()
-
-        return count
 
     # ==================== SCORING INTERNALS ====================
 
@@ -577,7 +670,7 @@ class ConfidenceScorer:
         high_require_intel = bool(high_cfg.get('require_threat_intel', False))
         intel_ok = (not high_require_intel) or self._has_intel_source(sources)
         if kind == 'domain':
-            auth_feeds = set(high_cfg.get('authoritative_domain_feeds') or [])
+            auth_feeds = self.authoritative_sources   # provenance-verified names
             if intel_ok and auth_feeds and any(
                     s in auth_feeds
                     and self.feed_penalty.get(s, 1.0) >= FP_DEGRADED_FACTOR
@@ -626,14 +719,15 @@ class ConfidenceScorer:
         netblocks that could possibly contain the IP; networks broader than
         /8 and IPv6 land in the small catch-all list checked for every IP.
         """
+        # A netblock's corroboration follows the same current-listing rule as
+        # a direct vote, or a dropped /24 would keep voting for every IP in it.
+        current = f" AND {CURRENT_ATTRIBUTION_SQL}" if self.current_votes else ""
         with self.db._cursor() as cur:
             cur.execute(
-                """
-                SELECT i.ip, i.metadata, s.source_name
-                FROM indicators i
-                JOIN indicator_sources s ON i.id = s.indicator_id
-                WHERE i.metadata LIKE '%"cidr"%'
-                """
+                "SELECT i.ip, i.metadata, s.source_name "
+                "FROM indicators i "
+                "JOIN indicator_sources s ON i.id = s.indicator_id "
+                f"""WHERE i.metadata LIKE '%"cidr"%'{current}"""
             )
             rows = cur.fetchall()
 

@@ -1,34 +1,39 @@
 """
 Shared feed/indicator helpers used by the routers: the tier-feed catalogue,
-feed-URL construction, live whitelist-scoped indicator queries, and IP/CIDR
-normalization.
+feed-URL construction, and IP/CIDR normalization.
 """
 import ipaddress
+import re
 import socket
-from typing import List, Optional, Tuple, Union
 
 from fastapi import Request
 
-from threatfeedme import core
 from threatfeedme.domains import normalize_domain
-from threatfeedme.exporter import is_included
-from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS, ThreatIndicator
 
 # ==================== FEED HELPERS ====================
 # Ordered so the UI renders strongest-first; "recommended" flags the default
-# most operators should point their firewall at.
+# most operators should point their firewall at. That is MEDIUM (v2.5.0): the
+# README and how-to always said so, but this flag said High, so the page
+# contradicted the docs. Medium is corroborated by independent sources, so
+# false-positive risk is low and coverage is several times High's. High is
+# for strict or capacity-capped devices (the UniFi panel recommends it for
+# its own reason: one list per policy). The blurbs sit on rows shared by
+# both kinds, so High describes domain authority too, not just vote counts.
 TIER_FEEDS = [
     {
         "key": "high",
         "label": "High Confidence",
-        "description": "More than two independent sources agree (overlap-discounted)",
-        "recommended": True,
+        "description": ("Strongest evidence: several independent sources agree, or a "
+                        "primary curator (e.g. URLhaus) lists the domain. Smallest list, "
+                        "for strict or capacity-limited devices"),
+        "recommended": False,
     },
     {
         "key": "medium",
         "label": "Medium Confidence",
-        "description": "Corroborated by more than one independent source; includes high",
-        "recommended": False,
+        "description": ("Corroborated by more than one independent source; includes High. "
+                        "The right default for most firewalls"),
+        "recommended": True,
     },
     {
         # With cumulative serving, low == all. The URL stays live (firewalls
@@ -50,62 +55,48 @@ TIER_FEEDS = [
 _FEEDS_BY_NAME = {f["key"]: f for f in TIER_FEEDS}
 
 
-def _feed_base(request: Request, tier_key: str = "") -> str:
+_HOST_CHARS = re.compile(r"^[A-Za-z0-9.\-]+$|^\[[0-9A-Fa-f:.]+\]$")
+
+
+def _feed_base(request: Request, tier_key: str = "", swap_loopback: bool = True) -> str:
     """Build the base feed URL for a tier, respecting X-Forwarded-Proto/Proto
     so a reverse proxy (FortiGate, nginx) preserves HTTPS in the link the
     dashboard hands to the operator.
 
     Returns just the scheme://host[:port] — the caller/template adds the
-    /feeds/... path."""
+    /feeds/... path.
+
+    swap_loopback=False keeps the host the client actually used: right for
+    URLs a CLIENT follows (TAXII discovery), where the LAN-IP swap sent a
+    client that reached us on localhost or through a proxy somewhere else."""
     scheme = request.headers.get("X-Forwarded-Proto") or request.headers.get("Proto") or request.url.scheme
     # The Host / X-Forwarded-Host header already carries the port the client
     # reached us on, so split it out rather than re-appending request.url.port
     # (which would double it, e.g. "host:8080:8080").
     host_hdr = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
-    if host_hdr:
+    if host_hdr and host_hdr.startswith("["):          # [v6]:port
+        hostname, _, rest = host_hdr.partition("]")
+        hostname += "]"
+        port = rest.lstrip(":")
+    elif host_hdr:
         hostname, _, port = host_hdr.partition(":")
     else:
         hostname = request.url.hostname or "localhost"
         port = str(request.url.port or "")
+    # A Host header is client input: anything that isn't a plain hostname or
+    # address (plus a numeric port) falls back to the connection's own host
+    # rather than being echoed into URLs.
+    if not _HOST_CHARS.match(hostname or "") or (port and not port.isdigit()):
+        hostname = request.url.hostname or "localhost"
+        port = str(request.url.port or "")
     # A loopback/wildcard host is unreachable from the firewall polling the URL;
     # swap in this server's LAN IP so the operator can paste it as-is.
-    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "::"):
+    if swap_loopback and hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "::",
+                                      "[::1]", "[::]"):
         hostname = _lan_ip()
     if port and port not in ("80", "443"):
         return f"{scheme}://{hostname}:{port}"
     return f"{scheme}://{hostname}"
-
-
-def _indicators_for(tier=None, kind: str = "ip"):
-    """Live indicator query with whitelist applied (global excludes dropped).
-
-    Accepts None (all indicators), a ConfidenceTier enum, or a string tier
-    key ("high", "medium", "low", "all") for callers that pass the URL path
-    parameter directly. "all" returns every indicator regardless of tier.
-
-    `kind` filters the population ('ip' or 'domain') so the IP feed URLs
-    never emit a domain and the domain feed URLs never emit an IP — a
-    FortiGate address feed fed a hostname errors the whole import, so the
-    two kinds must never bleed into each other's files.
-    Returns ThreatIndicator objects so downstream callers (export, feed
-    construction) have structured data instead of raw dicts.
-    """
-    wl_map = core.db.get_whitelist_map()
-    if tier is None or tier == "all":
-        indicators = core.db.get_indicators_by_kind(kind)
-        # "all" is documented as an alias of the low feed, so it honors
-        # tier:low-scoped whitelist exclusions the same way low.txt does —
-        # otherwise the two URLs diverge the moment a tier:low entry exists.
-        return [i for i in indicators
-                if is_included(i, wl_map, tier=ConfidenceTier.LOW)]
-    tier_enum = ConfidenceTier(tier) if isinstance(tier, str) else tier
-    # Cumulative: medium.txt serves high + medium, low.txt serves everything —
-    # a firewall polling one URL must get every indicator at or above that
-    # confidence. Tier-scoped whitelist exclusions still key off the OUTPUT
-    # feed (tier=tier_enum), so "exclude from medium" hides an indicator from
-    # medium.txt regardless of which tier it carries.
-    indicators = core.db.get_indicators_by_kind_and_tiers(kind, CUMULATIVE_TIERS[tier_enum])
-    return [i for i in indicators if is_included(i, wl_map, tier=tier_enum)]
 
 
 def _lan_ip() -> str:

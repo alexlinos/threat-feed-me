@@ -6,15 +6,16 @@ import io
 import os
 import re
 import socket
+import threading
 import time
 import ipaddress
 import json
-from datetime import datetime, timezone
-from typing import List, Dict, Optional, Tuple, Union
-from urllib.parse import urljoin, urlsplit
+from typing import List, Dict, Optional, Set, Tuple, Union
+from urllib.parse import parse_qs, urljoin, urlsplit
 import logging
 
 import requests
+import urllib3.util.connection as _u3_connection
 
 # Maximum bytes to accept from a single feed HTTP fetch. Beyond this the
 # connection is closed and the response is treated as an error to prevent
@@ -44,7 +45,7 @@ def _read_capped(response, label: str) -> str:
 from threatfeedme.credentials import (CROSS_ORIGIN_SAFE_HEADERS, KeyPolicy,
                                       same_origin)
 from threatfeedme.domains import normalize_domain
-from threatfeedme.models import FeedSource, FeedType
+from threatfeedme.models import FeedSource
 from threatfeedme.database import Database
 
 logger = logging.getLogger(__name__)
@@ -70,11 +71,34 @@ def _host_addresses(host: str) -> List[str]:
     return [info[4][0] for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
 
 
+def _assert_public(host: str, addresses: List[str]) -> None:
+    """The SSRF rule, shared by the early URL check and the connect-time
+    guard so the two can never disagree."""
+    for addr in addresses:
+        ip = ipaddress.ip_address(addr.split('%', 1)[0])
+        if not ip.is_global:
+            raise RuntimeError(
+                f"feed URL host '{host}' resolves to non-public address {ip}; "
+                "refusing to fetch (set safety.allow_private_feed_urls: true "
+                "to permit internal feed URLs)"
+            )
+
+
+# requests merges env proxies with setdefault, then drops None values, so
+# naming every scheme (and ALL_PROXY's "all") as None disables them all.
+_NO_PROXIES = {"http": None, "https": None, "all": None}
+
+
 def _require_public_url(url: str) -> None:
     """SSRF guard: reject a URL whose host is (or resolves to) a non-public
     address. Feed URLs can be added at runtime from the dashboard, so without
     this an operator-facing page could be pointed at cloud metadata services
-    or internal hosts and use the stored fetch errors as a port-scan oracle."""
+    or internal hosts and use the stored fetch errors as a port-scan oracle.
+
+    This is the EARLY check (clear error before any request). It is not the
+    enforcing one: requests resolves the host again to connect, so a
+    DNS-rebinding host could answer public here and private there. The
+    connect-time guard below closes that gap."""
     host = urlsplit(url).hostname
     if not host:
         raise RuntimeError(f"feed URL has no host: {url!r}")
@@ -85,14 +109,37 @@ def _require_public_url(url: str) -> None:
         raise requests.exceptions.ConnectionError(
             f"could not resolve feed host '{host}': {e}"
         )
+    _assert_public(host, addresses)
+
+
+# ---- Connect-time SSRF guard -------------------------------------------------
+# Every urllib3 connection is opened through util.connection.create_connection.
+# While a feed fetch runs on this thread, the wrapper resolves the host ONCE,
+# validates those addresses, and connects to exactly the address it validated —
+# there is no second lookup a rebinding DNS server could answer differently
+# (review 2026-09-22). It applies to every hop, so it also covers redirects the
+# Talos scraper's session follows on its own. Thread-local on purpose: the
+# UniFi pusher (other threads/requests) must still reach its LAN gateway.
+_ssrf_guard = threading.local()
+_original_create_connection = _u3_connection.create_connection
+
+
+def _guarded_create_connection(address, *args, **kwargs):
+    if not getattr(_ssrf_guard, "active", False):
+        return _original_create_connection(address, *args, **kwargs)
+    host, port = address[0], address[1]
+    addresses = _host_addresses(host)   # gaierror propagates -> retryable
+    _assert_public(host, addresses)
+    last_error = None
     for addr in addresses:
-        ip = ipaddress.ip_address(addr.split('%', 1)[0])
-        if not ip.is_global:
-            raise RuntimeError(
-                f"feed URL host '{host}' resolves to non-public address {ip}; "
-                "refusing to fetch (set safety.allow_private_feed_urls: true "
-                "to permit internal feed URLs)"
-            )
+        try:
+            return _original_create_connection((addr, port), *args, **kwargs)
+        except OSError as e:
+            last_error = e
+    raise last_error or OSError(f"no address to connect to for '{host}'")
+
+
+_u3_connection.create_connection = _guarded_create_connection
 
 
 class _NotModified:
@@ -220,20 +267,22 @@ def parse_feed_content(content: str) -> List[Dict]:
 
 
 class FeedIngestor:
-    # Scraper registry: scraper name -> callable(self, feed) -> str content
-    _SCRAPERS = {}
-
-    @classmethod
-    def register_scraper(cls, name: str):
-        """Decorator to register a scraper function."""
-        def wrapper(fn):
-            cls._SCRAPERS[name] = fn
-            return fn
-        return wrapper
+    # Scraper registry: scraper name -> callable(self, feed) -> str content.
+    # Filled at the bottom of this module, once every scraper is defined.
+    _SCRAPERS: Dict[str, object] = {}
 
     def __init__(self, db: Database, safety=None, allow_private_urls: bool = False,
-                 key_policy: Optional[KeyPolicy] = None):
+                 key_policy: Optional[KeyPolicy] = None,
+                 crowdsec_lapi: str = "", crowdsec_console_id: str = "",
+                 crowdsec_verify_ssl: bool = True):
         self.db = db
+        # CrowdSec integration targets (crowdsec.py), set from the dashboard's
+        # CrowdSec panel: the operator's LAPI base URL and Console Raw IP List
+        # integration id. The crowdsec_* scrapers build their URLs from these,
+        # never from a feed URL, so a feed can't redirect the credentials.
+        self.crowdsec_lapi = crowdsec_lapi or ""
+        self.crowdsec_console_id = crowdsec_console_id or ""
+        self.crowdsec_verify_ssl = crowdsec_verify_ssl
         # Optional SafetyFilter; when set, private/reserved/known-good entries
         # are skipped at ingest so they never reach outputs.
         self.safety = safety
@@ -275,6 +324,10 @@ class FeedIngestor:
         logger.info(f"Fetching feed: {feed.name}")
 
         self._pending_validators = None
+        # Arm the connect-time SSRF guard for every connection this fetch
+        # opens on this thread (generic GET, scrapers, pagination, redirects).
+        guard_was = getattr(_ssrf_guard, "active", False)
+        _ssrf_guard.active = not self.allow_private_urls
         try:
             if feed.scraper:
                 scraper_fn = self._SCRAPERS.get(feed.scraper)
@@ -294,6 +347,8 @@ class FeedIngestor:
         except Exception as e:
             logger.error(f"Failed to fetch {feed.name}: {e}")
             raise
+        finally:
+            _ssrf_guard.active = guard_was
 
         parsed = self._parse_feed_content(content, kind=feed.indicator_kind)
         # A scraper feed that yields zero indicators means the scrape returned
@@ -425,8 +480,15 @@ class FeedIngestor:
             # request, not the API key.
             hop_headers = headers if same_origin(origin, url) else {
                 k: v for k, v in headers.items() if k.lower() in CROSS_ORIGIN_SAFE_HEADERS}
+            # Env proxies (HTTP(S)_PROXY / ALL_PROXY) are ignored while the
+            # SSRF guard is on: through a proxy the guard would pin the PROXY's
+            # address, and the proxy re-resolves the target itself, reopening
+            # the check-then-connect rebinding window. An install that opted
+            # into private feed URLs has no guard to protect, so it keeps its
+            # proxy.
             response = requests.get(url, headers=hop_headers, timeout=30,
-                                    stream=True, allow_redirects=False)
+                                    stream=True, allow_redirects=False,
+                                    proxies=None if self.allow_private_urls else _NO_PROXIES)
             if response.status_code in _REDIRECT_STATUSES:
                 location = response.headers.get('Location')
                 response.close()
@@ -496,7 +558,6 @@ class FeedIngestor:
 
             logger.info(f"Fetched {len(entries)} indicators from {feed.name}")
 
-            now = datetime.now(timezone.utc).isoformat()
             skipped = 0
             # Filter in Python, write in one bulk call: per-row add_indicator()
             # commits per IP, which wedged the refresh on 90k-row feeds.
@@ -508,15 +569,10 @@ class FeedIngestor:
                     skipped += 1
                     continue
 
-                metadata = {
-                    'feed_type': feed.feed_type.value,
-                    'feed_weight': feed.weight,
-                    'fetched_at': now,
-                }
-                if entry.get('cidr'):
-                    metadata['cidr'] = entry['cidr']
-
-                rows.append((entry['ip'], metadata))
+                # Only what scoring reads. feed_type / feed_weight / fetched_at
+                # used to be written here on every fetch into every row and
+                # were read by nothing (the scorer takes them from the feed).
+                rows.append((entry['ip'], {'cidr': entry['cidr']} if entry.get('cidr') else {}))
 
             count = self.db.add_indicators_bulk(rows, source=feed.name, kind=feed.indicator_kind)
             # Full parse succeeded: this IS the source's current membership.
@@ -649,7 +705,6 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
 
 
 # Register the scraper so fetch_feed can dispatch to it.
-FeedIngestor.register_scraper("talos_snort")(_scrape_talos)
 
 
 # =============================================================================
@@ -677,9 +732,6 @@ def _scrape_dshield_block(self: FeedIngestor, feed: FeedSource):
         if len(parts) >= 3 and parts[2].strip().isdigit():
             lines.append(f"{parts[0].strip()}/{parts[2].strip()}")
     return "\n".join(lines)
-
-
-FeedIngestor.register_scraper("dshield_block")(_scrape_dshield_block)
 
 
 # -----------------------------------------------------------------------------
@@ -750,9 +802,6 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
     return "\n".join(lines)
 
 
-FeedIngestor.register_scraper("otx_pulses")(_scrape_otx_pulses)
-
-
 # HoneyDB bad-hosts scraper (JSON feed)
 #
 # HoneyDB authenticates with TWO headers (X-HoneyDb-ApiId + X-HoneyDb-ApiKey),
@@ -808,7 +857,82 @@ def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
     return "\n".join(lines)
 
 
-FeedIngestor.register_scraper("honeydb")(_scrape_honeydb)
+# CrowdSec LAPI decisions (see crowdsec.py). The feed URL only carries the
+# origin selector (?origins=crowdsec,cscli | CAPI | lists); host and path come
+# from the integration's configured LAPI, which is the ONE host the bouncer
+# key goes to. The LAPI is the operator's own LAN service, so the SSRF guard is
+# lifted for exactly this request, the same trust the UniFi gateway gets.
+_CROWDSEC_ORIGINS_RE = re.compile(r'^[A-Za-z0-9_:,-]{1,128}$')
+
+
+def _scrape_crowdsec_lapi(self: FeedIngestor, feed: FeedSource):
+    from threatfeedme import crowdsec
+    if not self.crowdsec_lapi:
+        raise RuntimeError(f"{feed.name}: set the CrowdSec LAPI URL in the dashboard's "
+                           "CrowdSec panel")
+    key = os.environ.get(crowdsec.ENV_BOUNCER_KEY)
+    if not key:
+        raise RuntimeError(f"{feed.name}: set the CrowdSec bouncer key "
+                           f"({crowdsec.ENV_BOUNCER_KEY}) in the CrowdSec panel")
+    params = {"type": "ban",
+              # never read back what threat-feed-me itself published
+              "scenarios_not_containing": crowdsec.SCENARIO_PREFIX.rstrip("/")}
+    origins = (parse_qs(urlsplit(feed.url).query).get("origins") or [""])[0]
+    if origins:
+        if not _CROWDSEC_ORIGINS_RE.match(origins):
+            raise RuntimeError(f"{feed.name}: invalid origins selector {origins!r}")
+        params["origins"] = origins
+    guard_was = getattr(_ssrf_guard, "active", False)
+    _ssrf_guard.active = False
+    try:
+        session = crowdsec._session(verify=self.crowdsec_verify_ssl)
+        response = session.get(f"{self.crowdsec_lapi}/v1/decisions",
+                               headers={"X-Api-Key": key, "User-Agent": "ThreatFeedMe/1.0"},
+                               params=params, timeout=60, stream=True,
+                               allow_redirects=False)
+        crowdsec._check(response, "pull")
+        body = _read_capped(response, feed.name)
+    finally:
+        _ssrf_guard.active = guard_was
+    try:
+        data = json.loads(body) if body.strip() else None
+    except ValueError:
+        raise RuntimeError(f"{feed.name}: CrowdSec LAPI answer is not JSON")
+    values = crowdsec.decision_values(data)
+    if not values:
+        # No active bans is a normal state for a quiet sensor (the LAPI
+        # answers null), not a broken fetch: keep what was ingested, like
+        # HoneyDB's empty window.
+        logger.info(f"{feed.name}: no active CrowdSec decisions; keeping prior indicators")
+        return NOT_MODIFIED
+    return "\n".join(values)
+
+
+# CrowdSec Console "Raw IP List" integration: the blocklists the operator's
+# Console account subscribes to, as plain text behind Basic auth. The two
+# credential vars are declared by the shipped feed, so KeyPolicy binds them to
+# admin.api.crowdsec.net; the integration id (a path segment) comes from the
+# CrowdSec panel, validated as a slug.
+def _scrape_crowdsec_console(self: FeedIngestor, feed: FeedSource):
+    import base64
+    from threatfeedme import crowdsec
+    if not self.crowdsec_console_id:
+        raise RuntimeError(f"{feed.name}: set the Console integration id in the dashboard's "
+                           "CrowdSec panel")
+    url = crowdsec.CONSOLE_CONTENT_URL.format(id=self.crowdsec_console_id)
+    env_vars = [v.strip() for v in (feed.auth_env or "").split(",") if v.strip()]
+    if len(env_vars) != 2 or not all(os.environ.get(v) for v in env_vars):
+        raise RuntimeError(f"{feed.name}: set both Console integration credentials "
+                           f"({', '.join(env_vars) or 'auth_env'}) with Set key")
+    for var in env_vars:
+        if not self.key_policy.may_send(var, url):
+            raise RuntimeError(self.key_policy.send_refusal(var, url))
+    token = base64.b64encode(
+        f"{os.environ[env_vars[0]]}:{os.environ[env_vars[1]]}".encode()).decode()
+    response = self._get_with_retries(url, {"Authorization": f"Basic {token}",
+                                            "User-Agent": "ThreatFeedMe/1.0"})
+    response.raise_for_status()
+    return _read_capped(response, feed.name)
 
 
 # =============================================================================
@@ -852,5 +976,125 @@ def _scrape_phishtank_urls(self: FeedIngestor, feed: FeedSource):
     return _scrape_csv_column(self, feed, 1)
 
 
-FeedIngestor.register_scraper("drb_ra_domains")(_scrape_drb_ra_domains)
-FeedIngestor.register_scraper("phishtank_urls")(_scrape_phishtank_urls)
+# =============================================================================
+# TAXII 2.1 collection (v2.5.0): a MISP, OpenCTI or commercial TAXII server
+# as a feed. Parsing lives in stix_ingest.py (indicators only, unconditional
+# patterns only; see its docstring for why so little is read).
+# =============================================================================
+#
+# Membership semantics: every refresh reads the WHOLE collection and keeps
+# what is current (not revoked, not past valid_until). An incremental
+# added_after read would only ever see arrivals, so a withdrawn indicator
+# would never leave; the churn log and vote grace need true membership. For
+# the same reason a read cut short by the page cap FAILS the fetch rather
+# than recording the partial set as a mass leave (the OTX rule).
+#
+# The feed URL is the collection (…/collections/<id>/) or its objects
+# endpoint. Paging uses the TAXII 2.1 `next` token as a query parameter on
+# that same URL, so a hostile server can't steer the key to another origin
+# (redirects are handled by _get_following_redirects, which drops the auth
+# header across origins).
+_TAXII_ACCEPT = "application/taxii+json;version=2.1"
+_TAXII_PAGE_LIMIT = 1000
+_TAXII_MAX_PAGES = 250
+_TAXII_MAX_OBJECTS = 250_000
+
+
+def taxii_objects_url(url: str) -> str:
+    """The objects endpoint for a collection URL, or ValueError if the URL
+    isn't one (the add-feed API uses this to reject a discovery/api-root URL
+    with a useful message instead of failing on every refresh)."""
+    parts = urlsplit(url.strip())
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        raise ValueError("TAXII collection URL must be http(s)://host/…/collections/<id>/")
+    path = parts.path if parts.path.endswith("/") else parts.path + "/"
+    if not path.endswith("/objects/"):
+        segs = [s for s in path.split("/") if s]
+        if len(segs) < 2 or segs[-2] != "collections":
+            raise ValueError("Paste a TAXII 2.1 collection URL ending in /collections/<id>/ "
+                             "(not the discovery or API-root URL)")
+        path += "objects/"
+    return f"{parts.scheme.lower()}://{parts.netloc}{path}"
+
+
+def _scrape_taxii21(self: FeedIngestor, feed: FeedSource):
+    from urllib.parse import urlencode
+    from threatfeedme.stix_ingest import indicator_values
+    try:
+        base = taxii_objects_url(feed.url)
+    except ValueError as e:
+        raise RuntimeError(f"{feed.name}: {e}")
+    headers = {"User-Agent": "ThreatFeedMe/1.0", "Accept": _TAXII_ACCEPT}
+    if feed.requires_auth:
+        env_vars = [v.strip() for v in (feed.auth_env or "").split(",") if v.strip()]
+        if len(env_vars) != 1 or not os.environ.get(env_vars[0]):
+            raise RuntimeError(f"{feed.name}: set the TAXII key with Set key "
+                               f"({feed.auth_env or 'no key variable'})")
+        if not self.key_policy.may_send(env_vars[0], base):
+            raise RuntimeError(self.key_policy.send_refusal(env_vars[0], base))
+        headers[feed.auth_header or "Authorization"] = os.environ[env_vars[0]]
+
+    objects: List[dict] = []
+    token = None
+    for _ in range(_TAXII_MAX_PAGES):
+        params = {"limit": str(_TAXII_PAGE_LIMIT)}
+        if token:
+            params["next"] = token
+        response = self._get_with_retries(f"{base}?{urlencode(params)}", headers)
+        if response.status_code in (401, 403):
+            raise RuntimeError(f"{feed.name}: the TAXII server refused the credentials "
+                               f"(HTTP {response.status_code})")
+        if response.status_code == 406:
+            raise RuntimeError(f"{feed.name}: the server doesn't speak TAXII 2.1 (HTTP 406)")
+        response.raise_for_status()
+        try:
+            envelope = json.loads(_read_capped(response, feed.name))
+        except ValueError:
+            raise RuntimeError(f"{feed.name}: response is not TAXII JSON")
+        page = envelope.get("objects") if isinstance(envelope, dict) else None
+        if page is None:
+            page = []
+        if not isinstance(page, list):
+            raise RuntimeError(f"{feed.name}: malformed TAXII envelope")
+        objects.extend(o for o in page if isinstance(o, dict))
+        if len(objects) > _TAXII_MAX_OBJECTS:
+            raise RuntimeError(f"{feed.name}: collection has more than {_TAXII_MAX_OBJECTS:,} "
+                               "objects; point the feed at a narrower collection")
+        if not envelope.get("more"):
+            break
+        token = envelope.get("next")
+        if not isinstance(token, str) or not token or len(token) > 4096:
+            raise RuntimeError(f"{feed.name}: TAXII server said more=true without a next token")
+    else:
+        raise RuntimeError(f"{feed.name}: collection is longer than {_TAXII_MAX_PAGES} pages; "
+                           "refusing a partial read (it would look like mass removals)")
+
+    values, stats = indicator_values(objects, feed.indicator_kind)
+    logger.info(f"{feed.name}: TAXII {stats['indicators']} indicators, {len(values)} "
+                f"{feed.indicator_kind} values; skipped revoked={stats['revoked']} "
+                f"expired={stats['expired']} benign={stats['benign']} "
+                f"conditional={stats['conditional']} other-kind={stats['other_kind']} "
+                f"non-STIX={stats['not_stix']}")
+    if not values:
+        # Surface WHY instead of the generic "scraper returned nothing": the
+        # usual cause is a collection of the other kind, or every indicator
+        # being conditional (IP-and-port) patterns.
+        raise RuntimeError(
+            f"{feed.name}: no current {feed.indicator_kind} indicators in the collection "
+            f"({stats['indicators']} indicators; {stats['other_kind']} of another kind, "
+            f"{stats['conditional']} conditional, {stats['revoked'] + stats['expired']} "
+            "revoked or expired)")
+    return "\n".join(values)
+
+
+FeedIngestor._SCRAPERS.update({
+    "talos_snort": _scrape_talos,
+    "dshield_block": _scrape_dshield_block,
+    "otx_pulses": _scrape_otx_pulses,
+    "honeydb": _scrape_honeydb,
+    "crowdsec_lapi": _scrape_crowdsec_lapi,
+    "crowdsec_console": _scrape_crowdsec_console,
+    "drb_ra_domains": _scrape_drb_ra_domains,
+    "phishtank_urls": _scrape_phishtank_urls,
+    "taxii21": _scrape_taxii21,
+})

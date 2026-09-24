@@ -1,0 +1,25 @@
+{#- The Flytrap marks (v2.5). A = the chomper on its stem, the app's mark.
+    D = the chomper eating the dots of an IP address, for heroes and banners.
+    The jaws are separate groups (.jaw-u / .jaw-l) hinged at the local origin
+    so CSS can animate them: app.css chomps them while a refresh runs. The
+    red prey keeps class "prey" (the brand-state hooks in app.js pulse it).
+    Colours are fixed brand values, not theme tokens: a mark is a mark. -#}
+{%- set JAW_U = "M0 0 C-7 -10 -1 -24 14 -30 C40 -40 70 -32 84 -8 L86 0 L79 8 L72 0 L65 8 L58 0 L51 8 L44 0 L37 8 L30 0 L23 7 L16 0 Z" -%}
+{%- set JAW_L = "M0 0 C-7 10 -1 24 14 30 C40 40 70 32 84 8 L86 0 L80 0 L73 -8 L66 0 L59 -8 L52 0 L45 -8 L38 0 L31 -8 L24 0 L16 0 Z" -%}
+
+{% macro mark(size=36, cls="logo-mark", label="") -%}
+<svg class="{{ cls }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 128 128" {% if label %}role="img" aria-label="{{ label }}"{% else %}aria-hidden="true"{% endif %} focusable="false"><path d="M22 74 C12 90 27 102 19 120" stroke="#0c9064" stroke-width="7" fill="none" stroke-linecap="round"/><path d="M24 101 C13 95 6 99 3 107 C13 111 20 108 24 101 Z" fill="#0c9064"/><g transform="translate(24 60)"><g class="jaw-u" transform="rotate(-10)"><path d="{{ JAW_U }}" fill="#10b981"/></g><g class="jaw-l" transform="rotate(10)"><path d="{{ JAW_L }}" fill="#0c9064"/></g></g><circle class="prey" cx="117" cy="60" r="6.5" fill="#f87171"/></svg>
+{%- endmacro %}
+
+{# D: octets in a quiet ink, the three periods drawn as the red prey, the
+   first octet already between the jaws. 203.0.113.7 is RFC 5737
+   documentation space: never a real address. #}
+{% macro eat_ip(height=96, ink="#cfe9dc") -%}
+<svg class="mark-eat" height="{{ height }}" viewBox="0 0 199 128" role="img" aria-label="The flytrap eating the dots of 203.0.113.7" focusable="false"><path d="M22 74 C12 90 27 102 19 120" stroke="#0c9064" stroke-width="7" fill="none" stroke-linecap="round"/><path d="M24 101 C13 95 6 99 3 107 C13 111 20 108 24 101 Z" fill="#0c9064"/><g font-family="'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace" font-size="18" font-weight="600" fill="{{ ink }}"><text x="68" y="66" textLength="32.4" lengthAdjust="spacingAndGlyphs">203</text><text x="111.4" y="66" textLength="10.8" lengthAdjust="spacingAndGlyphs">0</text><text x="133.2" y="66" textLength="32.4" lengthAdjust="spacingAndGlyphs">113</text><text x="176.6" y="66" textLength="10.8" lengthAdjust="spacingAndGlyphs">7</text></g><circle cx="105.9" cy="63" r="3.6" fill="#f87171"/><circle cx="127.7" cy="63" r="3.6" fill="#f87171"/><circle cx="171.1" cy="63" r="3.6" fill="#f87171"/><g transform="translate(24 60)"><g transform="rotate(-24)"><path d="{{ JAW_U }}" fill="#10b981"/></g><g transform="rotate(24)"><path d="{{ JAW_L }}" fill="#0c9064"/></g></g></svg>
+{%- endmacro %}
+
+{# UI icons: 24px line glyphs drawn here (no icon font, no CDN). `d` is a
+   constant from the templates, never request data. #}
+{% macro icon(d, size=22) -%}
+<svg viewBox="0 0 24 24" width="{{ size }}" height="{{ size }}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{{ d|safe }}</svg>
+{%- endmacro %}

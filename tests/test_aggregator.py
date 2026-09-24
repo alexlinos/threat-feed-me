@@ -1006,7 +1006,7 @@ def test_text_export_emits_cidr(db, tmp_path):
 
 def _set_last_seen(db, ip, iso):
     """Test helper: force an indicator's last_seen to a fixed ISO timestamp."""
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         conn.execute("UPDATE indicators SET last_seen = ? WHERE ip = ?", (iso, ip))
         conn.commit()
@@ -1101,33 +1101,128 @@ def _ticks_ago(*days):
     return [(now - timedelta(days=d)).isoformat() for d in days]
 
 
+def _raw(db):
+    """A plain connection with the churn file attached, as the app opens it."""
+    conn = sqlite3.connect(db.db_path)
+    conn.execute("ATTACH DATABASE ? AS churn", (db.churn_path,))
+    return conn
+
+
+def _epoch(iso):
+    return int(datetime.fromisoformat(iso).timestamp())
+
+
+_LEGACY_SIGHTINGS = """CREATE TABLE main.sightings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, source_name TEXT NOT NULL,
+    ip TEXT NOT NULL, tick TEXT NOT NULL, present INTEGER NOT NULL,
+    UNIQUE(source_name, ip, tick))"""
+
+
 def test_sightings_migration_drops_old_format_once(db, tmp_path):
-    """Upgrading a 2.4.2-2.4.8 database (presence-snapshot sightings, no
-    format flag) drops the bloated rows, stamps the flag, and never repeats;
-    transition-format data written after the migration survives reopens."""
-    # Simulate the old format: rows present, flag absent.
+    """Upgrading a 2.4.2-2.4.8 database (presence-snapshot sightings in the
+    main file, no format flag) drops the rows, stamps the flag, and never
+    repeats; transition-format data written afterwards survives reopens."""
     conn = sqlite3.connect(db.db_path)
     try:
+        conn.execute(_LEGACY_SIGHTINGS)
         conn.executemany(
-            "INSERT INTO sightings (source_name, ip, tick, present) VALUES (?,?,?,1)",
+            "INSERT INTO main.sightings (source_name, ip, tick, present) VALUES (?,?,?,1)",
             [("S", f"203.0.113.{i}", "2026-08-19T00:00:00+00:00") for i in range(1, 6)])
         conn.execute("DELETE FROM settings WHERE key='sightings_format'")
         conn.commit()
     finally:
         conn.close()
     migrated = Database(db.db_path)   # re-open: migration must fire
-    with migrated._cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM sightings")
-        assert cur.fetchone()[0] == 0
+    conn = _raw(migrated)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM churn.sightings").fetchone()[0] == 0
+        assert conn.execute("SELECT 1 FROM main.sqlite_master WHERE name='sightings'").fetchone() is None
+    finally:
+        conn.close()
     assert migrated.get_setting("sightings_format") == "transitions"
-    # New-format data written now must survive a further reopen (no re-drop).
     t1, t2 = _ticks_ago(2, 1)
     migrated.update_source_sightings("S", {"A"}, t1)
     migrated.update_source_sightings("S", {"B"}, t2)
     again = Database(db.db_path)
     with again._cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM sightings")
+        cur.execute("SELECT COUNT(*) FROM churn.sightings")
         assert cur.fetchone()[0] == 2   # A leave + B arrival, kept
+
+
+def test_upgrade_from_2_4_19_moves_the_churn_log_and_slims_the_main_file(tmp_path, caplog):
+    """A 2.4.19 database: transition log in the main file, no source_left,
+    the duplicate ip index, per-fetch metadata keys. Opening it with 2.5
+    moves the log (ticks as epochs) to the churn file, backfills the vote
+    grace from it, drops the old table and index, strips the unused
+    metadata keys, and leaves nothing to do on the next open."""
+    path = str(tmp_path / "old.db")
+    Database(path)                                   # current schema, then regress it
+    left_at, back = _ticks_ago(1, 5)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("DROP TABLE source_left")
+        conn.execute("CREATE INDEX idx_indicators_ip ON indicators(ip)")
+        conn.execute(_LEGACY_SIGHTINGS)
+        conn.executemany("INSERT INTO main.sightings (source_name, ip, tick, present) VALUES (?,?,?,?)",
+                         [("S", "198.51.100.1", back, 1), ("S", "198.51.100.1", left_at, 0),
+                          ("S", "198.51.100.2", back, 1)])
+        conn.execute("INSERT INTO source_state (source_name, ip) VALUES ('S', '198.51.100.2')")
+        conn.execute("INSERT INTO indicators (ip, first_seen, last_seen, metadata) VALUES (?,?,?,?)",
+                     ("198.51.100.2", back, back,
+                      '{"feed_type":"threat_intel","feed_weight":1.0,"fetched_at":"x","predictive_score":0.5}'))
+        conn.execute("DELETE FROM settings WHERE key='metadata_slim'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    import logging
+    with caplog.at_level(logging.INFO, logger="threatfeedme.database"):
+        db = Database(path)
+    # said BEFORE the long copy, so a watched log never looks hung
+    assert "one-time upgrade: moving the churn log (3 rows)" in caplog.text
+    conn = _raw(db)
+    try:
+        rows = sorted(conn.execute("SELECT source_name, ip, tick, present FROM churn.sightings").fetchall())
+        assert rows == sorted([("S", "198.51.100.1", _epoch(back), 1), ("S", "198.51.100.1", _epoch(left_at), 0),
+                               ("S", "198.51.100.2", _epoch(back), 1)])
+        assert conn.execute("SELECT 1 FROM main.sqlite_master WHERE name IN "
+                            "('sightings', 'idx_indicators_ip')").fetchone() is None
+        # the vote grace is recovered from the moved log: .1 left a day ago
+        left = conn.execute("SELECT ip, left_at FROM source_left").fetchall()
+        assert [ip for ip, _ in left] == ["198.51.100.1"]
+        assert abs(_epoch(left[0][1]) - _epoch(left_at)) <= 1
+        assert conn.execute("SELECT metadata FROM indicators WHERE ip='198.51.100.2'").fetchone()[0] \
+            == '{"predictive_score":0.5}'
+    finally:
+        conn.close()
+    assert db.detect_leaves("S", 30)["left"] == ["198.51.100.1"]
+    Database(path)                                   # idempotent: a second open changes nothing
+    conn = _raw(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM churn.sightings").fetchone()[0] == 3
+    finally:
+        conn.close()
+
+
+def test_backups_cover_the_churn_log_and_prune_each_set(db, tmp_path):
+    t1, t2 = _ticks_ago(2, 1)
+    db.update_source_sightings("S", {"A"}, t1)
+    db.update_source_sightings("S", {"B"}, t2)
+    dest = tmp_path / "bk"
+    path = db.backup_database(str(dest), keep=2)
+    churn = path[:-3] + ".churn.db"
+    c = sqlite3.connect(churn)
+    try:
+        assert c.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 2
+    finally:
+        c.close()
+    for i in range(1, 5):
+        for suffix in (".db", ".churn.db"):
+            (dest / f"threat_feeds-2026070{i}T000000Z{suffix}").write_text("")
+    db._prune_backups(str(dest), keep=2)
+    names = sorted(os.listdir(dest))
+    assert len([n for n in names if n.endswith(".churn.db")]) == 2
+    assert len([n for n in names if not n.endswith(".churn.db")]) == 2
 
 
 def test_update_source_sightings_baseline_writes_no_events(db):
@@ -1136,7 +1231,7 @@ def test_update_source_sightings_baseline_writes_no_events(db):
     t1, = _ticks_ago(3)
     stats = db.update_source_sightings("S", {"A", "B"}, t1)
     assert stats == {"arrived": 0, "left": 0, "baseline": 2}
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         assert conn.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM source_state").fetchone()[0] == 2
@@ -1149,7 +1244,7 @@ def test_update_source_sightings_unchanged_refetch_writes_nothing(db):
     db.update_source_sightings("S", {"A", "B"}, t1)          # baseline
     stats = db.update_source_sightings("S", {"A", "B"}, t2)  # identical
     assert stats == {"arrived": 0, "left": 0, "baseline": 0}
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         assert conn.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
     finally:
@@ -1161,7 +1256,7 @@ def test_update_source_sightings_records_transitions_and_updates_state(db):
     db.update_source_sightings("S", {"A", "B"}, t1)              # baseline
     stats = db.update_source_sightings("S", {"A", "C"}, t2)      # B left, C arrived
     assert stats == {"arrived": 1, "left": 1, "baseline": 0}
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         rows = conn.execute("SELECT ip, present FROM sightings ORDER BY ip").fetchall()
         assert rows == [("B", 0), ("C", 1)]
@@ -1179,7 +1274,7 @@ def test_update_source_sightings_record_false_syncs_state_without_rows(db):
     db.update_source_sightings("R", {"A", "B"}, t1)                     # baseline
     stats = db.update_source_sightings("R", {"B", "C"}, t2, record=False)
     assert stats == {"arrived": 1, "left": 1, "baseline": 0}
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         assert conn.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
         state = {r[0] for r in conn.execute(
@@ -1190,7 +1285,7 @@ def test_update_source_sightings_record_false_syncs_state_without_rows(db):
     # Re-enabling diffs against the synced state, not the stale baseline.
     stats = db.update_source_sightings("R", {"C"}, t3)
     assert stats == {"arrived": 0, "left": 1, "baseline": 0}
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         rows = conn.execute("SELECT ip, present FROM sightings").fetchall()
     finally:
@@ -1226,12 +1321,12 @@ def test_prune_sightings_drops_old_keeps_recent(db):
     db.update_source_sightings("S", {"A", "B"}, t_old)   # B arrival (old event)
     db.update_source_sightings("S", {"A"}, t_recent)     # B leave (recent event)
     assert db.prune_sightings(30) == 1
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         ticks = [r[0] for r in conn.execute("SELECT tick FROM sightings").fetchall()]
     finally:
         conn.close()
-    assert ticks == [t_recent]
+    assert ticks == [_epoch(t_recent)]
 
 
 def test_prune_sightings_disabled_when_zero(db):
@@ -1389,7 +1484,7 @@ def test_purge_stale_indicators_keeps_whitelisted_indicator(db):
 
 def _set_last_update(db, feed_name, iso):
     """Test helper: force a feed_stats row's last_update to a fixed ISO time."""
-    conn = sqlite3.connect(db.db_path)
+    conn = _raw(db)
     try:
         conn.execute("UPDATE feed_stats SET last_update = ? WHERE feed_name = ?",
                      (iso, feed_name))
@@ -2366,7 +2461,7 @@ def test_country_counts_buckets_indicators(db, tmp_path, monkeypatch):
 
     counts = dict(db.country_counts())
     assert counts["US"] == 2 and counts["RU"] == 1 and counts["ZZ"] == 1
-    assert len(db.get_all_indicators()) == 4       # aggregation stored nothing
+    assert db.get_stats_summary()["total"] == 4    # aggregation stored nothing
 
 
 def test_country_counts_empty_when_table_missing(db, tmp_path, monkeypatch):
@@ -2603,6 +2698,16 @@ def test_domain_witness_gate_is_domain_only(db):
         == ConfidenceTier.HIGH
 
 
+def _seeded_scorer(db, cfg):
+    """Authority is granted by provenance (the stored feed must match the
+    configured one), so seed the configured feeds into the DB exactly as the
+    app does at startup before scoring."""
+    for f in cfg.get("feeds", []):
+        f.setdefault("url", f"https://{f['name']}.example/list.txt")
+    db.seed_feeds_from_config(cfg)
+    return ConfidenceScorer(db, cfg)
+
+
 def test_domain_authoritative_feed_forces_high(db):
     """Provenance-first domain HIGH: one designated authoritative source is
     enough, regardless of votes or the k-means boundary."""
@@ -2610,7 +2715,7 @@ def test_domain_authoritative_feed_forces_high(db):
            "scoring": {"tiering": {"method": "effective_votes"},
                        "high_confidence": {
                            "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
-    scorer = ConfidenceScorer(db, cfg)
+    scorer = _seeded_scorer(db, cfg)
     t = scorer._tier_from_votes
     # single authoritative source, ~1 vote, break far above -> HIGH
     assert t(1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='domain') == ConfidenceTier.HIGH
@@ -2644,7 +2749,7 @@ def test_domain_authoritative_revoked_when_degraded(db):
            "scoring": {"tiering": {"method": "effective_votes"},
                        "high_confidence": {
                            "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
-    scorer = ConfidenceScorer(db, cfg)
+    scorer = _seeded_scorer(db, cfg)
     scorer.feed_penalty = {"urlhaus_hostfile": 0.59}  # degraded
     assert scorer._tier_from_votes(1.0, ["urlhaus_hostfile"], 1.1, 10.0,
                                    kind='domain') == ConfidenceTier.LOW
@@ -2664,10 +2769,65 @@ def test_domain_authoritative_second_healthy_source_still_forces_high(db):
            "scoring": {"tiering": {"method": "effective_votes"},
                        "high_confidence": {
                            "authoritative_domain_feeds": ["urlhaus_hostfile", "cert_pl"]}}}
-    scorer = ConfidenceScorer(db, cfg)
+    scorer = _seeded_scorer(db, cfg)
     scorer.feed_penalty = {"urlhaus_hostfile": 0.3}  # degraded; cert_pl healthy
     assert scorer._tier_from_votes(1.5, ["urlhaus_hostfile", "cert_pl"], 1.1, 10.0,
                                    kind='domain') == ConfidenceTier.HIGH
+
+
+def _authority_cfg():
+    return {"feeds": [{"name": "urlhaus_hostfile", "feed_type": "threat_intel",
+                       "url": "https://urlhaus.abuse.ch/downloads/hostfile/"}],
+            "scoring": {"tiering": {"method": "effective_votes"},
+                        "high_confidence": {
+                            "authoritative_domain_feeds": ["urlhaus_hostfile"]}}}
+
+
+def _is_authoritative(db, cfg):
+    return ConfidenceScorer(db, cfg)._tier_from_votes(
+        1.0, ["urlhaus_hostfile"], 1.1, 10.0, kind='domain') == ConfidenceTier.HIGH
+
+
+def test_domain_authority_survives_for_the_genuine_seeded_feed(db):
+    cfg = _authority_cfg()
+    db.seed_feeds_from_config(cfg)
+    assert _is_authoritative(db, cfg)
+
+
+def test_domain_authority_is_not_inherited_by_an_impostor_upload(db):
+    """Authority used to key on the NAME: an upload called urlhaus_hostfile
+    forced HIGH on every domain it listed (review 2026-09-22)."""
+    cfg = _authority_cfg()
+    db.add_feed(FeedSource(name="urlhaus_hostfile", url="uploads/urlhaus_hostfile.txt",
+                           feed_type=FeedType.THREAT_INTEL, local_file=True))
+    assert not _is_authoritative(db, cfg)
+
+
+def test_domain_authority_survives_the_production_rescore_path(db):
+    """Through pipeline.recalculate — the path the app actually uses — not a
+    hand-built scorer. scorer_config rebuilds 'feeds' from the DB without
+    URLs, so an early cut of the provenance check verified against nothing
+    and dropped every genuine authoritative domain to LOW."""
+    from threatfeedme import pipeline
+    cfg = _authority_cfg()
+    cfg["feeds"][0]["indicator_kind"] = "domain"
+    db.seed_feeds_from_config(cfg)
+    db.add_indicators_bulk([("malware-drop.top", {})], source="urlhaus_hostfile", kind="domain")
+    pipeline.recalculate(db, cfg)
+    assert db.get_indicator("malware-drop.top").tier == ConfidenceTier.HIGH
+    # ...and an impostor still gets nothing through the same path
+    db.add_feed(FeedSource(name="urlhaus_hostfile", url="https://attacker.example/list.txt",
+                           feed_type=FeedType.THREAT_INTEL, indicator_kind="domain"))
+    pipeline.recalculate(db, cfg)
+    assert db.get_indicator("malware-drop.top").tier != ConfidenceTier.HIGH
+
+
+def test_domain_authority_is_lost_when_the_feed_is_repointed(db):
+    cfg = _authority_cfg()
+    db.seed_feeds_from_config(cfg)
+    db.add_feed(FeedSource(name="urlhaus_hostfile", url="https://attacker.example/list.txt",
+                           feed_type=FeedType.THREAT_INTEL))
+    assert not _is_authoritative(db, cfg)
 
 
 def test_domain_authoritative_honors_require_threat_intel(db):

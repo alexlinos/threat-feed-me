@@ -66,7 +66,7 @@ releases already.
 
 - `python -m pytest tests -q` must pass before pushing.
 - For UI or behavioural changes, actually run it and look:
-  actually run it and look: `python -m uvicorn --app-dir src threatfeedme.app:app --port 8080`.
+  `python -m uvicorn --app-dir src threatfeedme.app:app --port 8080`.
   Several bugs here (a dead `esc()`, a hung geo panel, an unreadable heatmap)
   passed every test and were only visible in a browser.
 
@@ -216,8 +216,8 @@ walled list.
 
 Community-grounded (Firebog ticked tier, live-probed keyless):
 
-1. `phishing_army` ON — the extended blocklist (~156k, 6h updates, CC BY
-   4.0). Aggregates PhishTank + urlscan.io + Phishunt + OpenPhish +
+1. `phishing_army` ON — the extended blocklist (~156k, 6h updates, CC BY-NC
+   4.0, non-commercial). Aggregates PhishTank + urlscan.io + Phishunt + OpenPhish +
    CERT.PL, with upstream FP-scrubbing against curated whitelists.
 2. `hagezi_fake` OFF — ratified ON, then live-measured 100% contained in
    TIF mini (0% unique, twin-flagged; TIF aggregates hagezi's own Fake
@@ -545,6 +545,133 @@ leakage (evicted IPs read `source_count=0` — re-backtest before quoting AUROC
 externally); `?limit=N` on served feeds. Usability items (High-vs-Medium
 recommendation conflict, FP-default whitelist reason, add-feed overwrite,
 pulse-row false green / double-counted "new in 24h") also queued.
+
+## v2.5.0 "Flytrap" (branch release/2.5.0; "the release that gets us noticed")
+
+Work happens on `release/2.5.0` until tested; main stays the released
+version (maintainer's call, 2026-09-23). Positioning: **the open-source
+MineMeld replacement** (README + site lead with it; MineMeld hosted EOL
+2021-08-01, archived 2023-03). What landed, with the decisions behind it:
+
+- **Vote grace, 3 days (maintainer-ratified after measurement)**: a feed's vote
+  lasts while it lists an indicator and `scoring.vote_grace_days` after
+  (`source_left`, pruned before every rescore; `source_seeded` marks
+  baselines). Prod snapshot: hard cut IP HIGH 36.8k -> 5.0k (rejected: most
+  feeds are short windows, cross-day corroboration is real); 3d -> ~10.7k at
+  rollout, 10.7-17k steady. The HIGH drop at rollout is the fix working.
+- **Predictor leak fixed**: point-in-time features (`live_source_count`, first
+  seen as of T, density excluding self), corpus-at-T population, IPs only.
+  Honest AUROC **0.82** (was quoted 0.86-0.88; baseline 0.737 -> 0.598). Old
+  models are refused by feature name: run `scripts/predictor.sh both` right
+  after rolling 2.5.0.
+- **CrowdSec both ways** (`crowdsec.py`): publish = generation-swapped ban
+  decisions (post new, then expire old by scenario; never a gap), 24h
+  duration, re-published at half-duration even on the skip-rescore path;
+  pull = `crowdsec_local/community/lists` split by origin, own decisions
+  excluded server- AND client-side. LAPI treated like the UniFi gateway
+  (SSRF-exempt for that host only, creds bound + cleared on host change).
+  Live-verified against CrowdSec 1.8.1 (`tests/test_crowdsec_live.py`,
+  opt-in via TFM_CS_*). Never publish into a honeypot's CrowdSec.
+- **TAXII 2.1** (`taxii.py`, read-only, 6 collections = the 6 feed URLs, same
+  row_included rules, exempt from the host check like /feeds). Verified with
+  the OASIS taxii2-client + stix2-validator (341k objects, 0 invalid).
+  Discovery must use `_feed_base(..., swap_loopback=False)`.
+- Also: Host-header allowlist (off until switched on; see below), connect-time SSRF
+  pinning, body caps, least-privilege image, lean cached feed serving with
+  ETag + `?limit=N`, single heavy-writer lock + changed-rows-only rescore,
+  "last polled by" per URL (`polls.py`, no IPs stored), System panel,
+  first-run card, masked key dialog, recommend Medium, 409 on duplicate feed
+  names.
+
+**Interface redesign (maintainer-ratified 2026-09-23, from 10 mockups)**:
+direction 08 "Slate Pro" (icon rail + top bar, block lists as cards) with
+direction 10 "Guided" as the first-run view. Mark **A** (side-on chomper on a
+stem, red prey in front) everywhere; mark **D** (the chomper eating the red
+dots of `203.0.113.7`, RFC 5737 space, never a real IP) for heroes, banner,
+site and social card. Geometry lives in `templates/_mark.html`; the jaws are
+separate groups so CSS chomps them during a refresh. Decisions that aren't
+obvious from the code:
+- One page, five hash-routed views (guide/lists/feeds/integrations/system);
+  an inline script sets `html[data-view]` before paint so the wrong view
+  never flashes, and `reloadPage()` carries the view across in
+  sessionStorage (a same-URL+hash navigation is a fragment jump, not a
+  reload). The guide is the default until any IP list has been polled.
+- No web fonts, CDNs or external images: the dashboard runs air-gapped.
+- **Host check is OFF on upgrade and by default** (maintainer): enforcing
+  needs the explicit switch (`allowed_hosts_enforce` = "1") or
+  `TFM_ALLOWED_HOSTS`. Saving names is separate from enforcing: the guide's
+  "Name this server" saves a DNS name (enforce untouched) and
+  `/api/host-check/resolve` reports whether it resolves to the address in
+  use. A missing flag is off, not "legacy locked" (no release ever saved a
+  list before the flag). With auth and the host check both off the app logs
+  a DNS-rebinding warning on every start; NO dashboard banner for it
+  (maintainer, 2026-09-24).
+
+**TAXII 2.1 as a feed (2.5, `stix_ingest.py` + the `taxii21` scraper)**:
+operator adds a collection URL with format `taxii21` (a closed map in
+routers/feeds.py; clients never name scrapers). Indicators only (bare SCOs are
+context, blocking them takes down victims); only unconditional patterns (AND
+binds tighter than OR: a chain with two value comparisons, e.g. IP AND port,
+is skipped, never widened; `*_ref.type` annotations are dropped first so
+MISP's dst_ref shape works); revoked / expired / `benign` drop out. Every
+refresh reads the WHOLE collection (added_after would only see arrivals, so
+nothing would ever leave); a read cut short by the page cap FAILS instead of
+recording mass leaves. One kind per feed. Verified by a TFM->TAXII->TFM round
+trip (tests) and live over HTTP: 24,118 IPs / 81,798 domains, exact match.
+
+**MineMeld claims (research 2026-09-23; Reddit was unreachable, sources are
+LIVEcommunity, the archived GitHub repos/issues, blogs)**: we cover its core
+job (open feeds -> confidence-tiered EDLs), whitelists, TAXII 2.1 in/out and
+non-PAN firewalls. We do NOT cover its most visible job, the O365 and
+AWS/Azure/GCP allow-lists (2.6, `ROADMAP.md`), nor DAG push, syslog miners,
+TAXII 1.x or per-entry aging of manual lists. Say "replaces MineMeld's
+threat-feed pipeline", not a blanket "replaces MineMeld"; the coverage table
+in `docs/minemeld.html` is the source of truth for claims. Palo Alto's own
+successors are Cortex XSOAR TIM and the EDL Hosting Service: name them
+fairly. MineMeld/PAN-OS names are used nominatively, with the
+not-affiliated line on the site, README and video end card.
+
+**Database slimming (2.5, measured on a prod backup copy)**: the churn log
+moved to `<db>-churn.db`, ATTACHed as `churn` on every connection (queries say
+`churn.sightings`). One WITHOUT ROWID b-tree keyed (source, ip, tick), tick as
+epoch seconds; no tick index (the prune scans, ~1 s at 6.7M rows). Upgrade
+MIGRATES the log (dropping it would leave the predictor unable to retrain for
+weeks), drops the duplicate `idx_indicators_ip`, strips the never-read
+per-fetch metadata keys, VACUUMs once: 1,858 MB -> 421 MB main + 267 MB churn
+in 124 s; backtest on the migrated copy AUROC 0.814 (unchanged). Health-check
+start period is 300 s so a watchdog can't kill that first start. The entrypoint's
+schema step is `main.py --init-db`: logging configured (the old `python -c`
+swallowed INFO), a message BEFORE the long copy, and a static 503 + Retry-After
+holding page on the dashboard host/port until the DB is ready. Skipped: a
+predictive_score column (metadata is ~25 bytes now; no measured gain).
+
+**External review of the branch (2026-09-24)**, each claim re-checked against
+the code. Fixed: a manual re-add or in-place tier change left the feed cache's
+`serve_fingerprint` unmoved (now `set_indicator_score` bumps `serve_stamp` in
+the same transaction); `HTTP(S)_PROXY`/`ALL_PROXY` bypassed the connect-time
+SSRF pin because the pin checked the proxy's address (guarded fetches now pass
+`_NO_PROXIES`; installs with `allow_private_feed_urls` keep their proxy);
+a 32 KB parametrize id broke Windows. Rejected, don't reopen without new
+evidence: "KeyPolicy re-binds a shipped key when the DB URL changes" (the
+policy binds to the host declared in config.yaml, and a test covers the
+retarget case) and the Host-parsing edge cases (IP-literal and absent Host are
+allowed on purpose so an operator can never lock themselves out; `h:80:8080`
+is not a valid Host). The rebinding default stays a startup log warning, no
+banner. The integrations, DB and serve-path sections of that review had not
+arrived when this was written; verify each claim before acting on it.
+Grype on the branch head: 162 matches, identical to the first 2.5 build, none
+in app dependencies, the only fixable ones in the 3.11 interpreter
+(documented in SECURITY.md). Rescan the final image before tagging.
+
+**Parked (maintainer, 2026-09-23)**: 2.5 is complete on `release/2.5.0` and
+parked. Nothing is merged, tagged or rolled until the maintainer says so.
+
+**Test-isolation trap, third time**: core initializes lazily from
+./config.yaml + ./data, and `monkeypatch.setattr(core, "db", ...)` READS the old
+value (a lazy init). conftest now defaults CONFIG_PATH to a temp config AND
+fails the run if anything under data/ changes. In tests, patch
+`module.__dict__` via `monkeypatch.setitem`, on the live module (suites purge
+and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 

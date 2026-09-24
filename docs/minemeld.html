@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MineMeld alternative: move your threat-feed EDLs to Threat Feed Me</title>
+<meta name="description" content="MineMeld is archived. What it was used for, what Threat Feed Me covers today (threat-feed EDLs, whitelists, TAXII 2.1 in and out, non-PAN firewalls), what is on the roadmap (Office 365 and cloud allow-lists), and how to migrate PAN-OS EDLs.">
+<link rel="canonical" href="https://alexlinos.github.io/threat-feed-me/minemeld.html">
+<link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MineMeld alternative: move your threat-feed EDLs to Threat Feed Me">
+<meta property="og:description" content="What MineMeld was used for, what carries over, what doesn't yet, and how to migrate.">
+<meta property="og:url" content="https://alexlinos.github.io/threat-feed-me/minemeld.html">
+<meta property="og:image" content="https://alexlinos.github.io/threat-feed-me/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Is MineMeld still supported?", "acceptedAnswer": {"@type": "Answer", "text": "No. Palo Alto Networks ended the hosted MineMeld service in AutoFocus on 1 August 2021, and the open-source MineMeld repositories on GitHub were archived on 16 March 2023. The last release of minemeld-core was in April 2021, still on Python 2.7."}}, {"@type": "Question", "name": "What did Palo Alto Networks recommend instead?", "acceptedAnswer": {"@type": "Answer", "text": "Cortex XSOAR Threat Intel Management, which has a node-by-node migration guide, and the free EDL Hosting Service for SaaS allow-lists such as Microsoft 365, Azure, AWS and Zoom."}}, {"@type": "Question", "name": "Can Threat Feed Me replace my MineMeld threat-feed EDLs?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, for the threat-feed pipeline: it pulls open threat feeds (including DShield and Spamhaus DROP, as MineMeld's default config did) and removes duplicates, then goes a step further. Feeds that republish each other count once, so one upstream list's mistake can't look like several feeds agreeing and land on the strictest list, while two unrelated feeds agreeing still moves an IP up. It applies your whitelist and serves plain EDL URLs that PAN-OS and other firewalls poll, and it also reads and serves TAXII 2.1."}}, {"@type": "Question", "name": "Does it do the Office 365 and cloud IP-range lists MineMeld was used for?", "acceptedAnswer": {"@type": "Answer", "text": "Not yet. Allow-lists for Microsoft 365, AWS, Azure and Google Cloud are planned for version 2.6. Until then, Palo Alto's free EDL Hosting Service covers those."}}, {"@type": "Question", "name": "Is Threat Feed Me free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. It is open source under the MIT licence and runs as one Docker container on your own hardware."}}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Threat Feed Me", "applicationCategory": "SecurityApplication", "operatingSystem": "Linux (Docker), amd64 and arm64", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://opensource.org/licenses/MIT", "url": "https://alexlinos.github.io/threat-feed-me/", "codeRepository": "https://github.com/alexlinos/threat-feed-me", "description": "Open-source, on-prem threat-intelligence aggregator: free threat feeds, deduplicated and ranked by how many unrelated feeds agree, as firewall block lists (EDLs), TAXII 2.1 in and out, and publishing to CrowdSec and UniFi."}</script>
+<style>
+  :root{
+    --bg:#0e131a; --panel:#141b24; --panel-2:#10161e; --raised:#17202b;
+    --border:#1f2a37; --border-2:#2a3646;
+    --text:#e4e9f0; --text-2:#b9c4d2; --muted:#93a0b2; --dim:#7d8a9b;
+    --green:#10b981; --green-bright:#34d399; --green-deep:#11281f;
+    --purple:#a78bfa; --red:#f87171; --amber:#fbbf24;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:"Plus Jakarta Sans",Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+    --maxw:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;background:var(--bg)}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--green-bright);text-decoration:none}
+  a:hover{text-decoration:underline}
+  :focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  /* ---- top bar ---- */
+  .nav{position:sticky;top:0;z-index:10;background:rgba(14,19,26,.88);backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .nav .wrap{display:flex;align-items:center;gap:22px;height:62px}
+  .nav .brand{display:flex;align-items:center;gap:10px;color:var(--text);font-weight:800;font-size:1.05rem}
+  .nav .brand:hover{text-decoration:none}
+  .nav .brand svg{width:32px;height:32px}
+  .nav .brand .bang{color:var(--red)}
+  .nav .links{display:flex;gap:20px;margin-left:auto;font-size:.92rem}
+  .nav .links a{color:var(--muted)}
+  .nav .links a:hover{color:var(--text);text-decoration:none}
+  .nav .gh{color:var(--text);border:1px solid var(--border-2);border-radius:9px;padding:6px 12px;font-weight:600;font-size:.88rem}
+  .nav .gh:hover{border-color:var(--green);text-decoration:none}
+
+  /* ---- hero ---- */
+  header{padding:64px 0 36px;background:
+    radial-gradient(ellipse 60% 70% at 18% 40%,rgba(52,211,153,.13),transparent 70%)}
+  .hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:40px;align-items:center}
+  .kicker{display:inline-block;font-family:var(--mono);font-size:.78rem;color:var(--green-bright);
+    border:1px solid #1e4a37;border-radius:999px;padding:4px 12px;background:#0c1f17}
+  h1{margin:16px 0 14px;font-size:3.3rem;line-height:1.02;font-weight:800;letter-spacing:-.03em}
+  h1 .bang{color:var(--red)}
+  .lede{font-size:1.18rem;color:var(--text-2);margin:0;max-width:560px}
+  .lede b{color:var(--text)}
+  .hero-stage{width:100%;max-width:520px;margin-left:auto;border-radius:24px;overflow:hidden;
+    border:1px solid #1e2a36;background:#111922;aspect-ratio:3/2;box-shadow:0 24px 70px rgba(0,0,0,.35)}
+  .hero-video{display:block;width:100%;height:100%;object-fit:cover}
+  .cta-row{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0 0}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:11px;font-weight:700;font-size:.95rem;
+    border:1px solid var(--border-2)}
+  .btn:hover{text-decoration:none}
+  .btn.primary{background:var(--green-bright);color:#05180f;border-color:var(--green-bright)}
+  .btn.primary:hover{filter:brightness(1.06)}
+  .btn.ghost{color:var(--text);background:var(--panel)}
+  .btn.ghost:hover{border-color:var(--green)}
+  .chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+  .chip{font-size:.86rem;color:var(--muted);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:6px 13px}
+  .chip b{color:var(--green-bright);font-weight:650}
+  .shot{margin:44px 0 0;border-radius:16px;border:1px solid var(--border-2);overflow:hidden;
+    box-shadow:0 30px 80px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.02)}
+  .shot img{display:block;width:100%;height:auto}
+
+  /* ---- sections ---- */
+  section{padding:64px 0;border-top:1px solid var(--border)}
+  h2{font-size:1.75rem;font-weight:800;letter-spacing:-.02em;margin:0 0 8px}
+  .sub{color:var(--muted);margin:0 0 26px;font-size:1.02rem;max-width:760px}
+  .sub b{color:var(--text-2)}
+
+  /* ---- walkthrough ---- */
+  .steps{display:grid;gap:28px}
+  .step{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.4fr);gap:30px;align-items:center}
+  .step:nth-child(even){grid-template-columns:minmax(0,1.4fr) minmax(0,.8fr)}
+  .step:nth-child(even) .step-text{order:2}
+  .step-num{font-family:var(--mono);font-size:.8rem;color:var(--green-bright);letter-spacing:.08em}
+  .step h3{margin:6px 0 8px;font-size:1.3rem;font-weight:750;letter-spacing:-.01em}
+  .step p{margin:0;color:var(--muted);font-size:.98rem}
+  .step p b{color:var(--text-2)}
+  .step .shot{margin:0}
+
+  /* ---- code block ---- */
+  .code{background:#0b1016;border:1px solid var(--border-2);border-radius:14px;overflow:hidden}
+  .code-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:var(--red)} .dot.y{background:var(--amber)} .dot.g{background:var(--green-bright)}
+  .code-title{margin-left:6px;font-family:var(--mono);font-size:.8rem;color:var(--dim)}
+  .copy-btn{margin-left:auto;font-family:var(--mono);font-size:.78rem;background:var(--panel-2);color:var(--muted);
+    border:1px solid var(--border-2);border-radius:8px;padding:5px 11px;cursor:pointer;transition:.15s}
+  .copy-btn:hover,.copy-btn.done{color:var(--green-bright);border-color:var(--green)}
+  pre{margin:0;padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:.9rem;line-height:1.65;color:#d6dde6}
+  pre .c{color:var(--dim)} pre .k{color:var(--green-bright)} pre .s{color:var(--amber)}
+  .after-code{color:var(--muted);font-size:.93rem;margin-top:14px}
+  .after-code code,.scoring code{font-family:var(--mono);font-size:.85em;background:var(--panel);border:1px solid var(--border-2);
+    border-radius:6px;padding:1px 6px;color:var(--green-bright)}
+
+  /* ---- tiers ---- */
+  .tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .tier{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px}
+  .tier.med{border-color:#2b6b52;background:linear-gradient(180deg,rgba(52,211,153,.05),transparent 60%),var(--panel)}
+  .tier h3{margin:0 0 4px;font-size:1.08rem;display:flex;align-items:center;gap:8px}
+  .badge{font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:999px;color:var(--muted);background:var(--raised)}
+  .tier.med .badge{color:var(--green-bright);background:var(--green-deep)}
+  .tier p{margin:8px 0 0;color:var(--muted);font-size:.92rem}
+  .tier .url{font-family:var(--mono);font-size:.82rem;color:var(--text-2);margin-top:14px;word-break:break-all}
+  .scoring{margin:24px 0 0;color:var(--muted);font-size:.95rem;padding-left:20px}
+  .scoring li{margin:7px 0}
+  .scoring b{color:var(--text-2)}
+
+  /* ---- firewalls + cards + map ---- */
+  .fw-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .fw{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+  .fw .name{font-weight:650;color:var(--text)}
+  .fw .path{font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-top:4px;display:block}
+  .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px}
+  .card h3{margin:0 0 6px;font-size:1.05rem}
+  .card p{margin:0;color:var(--muted);font-size:.93rem}
+  .card .tag{font-family:var(--mono);font-size:.7rem;color:var(--green-bright);background:var(--green-deep);
+    border-radius:6px;padding:1px 7px;margin-left:8px;vertical-align:2px}
+  .table-wrap{overflow-x:auto}
+  .map{width:100%;border-collapse:separate;border-spacing:0;font-size:.93rem;background:var(--panel);
+    border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .map th,.map td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+  .map th{font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);font-weight:700;background:var(--panel-2)}
+  .map td:first-child{color:var(--muted);width:38%}
+  .map tr:last-child td{border-bottom:0}
+  .map code{font-family:var(--mono);font-size:.85em;color:var(--green-bright)}
+  .note{color:var(--muted);font-size:.92rem;margin-top:14px}
+  .center{text-align:center}
+  h2 .hash{display:none}
+
+  /* ---- footer ---- */
+  footer{border-top:1px solid var(--border);padding:40px 0 64px;text-align:center;color:var(--dim);font-size:.9rem}
+  footer a{color:var(--muted)}
+  footer .logo{height:34px;width:auto;margin-bottom:14px}
+
+  @media (max-width:860px){
+    .hero{grid-template-columns:1fr}
+    .hero-stage{margin:0 auto;max-width:420px;order:-1}
+    h1{font-size:2.5rem}
+    .step,.step:nth-child(even){grid-template-columns:1fr}
+    .step:nth-child(even) .step-text{order:0}
+    .nav .links{display:none}
+    .nav .gh{margin-left:auto}
+  }
+  @media (max-width:720px){
+    .cards,.tiers,.fw-grid{grid-template-columns:1fr}
+    header{padding:36px 0 20px}
+    h2{font-size:1.45rem}
+    section{padding:44px 0}
+  }
+</style>
+<style>
+  .page{padding:56px 0 20px}
+  .page h1{font-size:2.6rem}
+  .mm{display:block;color:var(--dim);font-size:.84rem;margin-top:3px}
+  .st{display:inline-block;font-size:.74rem;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+  .st-ok{color:#34d399;background:#11281f} .st-part{color:#fbbf24;background:#2a2410}
+  .st-road{color:#a78bfa;background:#1f1a33} .st-no{color:#93a0b2;background:#1b232d}
+  .cov td:nth-child(2){width:120px}
+  ol.mig{padding-left:22px;color:var(--muted)} ol.mig li{margin:10px 0} ol.mig b{color:var(--text-2)}
+  .faq dt{font-weight:700;margin-top:18px} .faq dd{margin:6px 0 0;color:var(--muted)}
+  .tm{color:var(--dim);font-size:.82rem;margin-top:10px}
+</style>
+</head>
+<body>
+<nav class="nav" aria-label="Site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><svg viewBox="0 0 128 128" aria-hidden="true"><path d="M22 74 C12 90 27 102 19 120" stroke="#0c9064" stroke-width="7" fill="none" stroke-linecap="round"/><path d="M24 101 C13 95 6 99 3 107 C13 111 20 108 24 101 Z" fill="#0c9064"/><g transform="translate(24 60)"><g transform="rotate(-10)"><path d="M0 0 C-7 -10 -1 -24 14 -30 C40 -40 70 -32 84 -8 L86 0 L79 8 L72 0 L65 8 L58 0 L51 8 L44 0 L37 8 L30 0 L23 7 L16 0 Z" fill="#10b981"/></g><g transform="rotate(10)"><path d="M0 0 C-7 10 -1 24 14 30 C40 40 70 32 84 8 L86 0 L80 0 L73 -8 L66 0 L59 -8 L52 0 L45 -8 L38 0 L31 -8 L24 0 L16 0 Z" fill="#0c9064"/></g></g><circle cx="117" cy="60" r="6.5" fill="#f87171"/></svg><span>Threat Feed Me<span class="bang">!</span></span></a>
+    <div class="links"><a href="index.html#walkthrough">Walkthrough</a><a href="minemeld.html">From MineMeld</a><a href="#migrate">Migrate</a><a href="index.html#tiers">Tiers</a><a href="index.html#delivery">Integrations</a></div>
+    <a class="gh" href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">GitHub →</a>
+  </div>
+</nav>
+
+<header class="page">
+  <div class="wrap">
+    <span class="kicker">Migration guide</span>
+    <h1>Life after MineMeld</h1>
+    <p class="lede">MineMeld's hosted service ended on 1 August 2021 and its open-source repositories were archived
+      on 16 March 2023, still on Python 2.7. If you ran it to turn open threat feeds into firewall EDLs, Threat Feed
+      Me does that job, on current software, in one container. This page is specific about what carries over and
+      what doesn't yet.</p>
+  </div>
+</header>
+
+<main>
+  <section id="coverage">
+    <div class="wrap">
+      <h2>What MineMeld was used for, and where Threat Feed Me stands</h2>
+      <p class="sub">Ranked roughly by how often each use comes up in MineMeld's forums, docs and issue tracker.</p>
+      <div class="table-wrap">
+      <table class="map cov">
+        <thead><tr><th>Use</th><th>Status</th><th>Threat Feed Me</th></tr></thead>
+        <tbody>
+          <tr><td><b>Open threat feeds into confidence-tiered EDLs</b><span class="mm">The default config's DShield + Spamhaus DROP/EDROP aggregators with high / medium / low outputs</span></td><td><span class="st st-ok">Covered</span></td><td>22 keyless feeds built in (DShield and Spamhaus DROP among them). Duplicates are removed, feeds that copy each other count once, and IPs are sorted into High / Medium / Everything by how many unrelated feeds agree</td></tr>
+          <tr><td><b>Whitelists</b><span class="mm">Whitelist nodes in the graph</span></td><td><span class="st st-ok">Covered</span></td><td>IPs, CIDRs, domains and <code>*.wildcards</code>, everywhere or per tier; flagging a false positive lowers the reporting feed's weight</td></tr>
+          <tr><td><b>TAXII / STIX feeds in</b><span class="mm">TAXII 1.x miners for ISAC, AIS and vendor feeds</span></td><td><span class="st st-part">Partly</span></td><td>TAXII <b>2.1</b> collections as feeds (MISP, OpenCTI, any 2.1 server); only unconditional indicator patterns are read. TAXII 1.x is not supported</td></tr>
+          <tr><td><b>TAXII out to a SIEM</b><span class="mm">TAXII DataFeed output (STIX 1.x)</span></td><td><span class="st st-ok">Covered</span></td><td>Read-only TAXII 2.1 server of STIX 2.1 Indicators: six collections mirroring the list URLs</td></tr>
+          <tr><td><b>EDLs for PAN-OS and other firewalls</b><span class="mm">EDL output nodes</span></td><td><span class="st st-ok">Covered</span></td><td>Plain one-per-line lists that PAN-OS External Dynamic Lists take as-is, plus FortiGate, Check Point, Cisco, Sophos, SonicWall, pfSense, OPNsense, Pi-hole; add <code>?limit=N</code> to get only the N strongest entries when a firewall limits list size</td></tr>
+          <tr><td><b>Manual and incident-response lists</b><span class="mm">localDB miner with an API and automatic aging</span></td><td><span class="st st-part">Partly</span></td><td>Add or remove indicators from the dashboard or API; manual entries never age out on their own (no per-entry expiry yet)</td></tr>
+          <tr><td><b>Office 365 / Microsoft 365 allow-lists</b><span class="mm">The O365 miner (the most-published MineMeld article)</span></td><td><span class="st st-road">2.6 roadmap</span></td><td>Planned for 2.6 as application lists, kept separate from threat scoring. Until then: Palo Alto's EDL Hosting Service</td></tr>
+          <tr><td><b>AWS, Azure and Google Cloud IP ranges</b><span class="mm">Cloud-provider miners with region and service filters</span></td><td><span class="st st-road">2.6 roadmap</span></td><td>Planned for 2.6 with the application lists</td></tr>
+          <tr><td><b>Commercial feeds</b><span class="mm">AutoFocus, Recorded Future, Anomali, ThreatQ nodes</span></td><td><span class="st st-part">Partly</span></td><td>Any source that serves TAXII 2.1 or a plain list; AlienVault OTX and HoneyDB are built in. No vendor-specific connectors</td></tr>
+          <tr><td><b>Output to SIEM and other tools</b><span class="mm">Splunk app, Logstash, CEF, Microsoft Graph Security API</span></td><td><span class="st st-part">Partly</span></td><td>TAXII 2.1 (Sentinel's TAXII connector, Splunk, QRadar, OpenCTI) plus CSV and JSON lists; no Graph API or CEF push</td></tr>
+          <tr><td><b>Pushing to devices that can't poll</b><span class="mm">DAGPusher (PAN-OS User-ID / Dynamic Address Groups)</span></td><td><span class="st st-part">Partly</span></td><td>Pushes to CrowdSec bouncers and UniFi gateways; no PAN-OS Dynamic Address Group push</td></tr>
+          <tr><td><b>Syslog-driven lists</b><span class="mm">Syslog miner and matcher</span></td><td><span class="st st-no">Not planned</span></td><td>Not planned</td></tr>
+          <tr><td><b>Custom processing graphs</b><span class="mm">Wire miners, processors and outputs yourself</span></td><td><span class="st st-no">Not planned</span></td><td>By design: add a feed and it votes; there is no graph to maintain</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="note">Already on Cortex XSOAR? Its Threat Intel Management is Palo Alto Networks' own successor and has
+        a node-by-node migration guide. Only need the SaaS allow-lists? Palo Alto's free EDL Hosting Service covers
+        those today. Threat Feed Me is for the open-source, on-prem threat-feed pipeline.</p>
+    </div>
+  </section>
+
+  <section id="migrate">
+    <div class="wrap">
+      <h2>Migrating PAN-OS EDLs</h2>
+      <ol class="mig">
+        <li><b>Run it:</b> <code>docker run -d --name threat-feed-me -p 8080:8080 -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest</code>.
+          The first fetch of all 22 feeds takes one to three minutes; the dashboard's set-up guide shows progress.</li>
+        <li><b>Swap the EDL source:</b> in PAN-OS, <i>Objects → External Dynamic Lists</i>, edit each list that pointed
+          at a MineMeld output and paste the matching URL: <code>/feeds/high.txt</code>, <code>/feeds/medium.txt</code>
+          or <code>/feeds/all.txt</code> as an <i>IP List</i>, and <code>/feeds/domains/…</code> as a <i>Domain List</i>.
+          Medium is the usual choice. If your model limits how many entries one list can hold, add
+          <code>?limit=N</code> to get only the N strongest, so the list fits instead of being cut off.</li>
+        <li><b>Carry your whitelist over:</b> the entries from your MineMeld whitelist nodes go in on the Indicators page
+          (or <code>POST /api/whitelist</code>): IPs, CIDRs, domains or <code>*.wildcards</code>, everywhere or per tier.</li>
+        <li><b>Bring your TAXII feeds:</b> if your ISAC or TIP serves TAXII 2.1, add each collection as a feed
+          (format <i>TAXII 2.1 collection</i>). TAXII 1.x sources need a 2.1 bridge.</li>
+        <li><b>Point your SIEM at TAXII 2.1:</b> the Connect view shows the discovery URL (<code>/taxii2/</code>).</li>
+        <li><b>Check it's being pulled:</b> each list URL on the dashboard shows when it was last polled and by what,
+          so a typo in the EDL URL shows up as <i>not polled yet</i> instead of failing silently.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <h2>Questions</h2>
+      <dl class="faq">
+        <dt>Is MineMeld still supported?</dt><dd>No. Palo Alto Networks ended the hosted MineMeld service in AutoFocus on 1 August 2021, and the open-source MineMeld repositories on GitHub were archived on 16 March 2023. The last release of minemeld-core was in April 2021, still on Python 2.7.</dd>
+        <dt>What did Palo Alto Networks recommend instead?</dt><dd>Cortex XSOAR Threat Intel Management, which has a node-by-node migration guide, and the free EDL Hosting Service for SaaS allow-lists such as Microsoft 365, Azure, AWS and Zoom.</dd>
+        <dt>Can Threat Feed Me replace my MineMeld threat-feed EDLs?</dt><dd>Yes, for the threat-feed pipeline: it pulls open threat feeds (including DShield and Spamhaus DROP, as MineMeld's default config did) and removes duplicates, then goes a step further. Feeds that republish each other count once, so one upstream list's mistake can't look like several feeds agreeing and land on the strictest list, while two unrelated feeds agreeing still moves an IP up. It applies your whitelist and serves plain EDL URLs that PAN-OS and other firewalls poll, and it also reads and serves TAXII 2.1.</dd>
+        <dt>Does it do the Office 365 and cloud IP-range lists MineMeld was used for?</dt><dd>Not yet. Allow-lists for Microsoft 365, AWS, Azure and Google Cloud are planned for version 2.6. Until then, Palo Alto's free EDL Hosting Service covers those.</dd>
+        <dt>Is Threat Feed Me free?</dt><dd>Yes. It is open source under the MIT licence and runs as one Docker container on your own hardware.</dd>
+      </dl>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <img class="logo" src="assets/logo.svg" alt="Threat Feed Me!">
+    <div>Free &amp; open source (MIT) · <a href="https://github.com/alexlinos/threat-feed-me" target="_blank" rel="noopener">github.com/alexlinos/threat-feed-me</a></div>
+    <p class="tm">MineMeld, PAN-OS, AutoFocus and Cortex XSOAR are trademarks of Palo Alto Networks, Inc. Threat Feed Me is an
+      independent open-source project, not affiliated with or endorsed by Palo Alto Networks. Product names are used
+      only to describe compatibility.</p>
+  </div>
+</footer>
+</body>
+</html>

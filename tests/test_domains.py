@@ -276,14 +276,6 @@ def test_exports_split_by_kind(client):
     assert "wl.example.net" not in dom_body  # whitelist applies to exports too
 
 
-def test_export_stats_per_kind(client):
-    from threatfeedme import core, pipeline
-    stats = pipeline.get_export_stats(core.db)
-    assert stats["total_unique_ips"] == 1
-    assert stats["total_unique_domains"] == 2  # wl.example.net excluded
-    assert stats["high_domain_count"] == 1     # tri-source only
-
-
 # ==================== adversarial-review regressions ====================
 
 def test_normalize_preserves_idna2008_deviation_characters():

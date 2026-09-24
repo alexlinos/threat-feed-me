@@ -9,8 +9,9 @@ set -u
 # Initialize the database schema ONCE, synchronously, before the pipeline and
 # the dashboard open it concurrently. This avoids a first-run migration race
 # (both processes attempting the legacy whitelist migration at the same time).
-python -c "from threatfeedme.core import load_config; from threatfeedme.database import Database; \
-c = load_config(); Database(c.get('database', {}).get('path', './data/threatfeedme.db'))" \
-    || echo "Schema init warning (continuing)" >&2
+# --init-db logs its migration progress and serves a "starting" holding page on
+# the dashboard port while it runs (a first start after an upgrade can take
+# minutes on a large database).
+python -m threatfeedme.main --init-db || echo "Schema init warning (continuing)" >&2
 
 exec python -m threatfeedme.main --serve

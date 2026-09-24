@@ -12,7 +12,8 @@ prefer otherwise.
 
 Only the **latest release** (`alexlinos/threat-feed-me:latest`) receives
 fixes. There are no maintenance branches; upgrading is designed to be safe
-(data survives on the volume, migrations are additive).
+(data survives on the volume; migrations run once on first start and
+keep your data, e.g. 2.5.0 moves the churn log into its own file).
 
 ## Security model — read this before deploying
 
@@ -22,6 +23,8 @@ boundaries are deliberate and worth understanding:
 | Surface | Posture | Why |
 |---|---|---|
 | Feed URLs (`/feeds/*`) | **Unauthenticated, by design** | Firewalls polling a block list cannot present credentials. Treat the feed content as non-secret. |
+| TAXII 2.1 (`/taxii2/*`) | **Unauthenticated, read-only, by design** | The same content as `/feeds/*` for SIEM/TIP subscribers, with the same whitelist rules; no write endpoints exist. |
+| Startup holding page | **Unauthenticated, static** | While a first start or an upgrade migrates the database, a stdlib server on the dashboard's port answers every request with one fixed 503 page (`Retry-After: 30`, `no-store`). It echoes nothing from the request, loads nothing external, and closes before the app binds the port. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
 | Dashboard + mutating API | Optional HTTP Basic auth — setting both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
 | TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
@@ -34,8 +37,9 @@ What the software stores, sends and logs, and to whom, is documented in
 
 ## Hardening measures in place
 
-Verified in code review (adversarial passes, 2026-08 and 2026-09; the
-2026-09 review's fixes shipped in v2.4.19):
+Verified in code review (adversarial passes, 2026-08 and 2026-09, plus an
+external review of the 2.5.0 branch on 2026-09-24; the fixes shipped in
+v2.4.19 and v2.5.0):
 
 - **Container runs as a non-root user** (`appuser`), single process, no shell
   services.
@@ -43,13 +47,57 @@ Verified in code review (adversarial passes, 2026-08 and 2026-09; the
   internal constants (migration column names, placeholder counts), never
   request input.
 - **Uploads** are size-capped (5 MB), text-only, validated to contain at
-  least one IP/CIDR, and the storage path is `realpath`-resolved and
-  containment-checked so a crafted filename or symlink cannot escape the
+  least one valid entry of the feed's declared kind (IP/CIDR or domain),
+  and the storage path is `realpath`-resolved and containment-checked so a crafted filename or symlink cannot escape the
   upload directory.
 - **SSRF guard**: remote feed URLs whose host resolves to private/internal
   address space are refused (`safety.allow_private_feed_urls: false` by
   default), so a dashboard user cannot point a "feed" at cloud metadata or
-  internal hosts.
+  internal hosts. Since v2.5.0 the check is pinned to the connection: each
+  hop resolves once, the addresses are validated, and the socket connects to
+  exactly the validated address, so a DNS-rebinding host cannot answer
+  public at check time and private at connect time. Adding a feed also runs
+  the check up front, refusing an internal URL with a reason. While the guard
+  is on, `HTTP(S)_PROXY` / `ALL_PROXY` are ignored for feed fetches: through a
+  proxy the pin would check the proxy's address and the proxy would
+  re-resolve the target itself (external review, 2026-09-24). Installs that
+  set `allow_private_feed_urls` have no guard to protect and keep their proxy.
+- **TAXII 2.1 collections added as feeds** (v2.5.0) use the same guarded
+  fetch path: SSRF pin, hop-by-hop redirects, capped reads, and a key that
+  must be a `TFM_FEED_*` variable sent only to the collection's origin.
+  A read is bounded (250 pages of 1,000 objects, 250,000 objects in all),
+  and one cut short by the cap fails instead of recording mass removals.
+  Only STIX Indicators with unconditional patterns are taken; revoked,
+  expired and `benign` ones are dropped, and a condition such as "this IP
+  AND this port" is skipped rather than widened into a bare IP block.
+- **Host-header allowlist** (v2.5.0, opt-in): switched on, the dashboard
+  and API answer only to hostnames you allow, which stops DNS-rebinding
+  pages in a LAN browser from driving the API. **Off by default and after an
+  upgrade**: it refuses nothing until the operator turns on *Only answer to
+  these names* (set-up guide or System) or sets `TFM_ALLOWED_HOSTS`. While
+  off it only records which names reach the dashboard (in memory). Saving a
+  name and enforcing are separate, so the guide can save a DNS name before
+  its record exists without refusing anything; its *Check & add* does a DNS
+  lookup only (no connection), of a syntactically valid hostname, behind
+  auth and the CSRF check, with a 3-second timeout. IP literals and
+  localhost always work, the name the switching request arrived on is kept,
+  and `/feeds`, `/taxii2`, `/healthz` and static files are exempt so
+  firewalls and SIEMs keep polling. We recommend switching it on once the
+  names you use are listed.
+- **Request bodies are capped** before authentication (1 MB, 6 MB for list
+  uploads), by declared length and by counting streamed bytes.
+- **Least privilege in the image** (v2.5.0): the runtime user owns only
+  `data/` and `output/`; application code and config are read-only to it,
+  and the `.env` temp file is created 0600.
+- **CrowdSec credentials are bound to the LAPI** (v2.5.0): the machine login
+  and bouncer key are sent only to the configured LAPI, never along a
+  redirect or through an environment proxy, and are cleared when the LAPI
+  address changes. The LAPI is an operator-configured LAN service, so the
+  crowdsec scrapers are exempt from the feed SSRF guard for exactly that
+  host; feed URLs cannot retarget the key (the scraper takes host and path
+  from the integration, not the feed), and no feed may name the CrowdSec
+  variables as its key. Decisions threat-feed-me published are excluded
+  from the pull, so the tool can never corroborate itself.
 - **Output safety filters**: any entry that *overlaps* IANA special-purpose
   space (RFC1918, CGNAT, loopback, link-local, multicast, documentation,
   IPv4-mapped/NAT64/ULA and other IPv6 special ranges) is refused, as are
@@ -113,9 +161,9 @@ total (and the Critical count in particular) is misleading without this split:
 |---|---|
 | **App dependencies** (`requests`, `fastapi`, `python-multipart`, …) | Pinned in `requirements.txt` **and** `pyproject.toml`, bumped promptly when an advisory affects a version we ship. This is the surface we own. |
 | **Base OS packages with a fix available** (openssl, util-linux, …) | The Dockerfile runs `apt-get upgrade` at build, so a freshly built or pulled image carries the current Debian security fixes — rebuild/repull to refresh them. |
-| **The Python interpreter** (`python` 3.11.x in the base image) | Built into `python:3.11-slim`, not installed by apt, so `apt-get upgrade` can't patch it. Grype may report a fix that exists only in a newer 3.11 patch release; it arrives when the upstream image publishes that release, and the Dockerfile's floating `python:3.11-slim` tag picks it up on the next build. (v2.4.19 was scanned against 3.11.16, then the newest published.) |
+| **The Python interpreter** (`python` 3.11.x in the base image) | Built into `python:3.11-slim`, not installed by apt, so `apt-get upgrade` can't patch it. Grype may report a fix that exists only in a newer 3.11 patch release; it arrives when the upstream image publishes that release, and the Dockerfile's floating `python:3.11-slim` tag picks it up on the next build. (v2.4.19 and v2.5.0 were scanned against 3.11.16, the newest published; at v2.5.0 these interpreter entries were the only findings with a fix available anywhere in the image.) |
 | **Base OS packages marked `wont-fix` / `not-fixed`** (perl-base, libc, …) | Debian's decision, present in essentially every Debian-based image. Several — e.g. all the perl CVEs — are **not reachable**: perl is never invoked by the application. Driving these to zero requires a different base image (distroless/alpine), a trade-off we have not taken. |
-| **Build tooling** (pip, setuptools, wheel) | Present in the image but not part of the runtime attack surface — the service never installs packages at runtime. |
+| **Build tooling** (pip, setuptools, wheel) | Present in the image but not part of the runtime attack surface: the service never installs packages at runtime. Since v2.5.0 the Dockerfile upgrades them past their advisories anyway, so a scan of a fresh build shows none. |
 
 If you believe a finding is reachable and exploitable, report it via the
 private vulnerability process at the top of this file — please include why
@@ -126,6 +174,19 @@ you believe it is reachable, not just the CVE id.
 - No rate limiting or brute-force lockout on Basic auth — front with a
   reverse proxy if you need either.
 - Basic auth is the only built-in dashboard authentication (no OIDC/SSO).
+- The UniFi gateway and CrowdSec LAPI are LAN hosts set from the dashboard,
+  so anyone who can use the dashboard can point those integrations (and
+  the credentials you saved for them, until the address change clears
+  them) at a LAN host. Enable dashboard auth where that matters.
+- With dashboard auth AND the host check both off (the defaults), a web
+  page opened by anyone on your network can drive the dashboard through DNS
+  rebinding: the browser treats the rebound page as same-origin, so the CSRF
+  header check doesn't stop it. The app logs a warning on every start in
+  that state. Set `DASHBOARD_USER`/`DASHBOARD_PASSWORD`, or switch on the
+  host check once the names you use are listed.
+- Credentials you save from the dashboard live in plain text in the data
+  volume's `.env` (created 0600 on Linux; Windows ignores that mode).
+  Protect the volume like any file holding secrets.
 - Feed endpoints intentionally leak the block list to anyone who can reach
   the port; if that matters on your network, restrict reachability at the
   firewall.
