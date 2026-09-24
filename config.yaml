@@ -72,7 +72,9 @@ feeds:
     url: https://openphish.com/feed.txt
     feed_type: "threat_intel"
     indicator_kind: "domain"
-    update_interval: 900
+    # Hourly (2.5.1, was 15 min): every due fetch triggers a full rescore,
+    # and a 250-entry list refetched four times an hour mostly churned CPU.
+    update_interval: 3600
 
   # HaGeZi's Threat Intelligence Feeds, MINI variant. The design-doc URL
   # (domain/threat-intelligence.txt) 404s — the list lives under wildcard/
@@ -184,14 +186,16 @@ feeds:
   # dshield_block scraper so the real /24 prefixes drive overlap scoring.
   # The 30-minute interval + conditional GET (mostly 304s) approximates
   # FireHOL's dshield_1d, which is this same list polled frequently with a
-  # rolling 1-day union — our 30-day retention keeps blocks that rotate out
-  # of the top-20, so the union accumulates here too.
+  # rolling 1-day union — our retention (14 days) keeps blocks that rotate
+  # out of the top-20, so the union accumulates here too. Polled hourly since
+  # 2.5.1 (was 30 min): each fetch costs a full rescore, and a block in the
+  # top 20 for under an hour is the only thing the longer gap can miss.
   # NOTE: emerging_threats_block also incorporates DShield data — agreement
   # between the two is not fully independent evidence.
   - name: dshield_block
     url: https://www.dshield.org/block.txt
     feed_type: "threat_intel"
-    update_interval: 1800
+    update_interval: 3600
     scraper: dshield_block
 
   # --- Spamhaus DROP (hijacked/leased netblocks, netblock-shaped) --------
