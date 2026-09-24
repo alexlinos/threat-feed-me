@@ -18,7 +18,7 @@ published compose file). Nothing is written anywhere else.
 
 | Data | What it contains | Where | Retention |
 |---|---|---|---|
-| Indicators | IP addresses, CIDR ranges and domain names published by the threat feeds you enable, with first-seen, last-seen, per-feed membership, confidence score and tier. If you run the optional offline predictor, an IP's row also carries a derived recurrence probability (`predictive_score`) in its metadata — a number computed from your own churn log, not personal data and never sent anywhere | `indicators`, `indicator_sources` tables | Kept until `max_age_days` after the indicator was last seen in any feed (default 7 days; `0` keeps forever). Editable from the dashboard. |
+| Indicators | IP addresses, CIDR ranges and domain names published by the threat feeds you enable, with first-seen, last-seen, per-feed membership, confidence score and tier. If you run the optional offline predictor, an IP's row also carries a derived recurrence probability (`predictive_score`) in its metadata — a number computed from your own churn log, not personal data and never sent anywhere | `indicators`, `indicator_sources` tables | Kept until `max_age_days` after the indicator was last seen in any feed (default 14 days since v2.5.0, 7 before; `0` keeps forever). Editable from the dashboard. |
 | Sightings log | Arrival and departure transitions of each indicator per feed, with a timestamp. Used for churn statistics and the optional predictor | `sightings`, `source_state` | Transitions only, bounded by the live corpus. Feeds listed under `retention.churn_log_exclude` are not logged. |
 | Vote grace | For each indicator a feed recently dropped: the feed name, the indicator and when it was dropped, so the feed's vote lasts `scoring.vote_grace_days` after the drop. Recorded for every feed, including `churn_log_exclude` ones | `source_left`, `source_seeded` | Pruned to the grace window (default 3 days) on every refresh; `source_seeded` holds one row per feed name. |
 | Feed telemetry | Per-feed fetch times, counts, HTTP status, overlap and reputation metrics | `feeds`, `feed_stats`, `deleted_feeds` | Until the feed is deleted, then a tombstone with the name only |
@@ -134,7 +134,7 @@ Basic auth credentials are not logged.
 
 - You decide which feeds to enable, and so which providers see your
   server's address and receive your keys.
-- You decide retention. The default of 7 days after last sighting is a
+- You decide retention. The default of 14 days after last sighting is a
   balance between useful history and not holding addresses longer than you
   need them.
 - Whitelist reasons and the `added_by` label are free text you type. Keep

@@ -191,7 +191,7 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
   feeds from the dashboard, including your own custom URL or local-file feeds
 - **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
   demand, set the auto-refresh interval (default 60 minutes), and set how long
-  an IP is kept after it drops out of every feed (default 7 days; `0` = keep
+  an IP is kept after it drops out of every feed (default 14 days; `0` = keep
   forever), all from the dashboard's System view, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
 - **Confidence Scoring**: High/Medium/Low tiers based on:
@@ -594,8 +594,9 @@ The container is built to fit NAS-class hosts with 1-2 GB of RAM:
   Synology Container Manager UI).
 - If you don't consume the CSV/JSON exports, set `output.formats: [text]` in
   `config.yaml`, which cuts export work by two thirds.
-- The default 7-day retention keeps the database lean; lower
-  `retention.max_age_days` (dashboard System view) if disk or memory is tight.
+- Retention defaults to 14 days (it gives the optional predictor the history
+  it learns from); lower `retention.max_age_days` (dashboard System view) to 7
+  if disk or memory is tight and you don't run the predictor.
 
 ## Upgrading
 
@@ -640,6 +641,12 @@ automatically on startup:
   indicators that left were mostly corroborated only by feeds that stopped
   listing them days earlier. Set `scoring.votes_require_current_listing: false`
   to keep the old behaviour.
+- **Retention default is now 14 days (was 7).** If you never changed *Keep
+  entries for*, your install moves to 14 on upgrade: an IP no feed lists any
+  more stays in the Everything lists for up to 14 days instead of 7 (on one
+  production install that was about 18% more IPs in Everything; High, Medium
+  and the domain lists were unaffected). It gives the predictor the history it
+  learns from. Want the old behaviour? Set 7 under System → Keep entries for.
 - **Dashboard hostnames (off until you switch it on).** A Host-header
   allowlist can lock the dashboard to the names you use, which stops a
   malicious web page from reaching it through DNS rebinding. **An upgrade
@@ -689,7 +696,7 @@ Edit `config.yaml` to customize:
 - Confidence scoring weights
 - Whitelist rules
 - Export formats and paths
-- **Retention** (`retention.max_age_days`, default **7**), how long an IP is
+- **Retention** (`retention.max_age_days`, default **14**), how long an IP is
   kept after it was last seen in *any* feed. Because `last_seen` is refreshed
   whenever any feed re-reports an IP, this mostly evicts transient high-churn
   entries (scanners, brute-force) while continuously-listed feeds stay put. Set

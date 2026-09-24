@@ -541,8 +541,16 @@ retention:
   # (Spamhaus, Talos, ...) are effectively immune. 0 = keep forever.
   #
   # This is the seed default only. The live value is editable at runtime from the
-  # dashboard (Feeds toolbar) and stored in the DB, which then takes precedence.
-  max_age_days: 7
+  # dashboard (System view) and stored in the DB, which then takes precedence.
+  #
+  # 14 since v2.5.0 (was 7): the predictor learns from IPs that leave every feed
+  # and come back, and an IP whose row was already purged returns looking brand
+  # new, history gone. 14 is also what prod runs and what the predictor's
+  # honest backtest was measured on. The cost is Everything only: a dropped IP
+  # stays at the lowest tier until purged (its votes end after the vote grace),
+  # measured on prod 2026-09-24 as ~18% of IP Everything; High and Medium are
+  # unaffected because votes expire after scoring.vote_grace_days regardless.
+  max_age_days: 14
 
   # Feeds whose churn transitions are NOT logged to `sightings`. A
   # wholesale-rotating feed (list rewrites nearly every refresh) makes its

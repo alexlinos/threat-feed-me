@@ -252,7 +252,7 @@ def get_export_stats(db: Database) -> Dict:
 # ---- Retention ----
 
 RETENTION_MAX_AGE_KEY = "retention_max_age_days"
-DEFAULT_RETENTION_DAYS = 7  # fallback if neither the DB setting nor config sets it
+DEFAULT_RETENTION_DAYS = 14  # fallback if neither the DB setting nor config sets it (see config.yaml)
 
 # Settings key holding the scoring-input fingerprint (scoring_input_key) as of
 # the last rescore, so run_refresh can skip the full recompute when nothing
