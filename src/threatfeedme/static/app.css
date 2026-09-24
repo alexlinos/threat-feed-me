@@ -412,6 +412,8 @@ html[data-view="system"] #view-system { display:block; }
 .name-result .ok { color:var(--accent-hi); }
 .name-result .warn { color:var(--amber); }
 .name-result code { word-break:break-all; }
+#signin-panel .warn-text { color:var(--amber); }
+.signin-form { margin-top:10px; }
 .enforce-row { display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:13.5px; color:var(--muted); }
 .enforce-row .switch { margin-top:1px; flex:none; }
 .enforce-row b { color:var(--ink); }

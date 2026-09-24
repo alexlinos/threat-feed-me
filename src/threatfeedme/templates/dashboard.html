@@ -198,7 +198,7 @@
                 {# "Is my firewall actually polling this?" A typo'd URL fails
                    silently on most firewalls; this line is the only proof. #}
                 <span class="polled{% if not cell.polled %} never{% endif %}"
-                      title="{% if cell.polled %}{{ '{:,}'.format(cell.polled.count) }} fetches recorded{% else %}Nothing has fetched this URL yet{% endif %}"><i aria-hidden="true"></i>{{ polled(cell.polled) }}</span>
+                      title="{% if cell.polled %}{{ '{:,}'.format(cell.polled.count) }} fetch{{ 'es' if cell.polled.count != 1 }} recorded; last User-Agent: {{ cell.polled.agent or 'none' }}{% else %}Nothing has fetched this URL yet{% endif %}"><i aria-hidden="true"></i>{{ polled(cell.polled) }}</span>
             </div>
         </article>
         {% endfor %}{% endfor %}
@@ -587,6 +587,43 @@
         {# Host check (DNS-rebinding allowlist). Report-only until LOCKED;
            names can be saved without locking (the guide does exactly that).
            Hostnames shown here come from request headers: app.js escapes. #}
+        {# Dashboard sign-in (v2.5.1): set from here, stored as a salted scrypt
+           hash; the server environment wins; see routers/system.py. #}
+        {% set a = system.auth %}
+        <div class="panel card wide" id="signin-panel">
+            <h2 class="card-title">Dashboard sign-in</h2>
+            {% if a.source == 'env' %}
+            <p><b>On:</b> set by the server's environment (<code>DASHBOARD_USER</code> /
+               <code>DASHBOARD_PASSWORD</code>). Change it there.</p>
+            {% else %}
+            <p>{% if a.source == 'dashboard' %}<b>On:</b> signed in as <code>{{ a.username }}</code>.
+               Change the username or password below.
+               {% else %}<b class="warn-text">Off:</b> anyone who can reach this page can change feeds and the
+               whitelist. Set a username and password to require a sign-in.{% endif %}</p>
+            {% if a.bootstrap_ok %}
+            <form class="name-form signin-form" onsubmit="return saveSignin(event)">
+                <input id="si-user" class="text-input" type="text" autocomplete="username" required maxlength="64"
+                       value="{{ a.username or '' }}" placeholder="Username" aria-label="Username">
+                <input id="si-pass" class="text-input" type="password" autocomplete="new-password" required
+                       minlength="{{ a.min_password }}" maxlength="128"
+                       placeholder="New password ({{ a.min_password }}+ characters)" aria-label="New password">
+                <input id="si-pass2" class="text-input" type="password" autocomplete="new-password" required
+                       placeholder="Repeat the new password" aria-label="Repeat the new password">
+                {% if a.source == 'dashboard' %}<input id="si-current" class="text-input" type="password"
+                       autocomplete="current-password" required placeholder="Current password"
+                       aria-label="Current password">{% endif %}
+                <button class="mini-btn" type="submit">Save sign-in</button>
+            </form>
+            <div class="name-result" id="si-result" role="status" aria-live="polite"></div>
+            <p class="hint">Stored as a salted hash, never the password itself. Locked out? On the server run
+               <code>docker exec threat-feed-me python -m threatfeedme.main --reset-dashboard-auth</code>.</p>
+            {% else %}
+            <p class="hint">To set the first password, open this page by the server's IP address, or add the
+               name you're using under Dashboard hostnames first. This stops another website that tricks your
+               browser into reaching this page from setting a password you don't know.</p>
+            {% endif %}
+            {% endif %}
+        </div>
         <div class="panel card wide" id="hostnames-panel">
             <h2 class="card-title">Dashboard hostnames</h2>
             <p class="hint">Locking the dashboard to the names you use stops other websites reaching it through

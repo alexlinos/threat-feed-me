@@ -182,3 +182,10 @@ def test_an_in_place_tier_change_moves_the_serve_fingerprint(tmp_path):
     before = db.serve_fingerprint()
     db.set_indicator_score("198.51.100.7", 0.9, "high")
     assert db.serve_fingerprint() != before
+
+
+def test_fortigates_default_user_agent_is_labelled_fortigate():
+    # FortiOS external connectors send curl/7.58.0 unless set otherwise
+    from threatfeedme import polls
+    assert polls.agent_label("curl/7.58.0") == "FortiGate"
+    assert polls.agent_label("curl/8.5.0") == "curl"

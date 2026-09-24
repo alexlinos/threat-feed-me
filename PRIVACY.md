@@ -24,7 +24,7 @@ published compose file). Nothing is written anywhere else.
 | Feed telemetry | Per-feed fetch times, counts, HTTP status, overlap and reputation metrics | `feeds`, `feed_stats`, `deleted_feeds` | Until the feed is deleted, then a tombstone with the name only |
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
-| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved and whether the host check is switched on, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
+| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved whether the host check is switched on, the dashboard sign-in set on the System page (the username and a salted scrypt hash of the password, never the password itself), and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
 | Hostnames seen | The hostnames (from the `Host` header) the dashboard has been reached by, with a count and first/last time, so the System view can offer them for the host check. No client IP address. Capped at 200 names | Memory only, never written to disk | Until the process restarts |
 | Feed polls | Per served feed URL and TAXII collection: when it was last fetched, how many times, and the fetching client's User-Agent (truncated), so the dashboard can show "polled 3m ago by FortiGate". No client IP address | `settings` (`feed_polls`) | Overwritten on every poll; one entry per URL |
 | Uploaded lists | Custom indicator lists you upload through the dashboard, as text files | `uploads/` under the data directory | Until you delete the feed |
@@ -113,7 +113,7 @@ CrowdSec LAPI: the software works normally behind it.
 | `/taxii2/*` | None, by design | The same block lists as `/feeds/*`, as STIX 2.1 Indicators over TAXII 2.1 (read-only), each with its confidence, tier and the names of the feeds that reported it. For SIEM and threat-intel platforms that subscribe rather than poll a text file. |
 | Startup holding page | None | Only while a first start or an upgrade migrates the database: every request to the dashboard port gets the same static "starting up" page with a 503. It reads nothing from the request and logs nothing. |
 | `/healthz` | None | Returns `{"ok": true}` and nothing else. |
-| Dashboard and `/api/*` | Optional HTTP Basic auth (`DASHBOARD_USER`, `DASHBOARD_PASSWORD`, `dashboard.auth_required: true`) | Open by default for a trusted LAN. Enable auth on any network you do not fully trust, and do not expose it to the internet. |
+| Dashboard and `/api/*` | Optional HTTP Basic auth: a sign-in set under System, or `DASHBOARD_USER` + `DASHBOARD_PASSWORD` (which win), or `dashboard.auth_required: true` | Open by default for a trusted LAN. Enable auth on any network you do not fully trust, and do not expose it to the internet. |
 
 **Access logs.** The web server (uvicorn) writes its default access log to
 standard output: the client IP address, request path, status code and

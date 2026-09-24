@@ -134,6 +134,7 @@ def _system_info(request: Request, poll_log: dict) -> dict:
         },
         "vote_grace_days": vote_grace_days(core.config) if current_votes_enabled(core.config) else None,
         "retention_days": retention_max_age_days(core.db, core.config),
+        "auth": _dashboard_auth_status(request),
         "taxii_url": f"{_feed_base(request)}/taxii2/",
         "taxii_polls": [{"collection": c, "age": _age_text(v.get("at")),
                          "by": polls.agent_label(v.get("agent", ""))} for c, v in taxii_polls[:6]],
@@ -307,7 +308,8 @@ def dashboard(request: Request, _=Depends(require_auth)):
             return None
         last = max(hits, key=lambda e: e.get("at", ""))
         return {"age_min": polls.age_minutes(last), "by": polls.agent_label(last.get("agent", "")),
-                "count": sum(int(e.get("count", 0)) for e in hits)}
+                "count": sum(int(e.get("count", 0)) for e in hits),
+                "agent": last.get("agent", "")}
 
     matrix_rows = []
     for f in TIER_FEEDS:
@@ -744,6 +746,65 @@ def host_check_resolve(body: HostResolveRequest, request: Request,
         pass
     return {"name": name, "resolves": bool(addresses), "addresses": addresses,
             "error": error, "current_host": current, "matches_current": matches}
+
+
+class DashboardAuthRequest(BaseModel):
+    username: str
+    password: str
+    current_password: str = ""
+
+
+def _bootstrap_host_ok(request: Request) -> bool:
+    """Setting the FIRST sign-in (auth off) is only accepted on a request that
+    reached us by IP, localhost or a hostname the operator saved. With auth
+    off, a DNS-rebinding page in a LAN browser can send the CSRF header, but
+    it arrives under the attacker's own domain, so it can't take the
+    dashboard over by setting a password the operator doesn't know."""
+    from threatfeedme import middleware as mw
+    host = mw.host_of_header(request.headers.get("host"))
+    return (mw.always_allowed(host) or host in mw.env_allowed_hosts()
+            or host in mw.configured_hosts(core.db))
+
+
+def _dashboard_auth_status(request: Request) -> dict:
+    from threatfeedme import auth
+    source = auth.auth_source()
+    stored = auth.stored_credentials() if source == "dashboard" else None
+    return {"source": source, "username": stored["user"] if stored else None,
+            "bootstrap_ok": source is not None or _bootstrap_host_ok(request),
+            "min_password": auth.MIN_PASSWORD}
+
+
+@router.get("/api/dashboard-auth")
+def dashboard_auth_status(request: Request, _=Depends(require_auth)):
+    """Where the dashboard sign-in comes from. Never returns a password or hash."""
+    return _dashboard_auth_status(request)
+
+
+@router.post("/api/dashboard-auth")
+def dashboard_auth_update(body: DashboardAuthRequest, request: Request,
+                          _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Set or change the dashboard sign-in from the System page. The server
+    environment (DASHBOARD_USER/PASSWORD) wins and can't be changed here; a
+    change needs the current password; the first one needs the bootstrap
+    host check above. Locked out? `python -m threatfeedme.main
+    --reset-dashboard-auth` on the host clears it."""
+    from threatfeedme import auth
+    source = auth.auth_source()
+    if source == "env":
+        raise HTTPException(status_code=409, detail="The sign-in is set by the server's environment "
+                            "(DASHBOARD_USER / DASHBOARD_PASSWORD); change it there")
+    if source == "dashboard":
+        if not auth.check_stored_password(auth.stored_credentials(), body.current_password):
+            raise HTTPException(status_code=403, detail="Current password is wrong")
+    elif not _bootstrap_host_ok(request):
+        raise HTTPException(status_code=403, detail="Open the dashboard by its IP address (or a name "
+                            "saved under Dashboard hostnames) to set the first password")
+    problem = auth.invalid_new_credentials(body.username, body.password)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    auth.save_credentials(core.db, body.username, body.password)
+    return _dashboard_auth_status(request)
 
 
 @router.post("/api/recalculate-scores")

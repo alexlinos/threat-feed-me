@@ -92,6 +92,12 @@ def age_minutes(entry: Dict) -> int:
 def agent_label(agent: str) -> str:
     """A short, human name for common pollers; otherwise the UA's first token."""
     a = (agent or "").lower()
+    # FortiOS external-resource connectors send "curl/7.58.0" unless the
+    # connector sets its own (`set user-agent`), seen on prod right after the
+    # 2.5.0 roll. A real curl 7.58 (Ubuntu 18.04) reads as FortiGate too;
+    # the tooltip shows the raw string, so the operator can tell.
+    if a == "curl/7.58.0":
+        return "FortiGate"
     for needle, name in (("fortigate", "FortiGate"), ("fortios", "FortiGate"),
                          ("pan-os", "Palo Alto"), ("paloalto", "Palo Alto"),
                          ("pfblocker", "pfBlockerNG"), ("pfsense", "pfSense"),

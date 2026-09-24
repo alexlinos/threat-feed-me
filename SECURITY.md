@@ -26,7 +26,7 @@ boundaries are deliberate and worth understanding:
 | TAXII 2.1 (`/taxii2/*`) | **Unauthenticated, read-only, by design** | The same content as `/feeds/*` for SIEM/TIP subscribers, with the same whitelist rules; no write endpoints exist. |
 | Startup holding page | **Unauthenticated, static** | While a first start or an upgrade migrates the database, a stdlib server on the dashboard's port answers every request with one fixed 503 page (`Retry-After: 30`, `no-store`). It echoes nothing from the request, loads nothing external, and closes before the app binds the port. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
-| Dashboard + mutating API | Optional HTTP Basic auth — setting both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
+| Dashboard + mutating API | Optional HTTP Basic auth — a sign-in set under System → Dashboard sign-in, or both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` (the environment wins), turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
 | TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
 | Rate limiting | **None** | The service assumes a LAN with well-behaved clients. Do not expose it to the internet. |
 
@@ -119,7 +119,17 @@ v2.4.19 and v2.5.0):
   clears the saved login rather than carrying it to the new host; the site id
   is validated before it is used in gateway API paths.
 - **Basic auth** compares credentials as bytes in constant time and always
-  checks both fields.
+  checks both fields. A sign-in set on the System page (v2.5.1) is stored as
+  a salted scrypt hash, never the password; the password is always hashed,
+  even for a wrong username, so timing doesn't reveal valid usernames. A
+  verified login is remembered in memory, keyed by a per-process secret, so
+  dashboard polling doesn't re-run scrypt. Changing it needs the current
+  password. The first one can only be set on a request that arrived by IP
+  address, localhost or a saved hostname: with auth off, a DNS-rebinding page
+  can pass the CSRF check, but it arrives under its own domain, so it can't
+  set a password the operator doesn't know. Environment credentials always
+  win and can't be changed from the page. Locked out:
+  `python -m threatfeedme.main --reset-dashboard-auth` on the host.
 - **CSRF**: all mutating endpoints require the `X-Requested-With` header the
   dashboard JS always sends, independent of whether Basic auth is enabled.
 - **XSS**: server-side rendering uses Jinja2 autoescape; client-side row
@@ -182,8 +192,9 @@ you believe it is reachable, not just the CVE id.
   page opened by anyone on your network can drive the dashboard through DNS
   rebinding: the browser treats the rebound page as same-origin, so the CSRF
   header check doesn't stop it. The app logs a warning on every start in
-  that state. Set `DASHBOARD_USER`/`DASHBOARD_PASSWORD`, or switch on the
-  host check once the names you use are listed.
+  that state. Set a password under System → Dashboard sign-in (or
+  `DASHBOARD_USER`/`DASHBOARD_PASSWORD`), or switch on the host check once
+  the names you use are listed.
 - Credentials you save from the dashboard live in plain text in the data
   volume's `.env` (created 0600 on Linux; Windows ignores that mode).
   Protect the volume like any file holding secrets.

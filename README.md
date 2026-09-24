@@ -119,10 +119,12 @@ on-prem; feeds are pulled inbound only.
   server-side in the data volume's `.env`, applies them immediately, and
   never displays them back.
 
-To protect the dashboard on an untrusted network, set `DASHBOARD_USER` and
-`DASHBOARD_PASSWORD` in the environment (e.g. in `docker-compose.yml`); setting
-both turns auth on — no config edit needed, so it works with the published
-image. Feed URLs stay open so firewalls can poll them. With auth off and the
+To protect the dashboard on an untrusted network, set a username and password
+under **System → Dashboard sign-in** (stored as a salted hash; changing it needs
+the current password). Or set `DASHBOARD_USER` and `DASHBOARD_PASSWORD` in the
+environment, e.g. a `.env` file next to `docker-compose.yml`; setting both turns
+auth on and wins over the page. Locked out? Run
+`docker exec threat-feed-me python -m threatfeedme.main --reset-dashboard-auth`. Feed URLs stay open so firewalls can poll them. With auth off and the
 host check off (both are the defaults), the app logs a warning on every start:
 a malicious web page opened on your network could drive the dashboard through
 DNS rebinding. Turning on either one closes that.
@@ -586,8 +588,9 @@ feeds (searchable and paginated). You can:
 
 Feed endpoints are unauthenticated by design (a firewall polling a block list
 can't present credentials); the dashboard/API can be protected with optional
-Basic auth (set `DASHBOARD_USER` and `DASHBOARD_PASSWORD`; `auth_required: true`
-in config also forces it, and fails closed if the credentials are missing).
+Basic auth (set a sign-in under System, or `DASHBOARD_USER` and
+`DASHBOARD_PASSWORD`; `auth_required: true` in config also forces it, and fails
+closed if no sign-in is set).
 
 ### Backups
 

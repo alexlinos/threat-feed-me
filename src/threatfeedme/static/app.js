@@ -1149,6 +1149,30 @@ async function setHostEnforce(box) {
 // whether it points at this server, then save it WITHOUT switching the
 // host check on. A name that doesn't resolve yet is saved too: the guide
 // is exactly where an operator adds the record they are about to create.
+// Dashboard sign-in (System view). The response never carries a password or
+// hash; a reload makes the browser ask for the new sign-in.
+async function saveSignin(e) {
+    e.preventDefault();
+    const out = document.getElementById('si-result');
+    const pass = document.getElementById('si-pass').value;
+    if (pass !== document.getElementById('si-pass2').value) {
+        out.textContent = 'The two new passwords are different.';
+        return false;
+    }
+    const cur = document.getElementById('si-current');
+    const body = {username: document.getElementById('si-user').value.trim(), password: pass,
+                  current_password: cur ? cur.value : ''};
+    try {
+        const r = await apiFetch('/api/dashboard-auth', {method: 'POST',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { out.textContent = j.detail || ('Could not save (HTTP ' + r.status + ')'); return false; }
+    } catch (err) { out.textContent = 'Could not save the sign-in.'; return false; }
+    out.textContent = 'Saved. Your browser will ask you to sign in with it now.';
+    setTimeout(reloadPage, 1200);
+    return false;
+}
+
 async function addHostName(e, where) {
     e.preventDefault();
     const input = document.getElementById(where + '-hostname');

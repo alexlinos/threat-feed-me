@@ -179,6 +179,8 @@ def main():
                         help='Start the web dashboard now and fetch feeds in the background (default container mode)')
     parser.add_argument('--stats', action='store_true', help='Show statistics')
     parser.add_argument('--backup', action='store_true', help='Take a database backup now')
+    parser.add_argument('--reset-dashboard-auth', action='store_true',
+                        help='Clear the sign-in set on the System page (locked out? run this on the host)')
     parser.add_argument('--push-unifi', action='store_true',
                         help='Push the configured tier into UniFi firewall groups now (integrations.unifi)')
     parser.add_argument('--push-crowdsec', action='store_true',
@@ -190,7 +192,8 @@ def main():
     args = parser.parse_args()
 
     if not any([args.fetch, args.score, args.export, args.full, args.serve, args.stats,
-                args.backup, args.push_unifi, args.push_crowdsec, args.init_db]):
+                args.backup, args.push_unifi, args.push_crowdsec, args.init_db,
+                args.reset_dashboard_auth]):
         parser.print_help()
         return
 
@@ -223,6 +226,12 @@ def main():
         logger.info(f"Exported tiers to formats: {', '.join(results)}")
     if args.full or args.stats:
         _stats_table(db)
+
+    if args.reset_dashboard_auth:
+        from threatfeedme import auth
+        auth.clear_credentials(db)
+        logger.info("Dashboard sign-in cleared: auth is off unless DASHBOARD_USER/DASHBOARD_PASSWORD "
+                    "are set. Set a new password under System.")
 
     if args.backup:
         bcfg = cfg.get('database', {}).get('backup', {}) or {}
