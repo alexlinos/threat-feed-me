@@ -677,6 +677,27 @@ fails the run if anything under data/ changes. In tests, patch
 `module.__dict__` via `monkeypatch.setitem`, on the live module (suites purge
 and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
 
+## v2.5.1 (2026-09-24, from the maintainer's post-roll bug hunt)
+
+- **Dashboard sign-in on the System page**: username + salted scrypt hash
+  in settings (`auth.AUTH_SETTING`); env DASHBOARD_USER/PASSWORD still win.
+  The FIRST password is accepted only on a request that arrived by IP,
+  localhost or a saved hostname (a DNS-rebinding page can pass the CSRF
+  check with auth off, but not that). Why: the 2.5.0 prod roll recreated the
+  container from a shell without the env vars and auth came up silently off.
+  Lockout: `main.py --reset-dashboard-auth`. A verified login is cached under
+  a per-process key so polling doesn't rerun scrypt.
+- **Stall fix**: during a refresh the dashboard serves its last telemetry and
+  list counts; the refresh warms both caches before reporting done. Prod
+  measurement: rescore contention was ~0.3 s, the post-fetch rebuild 4.3 s,
+  so the child-process-per-refresh idea was measured and REJECTED; don't
+  revive it without new numbers.
+- Per-feed timers (`pipeline.feed_schedule` is the one due-time source for
+  scheduler and UI); FortiOS's default UA `curl/7.58.0` labels as FortiGate;
+  retrain gate: a model replaces the live one only at hold-out AUC >= 0.70
+  (atomic write). Kept at maintainer's call: 15/30-min openphish/dshield
+  cadence, weekly retrain.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the

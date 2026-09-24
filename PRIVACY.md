@@ -1,6 +1,6 @@
 # Privacy Statement
 
-*Effective 2026-09-24. Applies to Threat Feed Me v2.5.0 and later.*
+*Effective 2026-09-24. Applies to Threat Feed Me v2.5.1 and later.*
 
 Threat Feed Me runs on infrastructure you control. The project and its
 maintainer collect nothing from you or from your installation: there is no
