@@ -575,8 +575,12 @@ in `config.yaml` under `database.backup` (default: every 24h, keep 7, to a
 `backups/` folder beside the database, i.e. `data/backups/` on the same
 persistent volume). The dashboard's System view shows the last backup and has
 a **Back up now** button. Trigger one on demand with
-`POST /api/backup` or `python -m threatfeedme.main --backup`. **Restore:** stop the app and
-copy a backup file over `data/threatfeedme.db`.
+`POST /api/backup` or `python -m threatfeedme.main --backup`. Each backup is two
+files: `threat_feeds-<time>.db` (everything that matters for serving) and
+`threat_feeds-<time>.churn.db` (the churn log the optional predictor learns
+from). **Restore:** stop the app, copy the `.db` over `data/threatfeedme.db` and
+the `.churn.db` over `data/threatfeedme-churn.db`. Restoring only the `.db` is
+fine: the churn log simply starts again.
 
 ## Small-box deployments (Synology, QNAP, Raspberry Pi)
 
@@ -658,6 +662,18 @@ automatically on startup:
   without turning anything on. The server's IP address always works, and feed
   URLs, TAXII and `/healthz` are never checked. Setting `TFM_ALLOWED_HOSTS`
   (comma-separated) is deliberate configuration, so it enforces from start-up.
+
+- **The first start migrates the database, once.** The churn log (the
+  history the predictor learns from, and by far the largest table) moves to
+  its own file, `threatfeedme-churn.db`, beside the main database, stored far
+  more compactly; a duplicate index and some per-fetch metadata nobody read
+  are dropped; then the file is compacted. On one production install the data
+  went from 1.86 GB to 0.69 GB (0.42 GB main plus 0.27 GB churn log), in about
+  two minutes. The dashboard and the list URLs come up when it finishes, so
+  firewalls see the server as unreachable for that time and keep their last
+  copy of the list. Have free disk space at least the size of your current
+  database for the compaction. Backups are now two files (see
+  [Backups](#backups)).
 
 If you run the offline predictor, retrain right after upgrading
 (`scripts/predictor.sh both`): its features were redefined to remove a

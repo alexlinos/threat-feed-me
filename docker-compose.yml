@@ -58,7 +58,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      # Long on purpose: a first start after an upgrade may migrate the
+      # database before serving (2.5.0: ~2 min on a 1.9 GB database), and
+      # a watchdog restarting an "unhealthy" container mid-migration would
+      # restart the migration every time.
+      start_period: 300s
 
 volumes:
   threat-data:

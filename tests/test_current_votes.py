@@ -102,7 +102,9 @@ def test_upgrade_backfills_recent_drop_times_from_the_churn_log(tmp_path):
     d2 = Database(path)
     with d2._cursor() as cur:
         rows = cur.execute("SELECT source_name, ip, left_at FROM source_left").fetchall()
-    assert [tuple(r) for r in rows] == [("feed_a", X, TICK2)]
+    # the churn log keeps whole seconds, so the recovered drop time does too
+    assert [(r[0], r[1]) for r in rows] == [("feed_a", X)]
+    assert rows[0][2] == datetime.fromisoformat(TICK2).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 @pytest.mark.parametrize("raw, expected", [

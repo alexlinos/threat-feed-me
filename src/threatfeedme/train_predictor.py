@@ -64,20 +64,17 @@ def _event_stream(db, exclude_sources: Set[str]):
     # present DESC: arrivals before leaves within one tick, so a same-tick
     # leave cannot be swallowed by a same-tick return and erase the pair
     # (A2A review 2026-09-11, finding 8; FeatureBuilder orders identically).
-    sql = ("SELECT ip, tick, present FROM sightings "
+    sql = ("SELECT ip, tick, present FROM churn.sightings "
            "ORDER BY tick, present DESC, source_name, ip")
     params: Tuple = ()
     if exclude_sources:
         marks = ",".join("?" * len(exclude_sources))
-        sql = sql.replace("FROM sightings",
-                          f"FROM sightings WHERE source_name NOT IN ({marks})")
+        sql = sql.replace("FROM churn.sightings",
+                          f"FROM churn.sightings WHERE source_name NOT IN ({marks})")
         params = tuple(sorted(exclude_sources))
     with db._cursor() as cur:
         for row in cur.execute(sql, params):
-            ts = datetime.fromisoformat(row["tick"])
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            yield row["ip"], ts, int(row["present"])
+            yield row["ip"], datetime.fromtimestamp(row["tick"], timezone.utc), int(row["present"])
 
 
 def collect_labels(db, exclude_sources: Set[str],

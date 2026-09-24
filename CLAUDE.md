@@ -629,6 +629,17 @@ successors are Cortex XSOAR TIM and the EDL Hosting Service: name them
 fairly. MineMeld/PAN-OS names are used nominatively, with the
 not-affiliated line on the site, README and video end card.
 
+**Database slimming (2.5, measured on a prod backup copy)**: the churn log
+moved to `<db>-churn.db`, ATTACHed as `churn` on every connection (queries say
+`churn.sightings`). One WITHOUT ROWID b-tree keyed (source, ip, tick), tick as
+epoch seconds; no tick index (the prune scans, ~1 s at 6.7M rows). Upgrade
+MIGRATES the log (dropping it would leave the predictor unable to retrain for
+weeks), drops the duplicate `idx_indicators_ip`, strips the never-read
+per-fetch metadata keys, VACUUMs once: 1,858 MB -> 421 MB main + 267 MB churn
+in 124 s; backtest on the migrated copy AUROC 0.814 (unchanged). Health-check
+start period is 300 s so a watchdog can't kill that first start. Skipped: a
+predictive_score column (metadata is ~25 bytes now; no measured gain).
+
 **Parked (maintainer, 2026-09-23)**: 2.5 is complete on `release/2.5.0` and
 parked. Nothing is merged, tagged or rolled until the maintainer says so.
 

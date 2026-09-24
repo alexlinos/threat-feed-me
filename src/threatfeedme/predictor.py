@@ -61,7 +61,9 @@ FEATURE_NAMES: List[str] = [
 ]
 
 
-def _parse_tick(ts: str) -> Optional[datetime]:
+def _parse_tick(ts) -> Optional[datetime]:
+    if isinstance(ts, (int, float)):          # churn-log ticks are epoch seconds
+        return datetime.fromtimestamp(ts, timezone.utc)
     try:
         dt = datetime.fromisoformat(ts)
     except (ValueError, TypeError):
@@ -132,7 +134,7 @@ class FeatureBuilder:
         # numbers were measured on full-log features, so applying it now
         # would silently change the thing the backtest certified.
         with self.db._cursor() as cur:
-            sql = ("SELECT ip, source_name, tick, present FROM sightings")
+            sql = ("SELECT ip, source_name, tick, present FROM churn.sightings")
             params: Tuple = ()
             if self.exclude_sources:
                 marks = ",".join("?" * len(self.exclude_sources))

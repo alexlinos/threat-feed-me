@@ -16,6 +16,12 @@ from threatfeedme.models import (ThreatIndicator, WhitelistEntry, ConfidenceTier
 from .geo.data import CountryBuckets
 
 
+def _epoch(tick: str) -> int:
+    """Churn-log tick (the refresh's ISO-8601 UTC time) -> epoch seconds."""
+    t = datetime.fromisoformat(tick)
+    return int((t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp())
+
+
 def _utcnow_iso() -> str:
     """Timezone-aware UTC timestamp as an ISO string."""
     return datetime.now(timezone.utc).isoformat()
@@ -115,6 +121,11 @@ MEMBERSHIP_STAMP_KEY = "membership_stamp"
 class Database:
     def __init__(self, db_path: str = "./data/threatfeedme.db"):
         self.db_path = db_path
+        # The churn log (sightings) lives in its own file beside the main DB
+        # (v2.5.0): it was 69% of prod's database, and every backup, VACUUM
+        # and read of the main file paid for it. Attached as `churn` on every
+        # connection, so queries still see one database.
+        self.churn_path = (db_path[:-3] if db_path.endswith(".db") else db_path) + "-churn.db"
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._init_schema()
 
@@ -130,6 +141,7 @@ class Database:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("ATTACH DATABASE ? AS churn", (self.churn_path,))
         return conn
 
     @contextmanager
@@ -270,15 +282,20 @@ class Database:
                 )
             """)
 
+            # Churn log, in the attached churn file. One WITHOUT ROWID b-tree
+            # keyed (source, ip, tick) with the tick as integer epoch seconds:
+            # the old rowid table, its UNIQUE autoindex and a tick index held
+            # the same three columns three times (1,281 MB on prod for 6.6M
+            # rows), and the ISO tick alone was 32 bytes a row.
+            cursor.execute("PRAGMA churn.journal_mode = WAL")
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS sightings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS churn.sightings (
                     source_name TEXT NOT NULL,
                     ip TEXT NOT NULL,
-                    tick TEXT NOT NULL,
+                    tick INTEGER NOT NULL,
                     present INTEGER NOT NULL,
-                    UNIQUE(source_name, ip, tick)
-                )
+                    PRIMARY KEY (source_name, ip, tick)
+                ) WITHOUT ROWID
             """)
 
             # Per-source membership as of the last successful snapshot — the
@@ -309,6 +326,33 @@ class Database:
             if not had_seeded:
                 cursor.execute("INSERT OR IGNORE INTO source_seeded "
                                "SELECT DISTINCT source_name FROM source_state")
+            legacy_log = cursor.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE type = 'table' "
+                "AND name = 'sightings'").fetchone()
+            migrated = False
+            if legacy_log:
+                cursor.execute("SELECT value FROM settings WHERE key = 'sightings_format'")
+                fmt = cursor.fetchone()
+                if fmt and fmt[0] == 'transitions':
+                    # Upgrading from a 2.4.9+ main-file log: carry the history
+                    # over (the predictor trains on it; dropping it would leave
+                    # the model unable to retrain for weeks).
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO churn.sightings (source_name, ip, tick, present) "
+                        "SELECT source_name, ip, CAST(strftime('%s', tick) AS INTEGER), present "
+                        "FROM main.sightings")
+                    logger.info(f"[migration] churn log moved to {os.path.basename(self.churn_path)}: "
+                                f"{cursor.rowcount} transitions")
+                else:
+                    # 2.4.2-2.4.8 presence snapshots: incompatible with the
+                    # transition queries (the v2.4.9 rule). Nothing to keep,
+                    # and the membership baselines built from them go too.
+                    cursor.execute("DELETE FROM source_state")
+                    cursor.execute("DELETE FROM source_seeded")
+                cursor.execute("DROP TABLE main.sightings")
+                migrated = True
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
             # What each source dropped, and when: the vote grace window (see
             # CURRENT_ATTRIBUTION_SQL). Bounded by prune_left_memberships.
             had_left = cursor.execute(
@@ -330,10 +374,12 @@ class Database:
                 # (churn_log_exclude) have no events; their old drops simply
                 # get no grace, and new ones are tracked from here. The
                 # refresh's prune trims this to the configured grace.
-                cutoff = (datetime.now(timezone.utc) - timedelta(days=_BACKFILL_DAYS)).isoformat()
+                cutoff = int((datetime.now(timezone.utc) - timedelta(days=_BACKFILL_DAYS)).timestamp())
                 cursor.execute(
                     "INSERT OR IGNORE INTO source_left (source_name, ip, left_at) "
-                    "SELECT sg.source_name, sg.ip, MAX(sg.tick) FROM sightings sg "
+                    "SELECT sg.source_name, sg.ip, "
+                    "strftime('%Y-%m-%dT%H:%M:%S+00:00', MAX(sg.tick), 'unixepoch') "
+                    "FROM churn.sightings sg "
                     "WHERE sg.present = 0 AND sg.tick >= ? AND NOT EXISTS "
                     "(SELECT 1 FROM source_state ss WHERE ss.source_name = sg.source_name "
                     "AND ss.ip = sg.ip) GROUP BY sg.source_name, sg.ip", (cutoff,))
@@ -439,7 +485,9 @@ class Database:
                 except sqlite3.OperationalError:
                     pass
 
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_ip ON indicators(ip)")
+            # `ip` is UNIQUE, so SQLite already keeps an index on it; this one
+            # duplicated it (24 MB on prod) and cost every insert twice.
+            cursor.execute("DROP INDEX IF EXISTS idx_indicators_ip")
             # The indicators page orders by score with LIMIT/OFFSET; without
             # this index every page request re-sorts the whole table (multi-
             # second at 600k+ rows, live-observed struggling on prod).
@@ -450,50 +498,25 @@ class Database:
             # on insert only, so upserts of existing rows never touch it.
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_first_seen ON indicators(first_seen)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
-            # The churn-log ring prune deletes by tick every refresh; index it
-            # so that DELETE is a range scan, not a full table scan.
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
-
-            # --- Sightings format migration (v2.4.9) -------------------------
-            # Versions 2.4.2-2.4.8 recorded FULL per-tick presence snapshots:
-            # ~50M rows/day on a mid-size roster, ~10 GB/day of database (and
-            # backups to match) — live-measured filling the prod disk within
-            # days. The transition format records only arrivals/leaves. The
-            # old rows are semantically incompatible with transition queries,
-            # so on first start after upgrade: DROP the bloated table (a
-            # row-wise DELETE would balloon the WAL by the table's size on a
-            # disk that is already under pressure), recreate it empty, and
-            # VACUUM once to shrink the file — otherwise the freed pages keep
-            # inflating every subsequent backup. Guarded by a settings flag so
-            # it runs exactly once; fresh installs stamp the flag and skip.
-            cursor.execute("SELECT value FROM settings WHERE key = 'sightings_format'")
-            fmt = cursor.fetchone()
-            if not fmt or fmt[0] != 'transitions':
-                cursor.execute("SELECT MAX(id) FROM sightings")
-                had_rows = (cursor.fetchone()[0] or 0) > 0
-                cursor.execute("DROP TABLE sightings")
-                cursor.execute("""
-                    CREATE TABLE sightings (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        source_name TEXT NOT NULL,
-                        ip TEXT NOT NULL,
-                        tick TEXT NOT NULL,
-                        present INTEGER NOT NULL,
-                        UNIQUE(source_name, ip, tick)
-                    )
-                """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_sightings_tick ON sightings(tick)")
-                cursor.execute("DELETE FROM source_state")
-                cursor.execute("DELETE FROM source_seeded")
-                cursor.execute("DELETE FROM source_left")
+            # Per-fetch metadata (v2.5.0): feed_type, feed_weight and
+            # fetched_at were rewritten into every row on every fetch and read
+            # by nothing (94 MB on prod). Strip them once; the VACUUM below
+            # reclaims the space along with the moved churn log.
+            cursor.execute("SELECT value FROM settings WHERE key = 'metadata_slim'")
+            if not cursor.fetchone():
                 cursor.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('sightings_format', 'transitions')")
-                conn.commit()
-                if had_rows:
-                    logger.info("[migration] sightings: presence-snapshot rows dropped; "
-                                "VACUUM to reclaim disk (one-time, may take minutes)...")
-                    conn.execute("VACUUM")
-                    logger.info("[migration] sightings VACUUM done")
+                    "UPDATE indicators SET metadata = json_remove(metadata, "
+                    "'$.feed_type', '$.feed_weight', '$.fetched_at') "
+                    "WHERE metadata LIKE '%fetched_at%'")
+                migrated = migrated or cursor.rowcount > 0
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('metadata_slim', '1')")
+            conn.commit()
+            if migrated:
+                # A DROP only frees pages inside the file; without this the
+                # main file (and every backup) stays at its old size.
+                logger.info("[migration] VACUUM to reclaim the space (one-time, may take minutes)...")
+                conn.execute("VACUUM")
+                logger.info("[migration] VACUUM done")
 
             conn.commit()
         finally:
@@ -635,9 +658,9 @@ class Database:
             if arrived:
                 if record:
                     cur.executemany(
-                        "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                        "INSERT OR REPLACE INTO churn.sightings (source_name, ip, tick, present) "
                         "VALUES (?, ?, ?, 1)",
-                        [(source_name, v, tick) for v in arrived])
+                        [(source_name, v, _epoch(tick)) for v in arrived])
                 cur.executemany(
                     "INSERT OR IGNORE INTO source_state (source_name, ip) VALUES (?, ?)",
                     [(source_name, v) for v in arrived])
@@ -647,9 +670,9 @@ class Database:
             if left:
                 if record:
                     cur.executemany(
-                        "INSERT OR REPLACE INTO sightings (source_name, ip, tick, present) "
+                        "INSERT OR REPLACE INTO churn.sightings (source_name, ip, tick, present) "
                         "VALUES (?, ?, ?, 0)",
-                        [(source_name, v, tick) for v in left])
+                        [(source_name, v, _epoch(tick)) for v in left])
                 cur.executemany(
                     "DELETE FROM source_state WHERE source_name = ? AND ip = ?",
                     [(source_name, v) for v in left])
@@ -690,20 +713,20 @@ class Database:
                        seeded as baseline state, not an arrival event, so it
                        can never read as a return.
         """
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        cutoff = int((datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp())
         with self._cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT ip FROM sightings s1 "
+                "SELECT DISTINCT ip FROM churn.sightings s1 "
                 "WHERE s1.source_name = ? AND s1.present = 0 AND s1.tick >= ? "
-                "AND NOT EXISTS (SELECT 1 FROM sightings s2 "
+                "AND NOT EXISTS (SELECT 1 FROM churn.sightings s2 "
                 "  WHERE s2.source_name = s1.source_name AND s2.ip = s1.ip "
                 "  AND s2.tick > s1.tick)",
                 (source_name, cutoff))
             left = sorted(row["ip"] for row in cur.fetchall())
             cur.execute(
-                "SELECT DISTINCT ip FROM sightings s1 "
+                "SELECT DISTINCT ip FROM churn.sightings s1 "
                 "WHERE s1.source_name = ? AND s1.present = 1 AND s1.tick >= ? "
-                "AND EXISTS (SELECT 1 FROM sightings s2 "
+                "AND EXISTS (SELECT 1 FROM churn.sightings s2 "
                 "  WHERE s2.source_name = s1.source_name AND s2.ip = s1.ip "
                 "  AND s2.present = 0 AND s2.tick < s1.tick)",
                 (source_name, cutoff))
@@ -729,15 +752,17 @@ class Database:
         """Ring-window prune of the churn log: drop transition events older
         than keep_days. The transition format grows at churn rate, so this is
         a light guard rather than the load-bearing bound it was for the old
-        presence-snapshot format. tick is an ISO-8601 UTC string, so a lexical
-        '< cutoff' is a chronological compare; idx_sightings_tick makes it an
-        index range delete rather than a full scan each refresh.
+        presence-snapshot format. tick is epoch seconds.
+
+        ponytail: no tick index, so this scans the log (~6.6M rows on prod,
+        about a second). The key is (source, ip, tick) for the per-IP reads;
+        add an index on tick if the prune ever shows up in refresh timings.
         """
         if keep_days <= 0:
             return 0
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        cutoff = int((datetime.now(timezone.utc) - timedelta(days=keep_days)).timestamp())
         with self._cursor() as cur:
-            cur.execute("DELETE FROM sightings WHERE tick < ?", (cutoff,))
+            cur.execute("DELETE FROM churn.sightings WHERE tick < ?", (cutoff,))
             return cur.rowcount
 
     def corpus_change_key(self) -> Tuple[int, ...]:
@@ -1825,20 +1850,23 @@ class Database:
     # ==================== BACKUP ====================
 
     def backup_database(self, dest_dir: str, keep: int = 7) -> str:
-        """Write a consistent, WAL-safe snapshot of the DB to dest_dir."""
+        """Write consistent, WAL-safe snapshots of the DB and its churn log to
+        dest_dir (threat_feeds-<ts>.db and threat_feeds-<ts>.churn.db). The
+        churn log is the predictor's ground truth: weeks to rebuild."""
         os.makedirs(dest_dir, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         dest = os.path.join(dest_dir, f'threat_feeds-{ts}.db')
-
-        src = sqlite3.connect(self.db_path)
-        try:
-            dst = sqlite3.connect(dest)
+        for path, out in ((self.db_path, dest),
+                          (self.churn_path, os.path.join(dest_dir, f'threat_feeds-{ts}.churn.db'))):
+            src = sqlite3.connect(path)
             try:
-                src.backup(dst)
+                dst = sqlite3.connect(out)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
             finally:
-                dst.close()
-        finally:
-            src.close()
+                src.close()
 
         self._prune_backups(dest_dir, keep)
         return dest
@@ -1855,17 +1883,19 @@ class Database:
             # backups share an mtime (fast successive writes) or a file's
             # mtime is bumped by a copy/restore — either of which made the
             # mtime sort keep the wrong files.
-            files = sorted(
-                f for f in os.listdir(dest_dir)
-                if f.startswith('threat_feeds-') and f.endswith('.db')
-            )
+            names = [f for f in os.listdir(dest_dir) if f.startswith('threat_feeds-')]
         except OSError:
             return
-        for stale in files[:-keep]:
-            try:
-                os.remove(os.path.join(dest_dir, stale))
-            except OSError:
-                pass
+        # Main snapshots and churn-log snapshots are pruned as separate sets,
+        # so `keep` means that many backups of each, not of both combined.
+        for suffix, other in (('.churn.db', None), ('.db', '.churn.db')):
+            files = sorted(f for f in names if f.endswith(suffix)
+                           and not (other and f.endswith(other)))
+            for stale in files[:-keep]:
+                try:
+                    os.remove(os.path.join(dest_dir, stale))
+                except OSError:
+                    pass
 
     # ==================== UTILITY ====================
 

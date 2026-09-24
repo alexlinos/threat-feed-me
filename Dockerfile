@@ -54,7 +54,9 @@ EXPOSE 8080
 # Health probe: /healthz is constant-cost and unauthenticated. Never probe a
 # feed URL here — /feeds/all.txt response time grows with the corpus and
 # eventually exceeds the probe timeout, marking healthy deployments unhealthy.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+# start-period: a first start after an upgrade may migrate the database before
+# serving (2.5.0: ~2 min on a 1.9 GB database); keep in sync with compose.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD python -c "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/healthz', timeout=5).ok else 1)" || exit 1
 
 # Default command: start dashboard immediately; run the pipeline in the

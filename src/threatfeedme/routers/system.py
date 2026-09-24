@@ -98,16 +98,16 @@ def _system_info(request: Request, poll_log: dict) -> dict:
     """The System panel: the operational facts that were only reachable by
     SSH before (DB size, last backup, predictor state), plus the TAXII URL.
     Everything read-only here; actions go through existing endpoints."""
-    from threatfeedme import __version__, taxii
+    from threatfeedme import __version__
     from threatfeedme.scheduler import LAST_BACKUP_KEY
     from threatfeedme.scorer import current_votes_enabled, predictor_live, vote_grace_days
-    db_path = core.db_path
     size = 0
-    for suffix in ("", "-wal"):
-        try:
-            size += os.path.getsize(db_path + suffix)
-        except OSError:
-            pass
+    for path in (core.db_path, core.db.churn_path):      # main DB + churn log
+        for suffix in ("", "-wal"):
+            try:
+                size += os.path.getsize(path + suffix)
+            except OSError:
+                pass
     last_backup = core.db.get_setting(LAST_BACKUP_KEY)
     pcfg = core.config.get("predictor", {}) or {}
     model_path = pcfg.get("model_path", "data/predictor_model.txt")

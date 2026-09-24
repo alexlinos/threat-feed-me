@@ -10,7 +10,6 @@ import threading
 import time
 import ipaddress
 import json
-from datetime import datetime, timezone
 from typing import List, Dict, Optional, Set, Tuple, Union
 from urllib.parse import parse_qs, urljoin, urlsplit
 import logging
@@ -547,7 +546,6 @@ class FeedIngestor:
 
             logger.info(f"Fetched {len(entries)} indicators from {feed.name}")
 
-            now = datetime.now(timezone.utc).isoformat()
             skipped = 0
             # Filter in Python, write in one bulk call: per-row add_indicator()
             # commits per IP, which wedged the refresh on 90k-row feeds.
@@ -559,15 +557,10 @@ class FeedIngestor:
                     skipped += 1
                     continue
 
-                metadata = {
-                    'feed_type': feed.feed_type.value,
-                    'feed_weight': feed.weight,
-                    'fetched_at': now,
-                }
-                if entry.get('cidr'):
-                    metadata['cidr'] = entry['cidr']
-
-                rows.append((entry['ip'], metadata))
+                # Only what scoring reads. feed_type / feed_weight / fetched_at
+                # used to be written here on every fetch into every row and
+                # were read by nothing (the scorer takes them from the feed).
+                rows.append((entry['ip'], {'cidr': entry['cidr']} if entry.get('cidr') else {}))
 
             count = self.db.add_indicators_bulk(rows, source=feed.name, kind=feed.indicator_kind)
             # Full parse succeeded: this IS the source's current membership.
