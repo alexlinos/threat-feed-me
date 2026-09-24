@@ -66,7 +66,7 @@ releases already.
 
 - `python -m pytest tests -q` must pass before pushing.
 - For UI or behavioural changes, actually run it and look:
-  actually run it and look: `python -m uvicorn --app-dir src threatfeedme.app:app --port 8080`.
+  `python -m uvicorn --app-dir src threatfeedme.app:app --port 8080`.
   Several bugs here (a dead `esc()`, a hung geo panel, an unreadable heatmap)
   passed every test and were only visible in a browser.
 
@@ -644,6 +644,24 @@ schema step is `main.py --init-db`: logging configured (the old `python -c`
 swallowed INFO), a message BEFORE the long copy, and a static 503 + Retry-After
 holding page on the dashboard host/port until the DB is ready. Skipped: a
 predictive_score column (metadata is ~25 bytes now; no measured gain).
+
+**External review of the branch (2026-09-24)**, each claim re-checked against
+the code. Fixed: a manual re-add or in-place tier change left the feed cache's
+`serve_fingerprint` unmoved (now `set_indicator_score` bumps `serve_stamp` in
+the same transaction); `HTTP(S)_PROXY`/`ALL_PROXY` bypassed the connect-time
+SSRF pin because the pin checked the proxy's address (guarded fetches now pass
+`_NO_PROXIES`; installs with `allow_private_feed_urls` keep their proxy);
+a 32 KB parametrize id broke Windows. Rejected, don't reopen without new
+evidence: "KeyPolicy re-binds a shipped key when the DB URL changes" (the
+policy binds to the host declared in config.yaml, and a test covers the
+retarget case) and the Host-parsing edge cases (IP-literal and absent Host are
+allowed on purpose so an operator can never lock themselves out; `h:80:8080`
+is not a valid Host). The rebinding default stays a startup log warning, no
+banner. The integrations, DB and serve-path sections of that review had not
+arrived when this was written; verify each claim before acting on it.
+Grype on the branch head: 162 matches, identical to the first 2.5 build, none
+in app dependencies, the only fixable ones in the 3.11 interpreter
+(documented in SECURITY.md). Rescan the final image before tagging.
 
 **Parked (maintainer, 2026-09-23)**: 2.5 is complete on `release/2.5.0` and
 parked. Nothing is merged, tagged or rolled until the maintainer says so.
