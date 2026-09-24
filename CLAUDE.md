@@ -663,8 +663,12 @@ Grype on the branch head: 162 matches, identical to the first 2.5 build, none
 in app dependencies, the only fixable ones in the 3.11 interpreter
 (documented in SECURITY.md). Rescan the final image before tagging.
 
-**Parked (maintainer, 2026-09-23)**: 2.5 is complete on `release/2.5.0` and
-parked. Nothing is merged, tagged or rolled until the maintainer says so.
+**Released 2026-09-24** (maintainer's go): `release/2.5.0` merged into main
+(970a14a), tagged `v2.5.0`, published to Docker Hub as 2.5.0 + latest (amd64 +
+arm64); Grype on the final image matched the branch baseline. New 2.5.x work
+goes on main. Prod (soc-grfna01) roll is a separate, explicit step: back up,
+`git pull` (the compose health-check start period matters for the migration),
+`docker compose pull && up -d`, then `scripts/predictor.sh both` at once.
 
 **Test-isolation trap, third time**: core initializes lazily from
 ./config.yaml + ./data, and `monkeypatch.setattr(core, "db", ...)` READS the old
