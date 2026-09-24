@@ -125,7 +125,7 @@ class Database:
         # (v2.5.0): it was 69% of prod's database, and every backup, VACUUM
         # and read of the main file paid for it. Attached as `churn` on every
         # connection, so queries still see one database.
-        self.churn_path = (db_path[:-3] if db_path.endswith(".db") else db_path) + "-churn.db"
+        self.churn_path = os.path.splitext(db_path)[0] + "-churn.db"
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._init_schema()
 
@@ -1901,14 +1901,13 @@ class Database:
             return
         # Main snapshots and churn-log snapshots are pruned as separate sets,
         # so `keep` means that many backups of each, not of both combined.
-        for suffix, other in (('.churn.db', None), ('.db', '.churn.db')):
-            files = sorted(f for f in names if f.endswith(suffix)
-                           and not (other and f.endswith(other)))
-            for stale in files[:-keep]:
-                try:
-                    os.remove(os.path.join(dest_dir, stale))
-                except OSError:
-                    pass
+        churn = sorted(f for f in names if f.endswith('.churn.db'))
+        main = sorted(f for f in names if f.endswith('.db') and f not in churn)
+        for stale in churn[:-keep] + main[:-keep]:
+            try:
+                os.remove(os.path.join(dest_dir, stale))
+            except OSError:
+                pass
 
     # ==================== UTILITY ====================
 
