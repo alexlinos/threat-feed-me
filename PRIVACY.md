@@ -1,6 +1,6 @@
 # Privacy Statement
 
-*Effective 2026-09-23. Applies to Threat Feed Me v2.5.0 and later.*
+*Effective 2026-09-24. Applies to Threat Feed Me v2.5.0 and later.*
 
 Threat Feed Me runs on infrastructure you control. The project and its
 maintainer collect nothing from you or from your installation: there is no
@@ -28,6 +28,7 @@ published compose file). Nothing is written anywhere else.
 | Hostnames seen | The hostnames (from the `Host` header) the dashboard has been reached by, with a count and first/last time, so the System view can offer them for the host check. No client IP address. Capped at 200 names | Memory only, never written to disk | Until the process restarts |
 | Feed polls | Per served feed URL and TAXII collection: when it was last fetched, how many times, and the fetching client's User-Agent (truncated), so the dashboard can show "polled 3m ago by FortiGate". No client IP address | `settings` (`feed_polls`) | Overwritten on every poll; one entry per URL |
 | Uploaded lists | Custom indicator lists you upload through the dashboard, as text files | `uploads/` under the data directory | Until you delete the feed |
+| Backups | Consistent copies of the database and the churn log (`threat_feeds-<time>.db` and `.churn.db`): everything in the rows above except the hostnames seen, the uploaded lists and the credentials, which stay out of backups | `backups/` beside the database (`database.backup.dir`) | Taken every 24 hours; the newest 7 are kept (`database.backup.keep`). Switch off with `database.backup.enabled: false` |
 | Credentials | Feed API keys, UniFi credentials and CrowdSec credentials (machine login, bouncer key, Console integration login) you save from the dashboard, as `KEY=value` lines | `.env` next to the database, plain text | Until you remove them |
 
 The indicators are third-party threat intelligence about hosts on the
@@ -62,6 +63,10 @@ only. The Talos Snort.org scraper is the one exception to
 the plain GET: it uses a browser User-Agent and accepts Snort.org's terms
 form on your behalf, because the list is gated behind that form. Each
 provider's own privacy policy governs what they do with the request.
+Feed requests go straight to the provider: while the SSRF guard is on (the
+default) the `HTTP(S)_PROXY` / `ALL_PROXY` environment variables are
+ignored for them, so no proxy sees the traffic unless you switch the guard
+off with `safety.allow_private_feed_urls`.
 
 **To your UniFi gateway, only if you enable the push.** The pusher sends
 the block lists and your UniFi credentials (from `UNIFI_USER` and
@@ -106,6 +111,7 @@ CrowdSec LAPI: the software works normally behind it.
 |---|---|---|
 | `/feeds/*` | None, by design | Anyone who can reach the port can download your block lists. Firewalls polling a feed cannot present credentials, so the lists are treated as non-secret. |
 | `/taxii2/*` | None, by design | The same block lists as `/feeds/*`, as STIX 2.1 Indicators over TAXII 2.1 (read-only), each with its confidence, tier and the names of the feeds that reported it. For SIEM and threat-intel platforms that subscribe rather than poll a text file. |
+| Startup holding page | None | Only while a first start or an upgrade migrates the database: every request to the dashboard port gets the same static "starting up" page with a 503. It reads nothing from the request and logs nothing. |
 | `/healthz` | None | Returns `{"ok": true}` and nothing else. |
 | Dashboard and `/api/*` | Optional HTTP Basic auth (`DASHBOARD_USER`, `DASHBOARD_PASSWORD`, `dashboard.auth_required: true`) | Open by default for a trusted LAN. Enable auth on any network you do not fully trust, and do not expose it to the internet. |
 

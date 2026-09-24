@@ -12,7 +12,8 @@ prefer otherwise.
 
 Only the **latest release** (`alexlinos/threat-feed-me:latest`) receives
 fixes. There are no maintenance branches; upgrading is designed to be safe
-(data survives on the volume, migrations are additive).
+(data survives on the volume; migrations run once on first start and
+keep your data, e.g. 2.5.0 moves the churn log into its own file).
 
 ## Security model — read this before deploying
 
@@ -23,6 +24,7 @@ boundaries are deliberate and worth understanding:
 |---|---|---|
 | Feed URLs (`/feeds/*`) | **Unauthenticated, by design** | Firewalls polling a block list cannot present credentials. Treat the feed content as non-secret. |
 | TAXII 2.1 (`/taxii2/*`) | **Unauthenticated, read-only, by design** | The same content as `/feeds/*` for SIEM/TIP subscribers, with the same whitelist rules; no write endpoints exist. |
+| Startup holding page | **Unauthenticated, static** | While a first start or an upgrade migrates the database, a stdlib server on the dashboard's port answers every request with one fixed 503 page (`Retry-After: 30`, `no-store`). It echoes nothing from the request, loads nothing external, and closes before the app binds the port. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
 | Dashboard + mutating API | Optional HTTP Basic auth — setting both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
 | TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
@@ -35,8 +37,9 @@ What the software stores, sends and logs, and to whom, is documented in
 
 ## Hardening measures in place
 
-Verified in code review (adversarial passes, 2026-08 and 2026-09; the
-2026-09 review's fixes shipped in v2.4.19 and v2.5.0):
+Verified in code review (adversarial passes, 2026-08 and 2026-09, plus an
+external review of the 2.5.0 branch on 2026-09-24; the fixes shipped in
+v2.4.19 and v2.5.0):
 
 - **Container runs as a non-root user** (`appuser`), single process, no shell
   services.
@@ -44,8 +47,8 @@ Verified in code review (adversarial passes, 2026-08 and 2026-09; the
   internal constants (migration column names, placeholder counts), never
   request input.
 - **Uploads** are size-capped (5 MB), text-only, validated to contain at
-  least one IP/CIDR, and the storage path is `realpath`-resolved and
-  containment-checked so a crafted filename or symlink cannot escape the
+  least one valid entry of the feed's declared kind (IP/CIDR or domain),
+  and the storage path is `realpath`-resolved and containment-checked so a crafted filename or symlink cannot escape the
   upload directory.
 - **SSRF guard**: remote feed URLs whose host resolves to private/internal
   address space are refused (`safety.allow_private_feed_urls: false` by
@@ -59,6 +62,14 @@ Verified in code review (adversarial passes, 2026-08 and 2026-09; the
   proxy the pin would check the proxy's address and the proxy would
   re-resolve the target itself (external review, 2026-09-24). Installs that
   set `allow_private_feed_urls` have no guard to protect and keep their proxy.
+- **TAXII 2.1 collections added as feeds** (v2.5.0) use the same guarded
+  fetch path: SSRF pin, hop-by-hop redirects, capped reads, and a key that
+  must be a `TFM_FEED_*` variable sent only to the collection's origin.
+  A read is bounded (250 pages of 1,000 objects, 250,000 objects in all),
+  and one cut short by the cap fails instead of recording mass removals.
+  Only STIX Indicators with unconditional patterns are taken; revoked,
+  expired and `benign` ones are dropped, and a condition such as "this IP
+  AND this port" is skipped rather than widened into a bare IP block.
 - **Host-header allowlist** (v2.5.0, opt-in): switched on, the dashboard
   and API answer only to hostnames you allow, which stops DNS-rebinding
   pages in a LAN browser from driving the API. **Off by default and after an
