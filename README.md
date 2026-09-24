@@ -342,7 +342,9 @@ to come back, and nudges their score up slightly (it carries roughly a tenth of 
 It never moves an IP between High, Medium and Everything: the tiers are the
 vote math above. It decides which IPs make the cut when a firewall takes only
 the top entries (`?limit=N`, the UniFi list cap). Without a trained model file
-it does nothing.
+it does nothing. A retrain replaces the model only if it scores at least 0.70
+on data it didn't train on (AUC: 0.5 is a coin flip, 1.0 is perfect); a weaker
+one is discarded and the current model stays.
 
 **Where the tier lines come from.** After those weights, every IP has one
 number: its *effective votes* (how many genuinely independent, reputable,

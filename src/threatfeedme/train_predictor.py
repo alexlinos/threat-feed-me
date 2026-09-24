@@ -53,6 +53,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 MIN_GAP_H = 6.0          # absence-gap floor for a churn positive (hours)
+# A retrain replaces the live model only if its hold-out AUC reaches this.
+# Prod runs ~0.82 against a ~0.60 source-count baseline; a model below 0.70
+# has lost most of its edge, and an unattended weekly cron shouldn't ship it.
+MIN_HOLDOUT_AUC = 0.70
 HORIZON_H = 7 * 24       # label window after each snapshot (hours)
 SNAPSHOT_H = 24          # snapshot cadence (hours)
 MAX_NEG_PER_SNAPSHOT = 60_000
@@ -205,9 +209,23 @@ def train(db_path: str, config_path: str, model_out: str) -> int:
                  key=lambda kv: kv[1], reverse=True)
     for name, gain in imp[:8]:
         print(f"  {name}: {gain:.0f}")
-    booster.save_model(model_out, num_iteration=booster.best_iteration)
-    print(f"model written: {model_out}")
+    _save_if_good(booster, auc, model_out)
     return 0
+
+
+def _save_if_good(booster, auc: float, model_out: str) -> bool:
+    """The gate: keep the current model unless the new one clears
+    MIN_HOLDOUT_AUC. A kept model is a normal outcome (exit 0), so the predict
+    pass after it still runs. The write is atomic: the predict pass and the
+    rescore gate read this file, and a killed run must not leave half a model."""
+    if not auc >= MIN_HOLDOUT_AUC:           # also catches NaN
+        print(f"holdout_auc {auc:.4f} is below {MIN_HOLDOUT_AUC}: kept the current model")
+        return False
+    tmp = model_out + ".tmp"
+    booster.save_model(tmp, num_iteration=booster.best_iteration)
+    os.replace(tmp, model_out)
+    print(f"model written: {model_out}")
+    return True
 
 
 def _feature_names() -> List[str]:

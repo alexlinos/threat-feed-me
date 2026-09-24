@@ -242,3 +242,32 @@ class TestModelFeatureGuard:
         p = Predictor(_db(tmp_path), {"predictor": {"enabled": True, "model_path": str(path)}})
         assert p._load() is None
         assert p.score("198.18.5.1") is None
+
+
+class TestRetrainGate:
+    """A retrain replaces the live model only when it's good enough, and
+    never leaves a half-written file (the weekly cron runs unattended)."""
+
+    class _Booster:
+        best_iteration = 7
+
+        def save_model(self, path, num_iteration):
+            with open(path, "w") as f:
+                f.write(f"new model ({num_iteration} rounds)")
+
+    def _live(self, tmp_path):
+        p = tmp_path / "predictor_model.txt"
+        p.write_text("current model")
+        return str(p)
+
+    def test_a_good_model_replaces_the_live_one(self, tmp_path):
+        out = self._live(tmp_path)
+        assert tp._save_if_good(self._Booster(), 0.83, out) is True
+        assert open(out).read() == "new model (7 rounds)"
+        assert not (tmp_path / "predictor_model.txt.tmp").exists()
+
+    @pytest.mark.parametrize("auc", [0.69, float("nan")])
+    def test_a_weak_model_keeps_the_current_one(self, tmp_path, auc):
+        out = self._live(tmp_path)
+        assert tp._save_if_good(self._Booster(), auc, out) is False
+        assert open(out).read() == "current model"
