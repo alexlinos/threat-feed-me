@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threat Feed Me! The open-source MineMeld replacement</title>
-<meta name="description" content="The open-source MineMeld replacement: an on-prem threat-intel aggregator that turns 22 free, keyless feeds into consensus-scored block lists for firewalls and DNS filters, a TAXII 2.1 server for SIEMs, and direct publishing to CrowdSec and UniFi. One Docker container, no API keys.">
+<meta name="description" content="The open-source MineMeld replacement: an on-prem threat-intel aggregator that turns 22 free, keyless feeds into block lists for firewalls and DNS filters, ranked by how many unrelated feeds agree, a TAXII 2.1 server for SIEMs, and direct publishing to CrowdSec and UniFi. One Docker container, no API keys.">
 <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
 
 <!-- Open Graph / social -->
@@ -14,15 +14,15 @@
      page and every social preview image was broken. -->
 <link rel="canonical" href="https://alexlinos.github.io/threat-feed-me/">
 <meta property="og:title" content="Threat Feed Me! The open-source MineMeld replacement">
-<meta property="og:description" content="22 free, keyless threat feeds turned into consensus-scored block lists for firewalls and DNS filters, TAXII 2.1 for SIEMs, and direct publishing to CrowdSec and UniFi. One container, on-prem, no API keys.">
+<meta property="og:description" content="22 free, keyless threat feeds turned into block lists ranked by how many unrelated feeds agree for firewalls and DNS filters, TAXII 2.1 for SIEMs, and direct publishing to CrowdSec and UniFi. One container, on-prem, no API keys.">
 <meta property="og:url" content="https://alexlinos.github.io/threat-feed-me/">
 <meta property="og:image" content="https://alexlinos.github.io/threat-feed-me/assets/social-preview.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Threat Feed Me! The open-source MineMeld replacement">
-<meta name="twitter:description" content="Consensus-scored block lists for firewalls and DNS filters, TAXII 2.1 for SIEMs, publishing to CrowdSec and UniFi. On-prem, one container, no API keys.">
+<meta name="twitter:description" content="Block lists ranked by how many unrelated feeds agree for firewalls and DNS filters, TAXII 2.1 for SIEMs, publishing to CrowdSec and UniFi. On-prem, one container, no API keys.">
 <meta name="twitter:image" content="https://alexlinos.github.io/threat-feed-me/assets/social-preview.png">
 
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Threat Feed Me", "applicationCategory": "SecurityApplication", "operatingSystem": "Linux (Docker), amd64 and arm64", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://opensource.org/licenses/MIT", "url": "https://alexlinos.github.io/threat-feed-me/", "codeRepository": "https://github.com/alexlinos/threat-feed-me", "description": "Open-source, on-prem threat-intelligence aggregator: free threat feeds scored by independent votes into firewall block lists (EDLs), TAXII 2.1 in and out, and publishing to CrowdSec and UniFi."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Threat Feed Me", "applicationCategory": "SecurityApplication", "operatingSystem": "Linux (Docker), amd64 and arm64", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://opensource.org/licenses/MIT", "url": "https://alexlinos.github.io/threat-feed-me/", "codeRepository": "https://github.com/alexlinos/threat-feed-me", "description": "Open-source, on-prem threat-intelligence aggregator: free threat feeds, deduplicated and ranked by how many unrelated feeds agree, as firewall block lists (EDLs), TAXII 2.1 in and out, and publishing to CrowdSec and UniFi."}</script>
 <style>
   :root{
     --bg:#0e131a; --panel:#141b24; --panel-2:#10161e; --raised:#17202b;
@@ -191,10 +191,11 @@
       <div>
         <a class="kicker" href="#walkthrough">New in v2.5 “Flytrap”: guided set-up · TAXII 2.1 · CrowdSec →</a>
         <h1>The open-source MineMeld replacement<span class="bang">.</span></h1>
-        <p class="lede">Threat Feed Me pulls <b>22 free, keyless threat feeds</b>, works out which malicious
-          <b>IPs</b> and <b>domains</b> independent sources genuinely agree on, and serves the result the way
-          your stack consumes it: <b>block-list URLs</b> for firewalls and DNS filters, <b>TAXII 2.1</b> for
-          SIEMs, and direct publishing to <b>CrowdSec</b> and <b>UniFi</b>.</p>
+        <p class="lede">Threat Feed Me pulls <b>22 free, keyless threat feeds</b> and removes the duplicates,
+          like MineMeld did. Then it goes a step further: it notices when feeds are just <b>republishing each
+          other</b>, so copies don't add up to fake agreement and your strictest list stays small and
+          trustworthy. The result goes out as <b>block-list URLs</b> for firewalls and DNS filters,
+          <b>TAXII 2.1</b> for SIEMs, and straight to <b>CrowdSec</b> and <b>UniFi</b>.</p>
         <div class="cta-row">
           <a class="btn primary" href="#deploy">Deploy in one command</a>
           <a class="btn ghost" href="#walkthrough">See the dashboard</a>
@@ -279,7 +280,7 @@
         <thead><tr><th>MineMeld</th><th>Threat Feed Me</th></tr></thead>
         <tbody>
           <tr><td>Miners, one per feed</td><td>22 curated feeds built in, plus any URL or uploaded list, added from the dashboard</td></tr>
-          <tr><td>Aggregator processors</td><td>Dedupe across feeds, then overlap-discounted consensus scoring into High / Medium / Everything</td></tr>
+          <tr><td>Aggregator processors</td><td>Removes duplicates, then spots feeds that copy each other and counts them once, sorting what's left into High / Medium / Everything</td></tr>
           <tr><td>Whitelist miners</td><td>Whitelist IPs, CIDRs, domains or <code>*.wildcards</code>, globally, per feed or per tier</td></tr>
           <tr><td>EDL feed outputs</td><td>Plain one-per-line lists at <code>/feeds/…</code> that PAN-OS External Dynamic Lists (and every other firewall) take as-is</td></tr>
           <tr><td>TAXII miners</td><td><b>TAXII 2.1</b> collections as feeds (MISP, OpenCTI, ISACs on 2.1)</td></tr>
@@ -316,7 +317,7 @@
       <p class="after-code">
         Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
         On first start it fetches the 22 feeds (16 IP feeds plus URLhaus, OpenPhish,
-        Phishing Army, HaGeZi TIF, Phishunt, and DRB-Ra C2 domain feeds), dedupes and scores them, and begins serving block lists,
+        Phishing Army, HaGeZi TIF, Phishunt, and DRB-Ra C2 domain feeds), removes duplicates, sorts them into the three lists, and starts serving them,
         then auto-refreshes every 60 minutes. Open the dashboard and the set-up guide takes it from
         there. Opt-in sources: your own
         <a href="https://www.crowdsec.net" target="_blank" rel="noopener">CrowdSec</a> detections and blocklists,
@@ -331,34 +332,50 @@
   <!-- TIERS -->
   <section id="tiers">
     <div class="wrap">
-      <h2>Confidence tiers</h2>
-      <p class="sub">Every deduped IP is scored and published as a live feed URL. Paste the tier that fits your risk appetite into your firewall.</p>
+      <h2>Three lists, from strict to everything</h2>
+      <p class="sub">Every IP and domain lands on one of three lists, each a live URL your firewall polls. Pick the one that fits how strict you want to be.</p>
 
       <div class="tiers">
         <div class="tier high">
           <h3>High <span class="badge">strictest</span></h3>
-          <p>More than two independent sources agree (overlap-discounted), threat-intel validated, or a primary curator such as URLhaus lists the domain. The smallest list, for strict or capacity-capped devices.</p>
+          <p>Several feeds that don't copy each other report it, or a primary source such as URLhaus lists the domain. The smallest list, for strict devices or ones with an entry limit.</p>
           <div class="url">/feeds/high.txt</div>
         </div>
         <div class="tier med">
           <h3>Medium <span class="badge">recommended</span></h3>
-          <p>Corroborated by more than one independent source. The balanced default most firewalls should poll.</p>
+          <p>At least two unrelated feeds report it. The right default for most firewalls.</p>
           <div class="url">/feeds/medium.txt</div>
         </div>
         <div class="tier low">
           <h3>Everything <span class="badge">widest net</span></h3>
-          <p>Every deduped indicator with any evidence, including your custom lists.</p>
+          <p>Everything any feed reports, duplicates removed, including your own lists.</p>
           <div class="url">/feeds/all.txt</div>
         </div>
       </div>
 
+      <h3 style="margin:34px 0 4px;font-size:1.2rem">How it decides, in plain terms</h3>
+      <p class="sub" style="margin-bottom:10px">MineMeld merged feeds and removed duplicates. Threat Feed Me does that too, then asks
+        whether the feeds reporting an IP are really separate witnesses.</p>
       <ul class="scoring">
-        <li><b>Is it a real agreement?</b> Two feeds that are mostly the same list are one witness, not two, so overlapping lists get discounted. <code>spamhaus + et + bbcan177</code> agreeing on a DROP range is worth ~1.1 votes, not 3.</li>
-        <li><b>Is the witness reliable?</b> Every feed starts at full weight. Flag a false positive and that feed's weight drops, so its IPs score lower until you stop seeing mistakes.</li>
-        <li><b>Is the sighting fresh?</b> A scan from three days ago matters less than one from an hour ago. The recency part of the score halves every 72 hours.</li>
-        <li><b>Does the witness still say so?</b> A feed's vote lasts while it lists an indicator and for 3 days after, so a feed that dropped an IP long ago stops vouching for it.</li>
+        <li><b>Copies don't count twice.</b> Many public feeds republish the same upstream list. Threat Feed Me
+          compares every pair of feeds by what they contain. When one is mostly a copy of another, its vote on the
+          IPs they share counts for very little, so three feeds that all republish Spamhaus DROP add up to about one
+          vote, not three. That keeps the High list from filling up with an upstream's mistakes.</li>
+        <li><b>Real agreement still wins.</b> When two feeds that <i>don't</i> copy each other report the same IP,
+          that counts as two votes and the IP moves up to Medium. More unrelated feeds agreeing moves it to High.</li>
+        <li><b>Mistakes cost the feed that made them.</b> Every feed starts equal. When you mark an IP as a false
+          positive, the feeds that listed it lose some weight, so their other IPs rank lower until they stop making
+          mistakes.</li>
+        <li><b>Votes expire.</b> A feed's vote lasts while it lists the IP and for three days after it drops it, so a
+          feed that removed an IP weeks ago stops vouching for it.</li>
+        <li><b>A small model spots the ones that come back (optional).</b> Some feeds rotate fast: an IP drops off
+          today and is back tomorrow. A small model, trained only on your own install's history, predicts which
+          dropped IPs are likely to return and nudges them up slightly. It never moves an IP onto a stricter list by
+          itself; it decides which IPs make the cut when a firewall can only take the top entries.</li>
       </ul>
-      <p class="sub"><b>Tiers come from the shape of the crowd.</b> Every IP gets one number: how many genuinely independent, reputable, fresh witnesses it has. The tier lines are drawn at natural gaps in that distribution, and held stable so live firewall IPs don't reshuffle as feeds cycle in and out. They only move when the vote distribution actually shifts, or a feed is added, removed, or resized.</p>
+      <p class="sub">The lines between High, Medium and Everything are drawn where the scores naturally separate, and held
+        steady so the lists your firewalls pull don't reshuffle every hour. They move only when the feeds themselves
+        change.</p>
       <p class="after-code" style="margin-top:18px">
         Each URL returns plain text, one entry per line, generated live with the whitelist applied.
         The same tiers exist for <b>malicious domains</b> at <code>/feeds/domains/high.txt</code>,
@@ -379,7 +396,7 @@
         <div class="card"><h3>CrowdSec<span class="tag">v2.5</span></h3>
           <p>Publishes your chosen tier into your CrowdSec Local API as ban decisions, so every bouncer you
             run (nginx, Traefik, Cloudflare, iptables) enforces it. Pulls your own CrowdSec detections, the
-            community blocklist and Console lists back in as independent votes, and never counts its own.</p></div>
+            community blocklist and Console lists back in, each voting as its own source, and never counts its own.</p></div>
         <div class="card"><h3>TAXII 2.1 for SIEMs<span class="tag">v2.5</span></h3>
           <p>Six read-only collections of STIX 2.1 Indicators with confidence, sources and expiry, for
             Microsoft Sentinel, QRadar, Splunk, MISP and OpenCTI. Stable IDs, so indicators update in place.</p></div>
