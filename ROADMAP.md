@@ -65,6 +65,10 @@ says so.
   needs a security review first.
 - **Aging for manual entries.** MineMeld's local lists expired entries on
   their own; manual indicators here never do.
+- **False-positive penalties that fade.** A flag lowers the feed's weight for
+  as long as its whitelist entry stays, with no timer, so a feed that fixed
+  its mistake months ago still pays for it. Decaying the penalty with the
+  flag's age would let a feed earn its weight back.
 
 ## Not planned
 
