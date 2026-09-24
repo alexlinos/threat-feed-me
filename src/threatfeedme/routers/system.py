@@ -262,7 +262,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     #
     # Load the indicator list ONCE and derive every (tier x kind) count from
     # that single pass. The old code re-fetched the full table per tier
-    # (get_all_indicators_by_tier) and again for total_inds — each fetch runs
+    # (the old per-tier full-table query) and again for total_inds — each fetch runs
     # a correlated GROUP_CONCAT subquery per row, so with tens of thousands
     # of indicators the dashboard was spending seconds just to count.
     wl_map = core.db.get_whitelist_map()

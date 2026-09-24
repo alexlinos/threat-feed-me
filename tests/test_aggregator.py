@@ -2366,7 +2366,7 @@ def test_country_counts_buckets_indicators(db, tmp_path, monkeypatch):
 
     counts = dict(db.country_counts())
     assert counts["US"] == 2 and counts["RU"] == 1 and counts["ZZ"] == 1
-    assert len(db.get_all_indicators()) == 4       # aggregation stored nothing
+    assert db.get_stats_summary()["total"] == 4    # aggregation stored nothing
 
 
 def test_country_counts_empty_when_table_missing(db, tmp_path, monkeypatch):

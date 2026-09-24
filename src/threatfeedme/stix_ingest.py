@@ -160,7 +160,7 @@ def _parse_time(value) -> Optional[datetime]:
     if not isinstance(value, str):
         return None
     try:
-        t = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        t = datetime.fromisoformat(value)   # 3.11+ accepts a trailing Z
     except ValueError:
         return None
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)

@@ -1,5 +1,6 @@
 """Heavy-writer coordination (v2.5.0): rescores never overlap, and a rescore
 writes only what changed, in short transactions."""
+from threatfeedme.models import ConfidenceTier
 import threading
 import time
 
@@ -85,12 +86,12 @@ def test_only_the_rows_that_move_are_written(db, monkeypatch):
 
 def test_chunked_writes_produce_the_same_result_as_one_big_write(db, monkeypatch):
     ConfidenceScorer(db, {}).recalculate_all_scores()
-    one_shot = {i.ip: (i.confidence_score, i.tier) for i in db.get_indicators_by_kind("ip")}
+    one_shot = {i.ip: (i.confidence_score, i.tier) for i in db.get_indicators_by_kind_and_tiers("ip", tuple(ConfidenceTier))}
     with db._cursor() as cur:                 # force every row to be rewritten
         cur.execute("UPDATE indicators SET effective_votes = NULL")
     monkeypatch.setattr(ConfidenceScorer, "_WRITE_CHUNK", 7)
     ConfidenceScorer(db, {}).recalculate_all_scores()
-    chunked = {i.ip: (i.confidence_score, i.tier) for i in db.get_indicators_by_kind("ip")}
+    chunked = {i.ip: (i.confidence_score, i.tier) for i in db.get_indicators_by_kind_and_tiers("ip", tuple(ConfidenceTier))}
     assert chunked.keys() == one_shot.keys()
     for ip, (score, tier) in chunked.items():
         # two rescores at different instants: recency drifts a hair between them

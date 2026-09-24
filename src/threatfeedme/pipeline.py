@@ -230,25 +230,6 @@ def export_tiers(db: Database, config: Dict) -> Dict:
     return results
 
 
-def get_export_stats(db: Database) -> Dict:
-    """Get statistics about exported data, per kind. The historical unsuffixed
-    keys stay IP-only (they describe the *_confidence_ips files)."""
-    stats = {}
-    wl_map = db.get_whitelist_map()
-    for tier in ConfidenceTier:
-        # Cumulative, matching the exported files (low_count == everything).
-        stats[f"{tier.value}_count"] = sum(
-            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind="ip")
-            if is_included(i, wl_map))
-        stats[f"{tier.value}_domain_count"] = sum(
-            1 for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind="domain")
-            if is_included(i, wl_map))
-    stats["total_unique_ips"] = stats.get("low_count", 0)
-    stats["total_unique_domains"] = stats.get("low_domain_count", 0)
-    stats["whitelisted_count"] = len(db.get_whitelist())
-    return stats
-
-
 # ---- Retention ----
 
 RETENTION_MAX_AGE_KEY = "retention_max_age_days"

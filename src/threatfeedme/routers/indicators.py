@@ -1,7 +1,4 @@
 """Merged-indicator API endpoints and the firewall-facing public feed routes."""
-import csv
-import io
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,9 +8,7 @@ from threatfeedme import feed_cache
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
-from threatfeedme.exporter import firewall_value
-from threatfeedme.feed_helpers import (_FEEDS_BY_NAME, _indicators_for,
-                                       _normalize_indicator, _value_kind)
+from threatfeedme.feed_helpers import _FEEDS_BY_NAME, _normalize_indicator, _value_kind
 from threatfeedme.models import ALL_FEEDS
 from threatfeedme.schemas import IndicatorRequest, WhitelistResponse
 

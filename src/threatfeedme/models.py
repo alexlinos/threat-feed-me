@@ -236,13 +236,3 @@ class FeedStats(BaseModel):
     last_update: datetime
     status: str  # success, error, skipped
     error_message: Optional[str] = None
-
-
-class AggregationResult(BaseModel):
-    total_unique_ips: int
-    high_confidence_count: int
-    medium_confidence_count: int
-    low_confidence_count: int
-    whitelisted_count: int
-    feeds_processed: int
-    processing_time_seconds: float

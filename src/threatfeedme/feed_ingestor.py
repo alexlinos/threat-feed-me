@@ -11,7 +11,7 @@ import time
 import ipaddress
 import json
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Tuple, Union
+from typing import List, Dict, Optional, Set, Tuple, Union
 from urllib.parse import parse_qs, urljoin, urlsplit
 import logging
 
@@ -46,7 +46,7 @@ def _read_capped(response, label: str) -> str:
 from threatfeedme.credentials import (CROSS_ORIGIN_SAFE_HEADERS, KeyPolicy,
                                       same_origin)
 from threatfeedme.domains import normalize_domain
-from threatfeedme.models import FeedSource, FeedType
+from threatfeedme.models import FeedSource
 from threatfeedme.database import Database
 
 logger = logging.getLogger(__name__)
@@ -263,16 +263,9 @@ def parse_feed_content(content: str) -> List[Dict]:
 
 
 class FeedIngestor:
-    # Scraper registry: scraper name -> callable(self, feed) -> str content
-    _SCRAPERS = {}
-
-    @classmethod
-    def register_scraper(cls, name: str):
-        """Decorator to register a scraper function."""
-        def wrapper(fn):
-            cls._SCRAPERS[name] = fn
-            return fn
-        return wrapper
+    # Scraper registry: scraper name -> callable(self, feed) -> str content.
+    # Filled at the bottom of this module, once every scraper is defined.
+    _SCRAPERS: Dict[str, object] = {}
 
     def __init__(self, db: Database, safety=None, allow_private_urls: bool = False,
                  key_policy: Optional[KeyPolicy] = None,
@@ -707,7 +700,6 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
 
 
 # Register the scraper so fetch_feed can dispatch to it.
-FeedIngestor.register_scraper("talos_snort")(_scrape_talos)
 
 
 # =============================================================================
@@ -735,9 +727,6 @@ def _scrape_dshield_block(self: FeedIngestor, feed: FeedSource):
         if len(parts) >= 3 and parts[2].strip().isdigit():
             lines.append(f"{parts[0].strip()}/{parts[2].strip()}")
     return "\n".join(lines)
-
-
-FeedIngestor.register_scraper("dshield_block")(_scrape_dshield_block)
 
 
 # -----------------------------------------------------------------------------
@@ -808,9 +797,6 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
     return "\n".join(lines)
 
 
-FeedIngestor.register_scraper("otx_pulses")(_scrape_otx_pulses)
-
-
 # HoneyDB bad-hosts scraper (JSON feed)
 #
 # HoneyDB authenticates with TWO headers (X-HoneyDb-ApiId + X-HoneyDb-ApiKey),
@@ -866,9 +852,6 @@ def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
     return "\n".join(lines)
 
 
-FeedIngestor.register_scraper("honeydb")(_scrape_honeydb)
-
-
 # CrowdSec LAPI decisions (see crowdsec.py). The feed URL only carries the
 # origin selector (?origins=crowdsec,cscli | CAPI | lists); host and path come
 # from the integration's configured LAPI, which is the ONE host the bouncer
@@ -920,9 +903,6 @@ def _scrape_crowdsec_lapi(self: FeedIngestor, feed: FeedSource):
     return "\n".join(values)
 
 
-FeedIngestor.register_scraper("crowdsec_lapi")(_scrape_crowdsec_lapi)
-
-
 # CrowdSec Console "Raw IP List" integration: the blocklists the operator's
 # Console account subscribes to, as plain text behind Basic auth. The two
 # credential vars are declared by the shipped feed, so KeyPolicy binds them to
@@ -948,9 +928,6 @@ def _scrape_crowdsec_console(self: FeedIngestor, feed: FeedSource):
                                             "User-Agent": "ThreatFeedMe/1.0"})
     response.raise_for_status()
     return _read_capped(response, feed.name)
-
-
-FeedIngestor.register_scraper("crowdsec_console")(_scrape_crowdsec_console)
 
 
 # =============================================================================
@@ -992,10 +969,6 @@ def _scrape_phishtank_urls(self: FeedIngestor, feed: FeedSource):
     """PhishTank online-valid.csv: 'phish_id,url,...' — the URL is column 1;
     the URL parser keeps the full host (see parse_domain_feed_content)."""
     return _scrape_csv_column(self, feed, 1)
-
-
-FeedIngestor.register_scraper("drb_ra_domains")(_scrape_drb_ra_domains)
-FeedIngestor.register_scraper("phishtank_urls")(_scrape_phishtank_urls)
 
 
 # =============================================================================
@@ -1109,4 +1082,14 @@ def _scrape_taxii21(self: FeedIngestor, feed: FeedSource):
     return "\n".join(values)
 
 
-FeedIngestor.register_scraper("taxii21")(_scrape_taxii21)
+FeedIngestor._SCRAPERS.update({
+    "talos_snort": _scrape_talos,
+    "dshield_block": _scrape_dshield_block,
+    "otx_pulses": _scrape_otx_pulses,
+    "honeydb": _scrape_honeydb,
+    "crowdsec_lapi": _scrape_crowdsec_lapi,
+    "crowdsec_console": _scrape_crowdsec_console,
+    "drb_ra_domains": _scrape_drb_ra_domains,
+    "phishtank_urls": _scrape_phishtank_urls,
+    "taxii21": _scrape_taxii21,
+})

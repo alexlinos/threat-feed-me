@@ -86,7 +86,7 @@ def stix_time(raw) -> Optional[str]:
 def parse_added_after(raw: str) -> str:
     """A client's added_after -> the stored-timestamp form it is compared
     against. Raises ValueError on anything that is not a timestamp."""
-    dt = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(raw.strip())   # 3.11+ accepts a trailing Z
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
