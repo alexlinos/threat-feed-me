@@ -365,11 +365,11 @@
         <li><b>Real agreement still wins.</b> When two feeds that <i>don't</i> copy each other report the same IP,
           that counts as two votes and the IP moves up to Medium. More unrelated feeds agreeing moves it to High.</li>
         <li><b>Mistakes cost the feed that made them.</b> Every feed starts equal. When you mark an IP as a false
-          positive, the feeds that listed it lose some weight, so their other IPs rank lower until they stop making
-          mistakes.</li>
-        <li><b>Votes expire, but not instantly.</b> A feed's vote lasts while it lists the IP and for three days after it
-          drops it, so a feed that removed an IP weeks ago stops vouching for it. The three days also stop fast-rotating
-          feeds from flapping an IP on and off your firewall: dropped today and back tomorrow, it never leaves your list.</li>
+          positive, the feeds that listed it lose some weight, so their other IPs rank lower. The penalty lasts as long
+          as your whitelist entry does; remove the entry, or clear the flag, and the feed's weight comes back.</li>
+        <li><b>Rotating feeds don't cause churn.</b> Some feeds drop and re-add the same IPs every day. Threat Feed Me
+          keeps counting a feed's vote for three days after it drops an IP, so those IPs stay put instead of flapping on
+          and off your firewall. After three days, the vote ends.</li>
         <li><b>A small model spots the ones that come back (optional).</b> Some feeds rotate fast: an IP drops off
           today and is back tomorrow. A small model, trained only on your own install's history, predicts which
           dropped IPs are likely to return and nudges them up slightly. It never moves an IP onto a stricter list by
