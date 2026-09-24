@@ -158,9 +158,9 @@
     <div class="view-head">
         <h1 id="lists-title">Block lists</h1>
         <p class="pulse-line">
-            <span id="pulse-refresh" class="pl{% if pulse.refresh_overdue %} warn{% endif %}" data-interval-min="{{ interval_min }}"><span id="pulse-refresh-idle">refreshed
+            <span id="pulse-refresh" class="pl{% if pulse.refresh_overdue %} warn{% endif %}"><span id="pulse-refresh-idle">refreshed
                 <b id="pulse-refresh-n">{% if pulse.refresh_age_min is not none %}{{ pulse.refresh_age_min }}m<small> ago</small>{% else %}—{% endif %}</b>,
-                <span id="pulse-refresh-sub">{% if pulse.refresh_overdue %}overdue{% elif pulse.refresh_next_min is not none %}next in ~{{ pulse.refresh_next_min }}m{% else %}first fetch pending{% endif %}</span></span><span id="pulse-refresh-run" hidden>refreshing now…</span></span>
+                <span id="pulse-refresh-sub"{% if pulse.refresh_next_feed %} title="next: {{ pulse.refresh_next_feed }}"{% endif %}>{% if pulse.refresh_overdue %}overdue{% elif pulse.refresh_next_min is not none %}next in ~{{ pulse.refresh_next_min }}m{% else %}first fetch pending{% endif %}</span></span><span id="pulse-refresh-run" hidden>refreshing now…</span></span>
             <span class="pl">+<b>{{ '{:,}'.format(pulse.new24_ip) }}</b> IPs · +<b>{{ '{:,}'.format(pulse.new24_domain) }}</b> domains in 24h</span>
             <span class="pl" title="Whitelist entries and false-positive flags">{% if pulse.whitelist_count or pulse.fp_total %}<b>{{ pulse.whitelist_count }}</b> overrides{% if pulse.fp_total %} · {{ pulse.fp_total }} FP{% endif %}{% else %}pure feed consensus{% endif %}</span>
             {% if pulse.crowdsec %}<span class="pl{% if pulse.crowdsec.ok is sameas false %} warn{% endif %}">CrowdSec publishing <b>{{ pulse.crowdsec.tier|capitalize }}</b>{% if pulse.crowdsec.ok is sameas false %} (last publish failed){% endif %}</span>{% endif %}
@@ -249,7 +249,7 @@
                 <td>
                     <b>{{ row.name }}</b>{% if row.problem %} <span class="reorder-flag" title="Sorted to the top of its group because this feed needs attention (see the last error)">↑ needs attention</span>{% endif %}
                     <div class="feed-url" title="{{ row.url }}">{{ row.url }}</div>
-                    <div class="muted">{{ row.feed_type }} · {{ row.source_kind }} · w={{ row.weight }}</div>
+                    <div class="muted">{{ row.feed_type }} · {{ row.source_kind }} · w={{ row.weight }}{% if row.every %} · every {{ row.every }}{% if row.next_min is not none %} · <span class="next-fetch">{% if row.next_min < 1 %}due now{% else %}next in ~{{ row.next_min }}m{% endif %}</span>{% endif %}{% endif %}</div>
                 </td>
                 <td><label class="switch"><input type="checkbox" {% if row.enabled %}checked{% endif %}
                     aria-label="Enable {{ row.name }}"

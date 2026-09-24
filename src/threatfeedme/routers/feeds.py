@@ -472,5 +472,12 @@ def trigger_refresh(feed: Optional[str] = None, _=Depends(require_auth), _csrf=D
 
 @router.get("/api/refresh/status")
 def refresh_status(_=Depends(require_auth)):
-    """Current refresh state and the result of the last run."""
-    return _refresh_state
+    """Current refresh state, the result of the last run, and the soonest feed
+    to come due (each feed runs on its own clock, so there's no single "next")."""
+    from threatfeedme import pipeline
+    from threatfeedme.scheduler import _refresh_interval_minutes
+    try:
+        nxt = pipeline.next_due(core.db, _refresh_interval_minutes() * 60)
+    except Exception:
+        nxt = None
+    return {**_refresh_state, "next": nxt}

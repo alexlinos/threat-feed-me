@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from threatfeedme import jobs
 from threatfeedme.database import Database, MEMBERSHIP_STAMP_KEY
@@ -45,27 +45,39 @@ def scorer_config(db: Database, config: Dict) -> Dict:
     }
 
 
-def due_feeds(db: Database, default_interval_seconds: int) -> List[str]:
-    """Names of enabled feeds that are currently due for a refresh."""
+def feed_schedule(db: Database, default_interval_seconds: int) -> Dict[str, Tuple[int, float]]:
+    """{name: (interval_s, seconds until due)} for enabled feeds; <= 0 = due now.
+    Each feed runs on its own clock, so this is the one place the dashboard's
+    countdowns and the scheduler agree on."""
     last_updates = db.get_feed_last_updates()
     now = datetime.now(timezone.utc)
-    due: List[str] = []
+    out: Dict[str, Tuple[int, float]] = {}
     for feed in db.get_feed_sources(enabled_only=True):
         interval = feed.update_interval if (feed.update_interval or 0) > 0 else default_interval_seconds
-        raw = last_updates.get(feed.name)
-        if not raw:
-            due.append(feed.name)
-            continue
         try:
-            last = datetime.fromisoformat(raw)
+            last = datetime.fromisoformat(last_updates.get(feed.name) or "")
         except (ValueError, TypeError):
-            due.append(feed.name)
+            out[feed.name] = (interval, 0.0)          # never fetched (or unreadable): due
             continue
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
-        if (now - last).total_seconds() >= interval:
-            due.append(feed.name)
-    return due
+        out[feed.name] = (interval, interval - (now - last).total_seconds())
+    return out
+
+
+def due_feeds(db: Database, default_interval_seconds: int) -> List[str]:
+    """Names of enabled feeds that are currently due for a refresh."""
+    return [n for n, (_i, left) in feed_schedule(db, default_interval_seconds).items() if left <= 0]
+
+
+def next_due(db: Database, default_interval_seconds: int) -> Optional[Dict]:
+    """The soonest feed to come due: {"feed", "in_s", "late"}; late = more than
+    a full interval past due (the scheduler has fallen behind)."""
+    sched = feed_schedule(db, default_interval_seconds)
+    if not sched:
+        return None
+    name, (interval, left) = min(sched.items(), key=lambda kv: kv[1][1])
+    return {"feed": name, "in_s": max(0, int(left)), "late": left < -interval}
 
 
 def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,

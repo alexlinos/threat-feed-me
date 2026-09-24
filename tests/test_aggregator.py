@@ -1536,6 +1536,23 @@ def test_due_feeds_zero_interval_uses_default(db):
     assert pipeline.due_feeds(db, default_interval_seconds=600) == ["custom_honeypot"]
 
 
+def test_next_due_is_the_soonest_feed_not_the_global_interval(db):
+    # The dashboard said "next in ~46m" off the global hour while a 15-minute
+    # feed was minutes from due: "next" is the soonest feed on its own clock.
+    from threatfeedme import pipeline
+    now = datetime.now(timezone.utc)
+    for name, interval, ago_min in (("openphish_community", 900, 12), ("spamhaus_drop", 7200, 30)):
+        db.add_feed(FeedSource(name=name, url="http://x/y.txt", weight=0.9, update_interval=interval))
+        db.update_feed_stats(name, 1, "success")
+        _set_last_update(db, name, (now - timedelta(minutes=ago_min)).isoformat())
+    nxt = pipeline.next_due(db, 3600)
+    assert nxt["feed"] == "openphish_community" and 170 <= nxt["in_s"] <= 181
+    assert nxt["late"] is False
+    # a full interval past due means the scheduler has fallen behind
+    _set_last_update(db, "openphish_community", (now - timedelta(minutes=31)).isoformat())
+    assert pipeline.next_due(db, 3600) == {"feed": "openphish_community", "in_s": 0, "late": True}
+
+
 def test_due_feeds_ignores_disabled_feeds(db):
     from threatfeedme import pipeline
     db.add_feed(FeedSource(name="cins_army", url="http://x/y.txt", weight=0.85,

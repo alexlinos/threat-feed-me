@@ -1130,13 +1130,16 @@ def test_matrix_count_fast_path_matches_walk(client):
 
 
 def test_refresh_pulse_card_is_live_updatable(client):
-    """The Last-refresh card carries stable ids + the interval so client JS
-    can keep it honest while the page sits open (a tab opened during
-    container startup once showed 'first fetch pending' for a day)."""
+    """The Last-refresh card carries stable ids so client JS can keep it
+    honest while the page sits open (a tab opened during container startup
+    once showed 'first fetch pending' for a day), and the status poll says
+    which feed comes due next: feeds run on their own clocks, so a single
+    global interval can't."""
     body = client.get("/").text
     assert 'id="pulse-refresh"' in body
     assert 'id="pulse-refresh-n"' in body
-    assert 'data-interval-min=' in body
+    status = client.get("/api/refresh/status").json()
+    assert "next" in status and (status["next"] is None or {"feed", "in_s", "late"} <= set(status["next"]))
 
 
 # ==================== CSRF protection tests ====================

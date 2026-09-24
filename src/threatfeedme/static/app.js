@@ -522,11 +522,15 @@ function updateRefreshPulse() {
         setBrandState(failedFeeds(j.last_result).length ? 'error' : '');
         if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
         const ageMin = Math.max(0, Math.floor((Date.now() - Date.parse(j.last_finished)) / 60000));
-        const interval = parseInt(card.dataset.intervalMin, 10) || 60;
         n.innerHTML = ageMin + 'm<small> ago</small>';
-        const overdue = ageMin > 2 * interval;
+        // "next" is the soonest feed due (each runs on its own clock).
+        const next = j.next;
+        const overdue = !!(next && next.late);
         card.classList.toggle('warn', overdue);
-        sub.textContent = overdue ? 'overdue' : 'next in ~' + Math.max(0, interval - ageMin) + 'm';
+        if (next) {
+            sub.textContent = overdue ? 'overdue' : 'next in ~' + Math.ceil(next.in_s / 60) + 'm';
+            sub.title = 'next: ' + next.feed;
+        }
     }).catch(() => {});  // transient failure: keep last shown values
 }
 document.addEventListener('DOMContentLoaded', () => {

@@ -141,6 +141,14 @@ def _system_info(request: Request, poll_log: dict) -> dict:
     }
 
 
+def _every_text(seconds: int) -> str:
+    """A feed's cadence for the Feeds table: 15m, 1h, 12h, 1d."""
+    m = max(1, int(seconds) // 60)
+    if m % 1440 == 0:
+        return f"{m // 1440}d"
+    return f"{m // 60}h" if m % 60 == 0 else f"{m}m"
+
+
 def _compact(n: int) -> str:
     """Human-compact count for the matrix's narrow layout (42.4k, 1.2M)."""
     if n >= 1_000_000:
@@ -346,6 +354,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # into two sections pushed the management surface off the page.
     telemetry = feed_telemetry(core.db)
     tele_by_name = {r["name"]: r for r in telemetry["rows"]}
+    schedule = pipeline.feed_schedule(core.db, _refresh_interval_minutes() * 60)
     feed_rows = []
     for fsrc in feed_sources:
         st = feed_stats.get(fsrc.name)
@@ -366,6 +375,10 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "taxii": fsrc.scraper == "taxii21",
             "weight": fsrc.weight,
             "enabled": fsrc.enabled,
+            # Own clock: cadence and a countdown (None when disabled).
+            "every": _every_text(schedule[fsrc.name][0]) if fsrc.name in schedule else None,
+            "next_min": (-(-max(0, int(schedule[fsrc.name][1])) // 60)
+                         if fsrc.name in schedule else None),
             "status": st.status if st else None,          # None = never run
             "indicators": st.total_indicators if st else None,
             "fp_count": fp,
@@ -419,6 +432,12 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # for duplicating them).
     enabled_tele = [r for r in telemetry["rows"] if r["enabled"]]
     last_fin = _refresh_state.get("last_finished")
+    if not last_fin:
+        # The run state lives in memory, so after a restart the page said
+        # "first fetch pending" over a fully fetched corpus. The newest feed
+        # fetch in the DB is when the data was last refreshed.
+        stamps = [v for v in core.db.get_feed_last_updates().values() if v]
+        last_fin = max(stamps) if stamps else None
     # "never run" = no successful fetch yet. Before any refresh has finished
     # that is just pending; after one, the feed had its chance and has
     # nothing, which is a problem (it used to count as healthy, so a feed
@@ -439,10 +458,17 @@ def dashboard(request: Request, _=Depends(require_auth)):
             if fin.tzinfo is None:
                 fin = fin.replace(tzinfo=timezone.utc)
             refresh_age_min = max(0, int((datetime.now(timezone.utc) - fin).total_seconds() // 60))
-            refresh_next_min = max(0, interval_min - refresh_age_min)
-            refresh_overdue = refresh_age_min > 2 * interval_min
         except (ValueError, TypeError):
             pass
+    # "next" is the soonest FEED to come due: feeds run on their own clocks
+    # (15 min to 24 h), so the global interval said "next in ~46m" while a
+    # 15-minute feed was minutes away. Overdue = a feed a full interval late.
+    next_feed = None
+    nxt = pipeline.next_due(core.db, interval_min * 60) if last_fin else None
+    if nxt:
+        refresh_next_min = -(-nxt["in_s"] // 60)
+        refresh_overdue = nxt["late"]
+        next_feed = nxt["feed"]
     fp_total = sum(fp_counts.values())
     unifi_pulse = None
     from threatfeedme import pusher_unifi
@@ -483,6 +509,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "pending_count": len(pending_rows),
         "refresh_age_min": refresh_age_min,
         "refresh_next_min": refresh_next_min,
+        "refresh_next_feed": next_feed,
         "refresh_overdue": refresh_overdue,
         "new24_ip": new24.get("ip", 0),
         "new24_domain": new24.get("domain", 0),
