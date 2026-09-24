@@ -5,17 +5,20 @@
 # Threat Feed Me!
 
 **The open-source MineMeld replacement.** An on-prem threat-intelligence
-aggregator that pulls 22 free, keyless feeds, works out which indicators
-*independent* sources genuinely agree on, and serves the result the way your
+aggregator that pulls 22 free, keyless feeds and removes the duplicates, like
+MineMeld did, then goes a step further: it notices when feeds are just
+republishing each other, so copies don't add up to fake agreement and your
+strictest list stays small and trustworthy. It serves the result the way your
 security stack consumes it: block-list URLs for firewalls and DNS filters,
 TAXII 2.1 for SIEMs, and direct publishing to CrowdSec bouncers and UniFi
 gateways. One container, no accounts, no API keys. Feed it threats. It's
 always hungry.
 
-- **Consensus, not just aggregation.** Public feeds copy each other, so raw
-  source counts lie. Threat Feed Me discounts overlapping feeds, weighs each
-  feed by its false-positive record, and draws High / Medium / Everything from
-  the actual shape of the evidence ([how](#how-confidence-tiering-works)).
+- **Real agreement, not just a pile of feeds.** Public feeds copy each other,
+  so "five feeds list this IP" can mean one source republished five times.
+  Feeds that copy each other count once, two unrelated feeds agreeing still
+  moves an IP up, and a feed that gets things wrong loses weight when you flag
+  its mistakes ([how](#how-confidence-tiering-works)).
 - **Served every way you need it.** Plain-text URLs any firewall can poll
   (FortiGate, Palo Alto EDL, pfSense, OPNsense, Sophos, SonicWall, Check Point,
   Cisco), domain lists for the DNS filter, CSV/JSON, and a read-only
@@ -34,9 +37,10 @@ always hungry.
 </p>
 
 **New in 2.5 "Flytrap":** a redesigned dashboard with a guided first-run set-up,
-a TAXII 2.1 server, CrowdSec in both directions, votes that expire when a feed
-drops an indicator, "last polled by" proof on every URL, and a MineMeld
-migration path. See [Upgrading to 2.5](#upgrading) before you pull it: High
+TAXII 2.1 in both directions (serve your lists, and read MISP, OpenCTI or ISAC
+collections as feeds), CrowdSec in both directions, votes that expire when a
+feed drops an indicator, "last polled by" proof on every URL, a database about
+a third of its old size, and a MineMeld migration path. See [Upgrading to 2.5](#upgrading) before you pull it: High
 gets smaller on purpose.
 
 ### Coming from MineMeld?
@@ -49,7 +53,7 @@ hand it to firewalls and SIEMs, with less to maintain:
 | MineMeld | Threat Feed Me |
 |---|---|
 | Miners, one per feed | 22 curated feeds built in, plus any URL or uploaded list you add from the dashboard |
-| Aggregator processors (dedupe, merge) | Dedupe across feeds, then overlap-discounted consensus scoring into confidence tiers |
+| Aggregator processors (dedupe, merge) | Removes duplicates, then spots feeds that copy each other and counts them once, sorting what's left into High / Medium / Everything |
 | Whitelist miners | Whitelist by IP, CIDR, domain or `*.wildcard`, scoped globally, per feed or per tier |
 | EDL feed outputs (PAN-OS) | `/feeds/{high,medium,all}.txt` and `/feeds/domains/...`: plain one-per-line lists that PAN-OS External Dynamic Lists and every other firewall accept |
 | TAXII miners (TAXII 1.x feeds) | TAXII **2.1** collections as feeds: MISP, OpenCTI or any TAXII 2.1 server |
@@ -95,7 +99,7 @@ screen.
 That's it. On first start it fetches **22 free, keyless threat feeds** (16 IP
 feeds and 6 domain feeds: URLhaus, OpenPhish, Phishing Army, HaGeZi TIF,
 Phishunt, and the DRB-Ra C2 list),
-dedupes and scores them, and begins serving block lists. It
+removes duplicates, sorts them into the three lists, and starts serving them. It
 **auto-refreshes every 60 minutes**, no cron, no maintenance. Everything stays
 on-prem; feeds are pulled inbound only.
 
@@ -118,7 +122,10 @@ on-prem; feeds are pulled inbound only.
 To protect the dashboard on an untrusted network, set `DASHBOARD_USER` and
 `DASHBOARD_PASSWORD` in the environment (e.g. in `docker-compose.yml`); setting
 both turns auth on — no config edit needed, so it works with the published
-image. Feed URLs stay open so firewalls can poll them.
+image. Feed URLs stay open so firewalls can poll them. With auth off and the
+host check off (both are the defaults), the app logs a warning on every start:
+a malicious web page opened on your network could drive the dashboard through
+DNS rebinding. Turning on either one closes that.
 
 ## Walkthrough
 
@@ -276,7 +283,8 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
 │  └── Push: CrowdSec LAPI decisions, UniFi network lists     │
 ├─────────────────────────────────────────────────────────────┤
 │  Storage                                                    │
-│  └── SQLite (indicators, sources, scores, whitelist, ...)  │
+│  ├── SQLite (indicators, sources, scores, whitelist, ...)  │
+│  └── churn log in its own SQLite file (predictor history)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -298,8 +306,8 @@ three feeds looks like three-way corroboration, and every redundant feed you
 add inflates the counts until "High confidence" holds more IPs than Medium.
 That's a lie in your blocklist.
 
-**The fix, as three questions.** Instead of trusting the raw count, each IP
-goes through three checks:
+**The fix, as four questions.** Instead of trusting the raw count, each IP
+goes through four checks:
 
 1. **Is this a real agreement?** *(overlap discount)*: We measure how much
    each pair of feeds overlaps. Two feeds that are 90% the same list are one
@@ -308,8 +316,10 @@ goes through three checks:
    DROP range is worth ~1.1 votes, not 3.
 2. **Is the witness reliable?** *(reputation weight)*: Every feed starts at
    full weight (1.0). Flag a false positive from the dashboard and that feed's
-   weight drops automatically, so its IPs score lower until you stop seeing
-   mistakes from it.
+   weight drops automatically, so its IPs score lower. The penalty lasts as
+   long as your whitelist entry does: remove the entry, or clear the flag in
+   the feed's ⚠ FP dialog, and the weight comes back. It doesn't fade on a
+   timer.
 3. **Is the sighting fresh?** *(recency weight)*: A scan from three days ago
    matters less than one from an hour ago. The recency part of the score
    halves every 72 hours (`scoring.decay_half_life_hours`).
@@ -318,9 +328,19 @@ goes through three checks:
    (default 3) after it drops it. Most feeds publish short windows (HoneyDB
    24 hours, AbuseIPDB 3 days), so two feeds seeing an IP a few days apart is
    real corroboration and the grace keeps it; what goes is the two-week tail
-   where a feed that dropped an IP long ago still counted. Upgrading from
-   2.4.x shrinks High noticeably (on one production install IP High fell from
-   36.8k to about 11k at rollout).
+   where a feed that dropped an IP long ago still counted. The grace also
+   stops fast-rotating feeds from flapping an IP on and off your firewall.
+   Upgrading from 2.4.x shrinks High noticeably (on one production install IP
+   High fell from 36.8k to about 11k at rollout).
+
+**An optional nudge from a small model.** If you run the offline predictor
+(`scripts/predictor.sh`), a small model trained only on your own install's
+churn log predicts which IPs that dropped off a fast-rotating feed are likely
+to come back, and nudges their score up slightly (it carries roughly a tenth of the score).
+It never moves an IP between High, Medium and Everything: the tiers are the
+vote math above. It decides which IPs make the cut when a firewall takes only
+the top entries (`?limit=N`, the UniFi list cap). Without a trained model file
+it does nothing.
 
 **Where the tier lines come from.** After those weights, every IP has one
 number: its *effective votes* (how many genuinely independent, reputable,
@@ -677,6 +697,12 @@ automatically on startup:
   database for the compaction. Backups are now two files (see
   [Backups](#backups)).
 
+- **Behind a proxy?** Feed fetches now ignore `HTTP(S)_PROXY` / `ALL_PROXY`
+  unless `safety.allow_private_feed_urls` is on (see [Configuration](#configuration)).
+  A proxy on a private address was already refused by the private-address
+  check; one on a public address used to work and no longer does, so its
+  feeds fail until you set that option.
+
 If you run the offline predictor, retrain right after upgrading
 (`scripts/predictor.sh both`): its features were redefined to remove a
 training leak, and an old model is refused rather than misused.
@@ -719,6 +745,14 @@ Edit `config.yaml` to customize:
   whenever any feed re-reports an IP, this mostly evicts transient high-churn
   entries (scanners, brute-force) while continuously-listed feeds stay put. Set
   `0` to keep indefinitely.
+
+**Proxies.** Feeds are fetched directly: while the private-address check is on
+(`safety.allow_private_feed_urls: false`, the default), `HTTP(S)_PROXY` and
+`ALL_PROXY` are ignored for feed fetches, because through a proxy that check
+would validate the proxy instead of the feed's real address. If your network
+only reaches the internet through a proxy, set
+`safety.allow_private_feed_urls: true` to use it; that also turns the
+private-address check off, so restrict who can add feeds.
 
 Values in `config.yaml` are the **seed defaults**. Runtime-adjustable settings (
 the auto-refresh interval and the retention window) can be changed live from
