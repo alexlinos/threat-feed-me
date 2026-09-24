@@ -360,7 +360,8 @@
         <li><b>Copies don't count twice.</b> Many public feeds republish the same upstream list. Threat Feed Me
           compares every pair of feeds by what they contain. When one is mostly a copy of another, its vote on the
           IPs they share counts for very little, so three feeds that all republish Spamhaus DROP add up to about one
-          vote, not three. That keeps the High list from filling up with an upstream's mistakes.</li>
+          vote, not three. So when one upstream list gets an address wrong, the feeds copying it can't make that
+          mistake look like several sources agreeing and push it onto your High list.</li>
         <li><b>Real agreement still wins.</b> When two feeds that <i>don't</i> copy each other report the same IP,
           that counts as two votes and the IP moves up to Medium. More unrelated feeds agreeing moves it to High.</li>
         <li><b>Mistakes cost the feed that made them.</b> Every feed starts equal. When you mark an IP as a false
