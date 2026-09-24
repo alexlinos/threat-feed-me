@@ -164,7 +164,10 @@ def test_predictor_factor_weights_score(db):
     # the factor exactly (comparing across on/off scorers would also change
     # the other components' normalization)
     delta = sc_on.calculate_score("203.0.113.61")[0] - sc_on.calculate_score("203.0.113.60")[0]
-    assert delta == pytest.approx(sc_on.weights["predictor"] * 0.9)
+    # abs, not rel: the two rows are added microseconds apart, so recency
+    # differs by ~1e-7, which tripped the default 1e-6 relative tolerance on
+    # a slow CI runner (v2.5.1 release run)
+    assert delta == pytest.approx(sc_on.weights["predictor"] * 0.9, abs=1e-5)
     sc_off = ConfidenceScorer(db, _pcfg(False))
     # dark: the stored score must move nothing (approx: last_seen decays with
     # wall-clock between the two calls)
