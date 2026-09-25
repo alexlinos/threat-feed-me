@@ -934,32 +934,39 @@ def test_api_key_endpoint_refuses_a_stored_process_knob(client):
 
 
 def test_host_check_api_lock_and_unlock(client):
-    """Report-only -> lock to the seen names -> enforcing; the host the
-    request arrived on is always kept, so locking can't lock out the page."""
+    """Report-only -> lock -> enforcing; the host the request arrived on is
+    always kept, so locking can't lock out the page. While no sign-in is
+    set, the list only changes from an IP or an already-saved name (2.5.2)."""
     from threatfeedme import middleware as mw
+    ip = {"host": "127.0.0.1"}
     mw._seen.clear(); mw.invalidate_allowlist_cache()
     try:
         client.get("/api/stats")                       # arrives as "testserver"
         s = client.get("/api/host-check").json()
         assert s["mode"] == "report-only"
         assert "testserver" in [e["host"] for e in s["seen"]]
+        # an unsaved name can't edit the list while there's no sign-in
+        assert client.post("/api/host-check", json={"allowed": ["testserver"]}).status_code == 403
 
         # saving names alone refuses nothing: the switch is off by default
-        s = client.post("/api/host-check", json={"allowed": ["threatfeedme.tnh.local"]}).json()
+        s = client.post("/api/host-check", headers=ip,
+                        json={"allowed": ["a.lan", "threatfeedme.tnh.local"]}).json()
         assert s["mode"] == "report-only"
-        r = client.post("/api/host-check", json={"allowed": ["threatfeedme.tnh.local"], "enforce": True})
+        # locking from a saved name keeps that name even if the list drops it
+        r = client.post("/api/host-check", headers={"host": "a.lan"},
+                        json={"allowed": ["threatfeedme.tnh.local"], "enforce": True})
         assert r.status_code == 200
         s = r.json()
         assert s["mode"] == "enforcing"
-        assert s["configured"] == ["testserver", "threatfeedme.tnh.local"]
+        assert s["configured"] == ["a.lan", "threatfeedme.tnh.local"]
 
         assert client.get("/api/stats", headers={"host": "attacker.example"}).status_code == 400
         # feeds stay open to any Host, even while enforcing
         assert client.get("/feeds/high.txt", headers={"host": "attacker.example"}).status_code == 200
 
-        assert client.post("/api/host-check", json={"allowed": ["bad_name!"]}).status_code == 400
+        assert client.post("/api/host-check", headers=ip, json={"allowed": ["bad_name!"]}).status_code == 400
     finally:
-        client.post("/api/host-check", json={"allowed": []})   # back to report-only
+        client.post("/api/host-check", headers=ip, json={"allowed": []})   # back to report-only
         mw._seen.clear(); mw.invalidate_allowlist_cache()
     assert client.get("/api/host-check").json()["mode"] == "report-only"
 
@@ -968,9 +975,10 @@ def test_host_check_save_names_without_enforcing(client):
     """The first-run guide adds a DNS name with enforce=false: nothing is
     refused until the operator locks, and unlocking keeps the names."""
     from threatfeedme import middleware as mw
+    ip = {"host": "127.0.0.1"}
     mw._seen.clear(); mw.invalidate_allowlist_cache()
     try:
-        s = client.post("/api/host-check",
+        s = client.post("/api/host-check", headers=ip,
                         json={"allowed": ["threatfeedme.lan"], "enforce": False}).json()
         assert s["mode"] == "report-only" and s["locked"] is False
         assert "threatfeedme.lan" in s["configured"]
@@ -981,17 +989,19 @@ def test_host_check_save_names_without_enforcing(client):
         assert "threatfeedme.lan" not in seen and "not-yet.example" in seen
 
         # omitting enforce keeps the current (unlocked) state
-        s = client.post("/api/host-check", json={"allowed": ["threatfeedme.lan", "tfm.lan"]}).json()
+        s = client.post("/api/host-check", headers=ip,
+                        json={"allowed": ["threatfeedme.lan", "tfm.lan"]}).json()
         assert s["mode"] == "report-only"
 
-        s = client.post("/api/host-check", json={"allowed": s["configured"], "enforce": True}).json()
+        s = client.post("/api/host-check", headers=ip,
+                        json={"allowed": s["configured"], "enforce": True}).json()
         assert s["mode"] == "enforcing" and s["locked"] is True
         assert client.get("/api/stats", headers={"host": "not-yet.example"}).status_code == 400
-
-        s = client.post("/api/host-check", json={"allowed": s["configured"], "enforce": False}).json()
+        s = client.post("/api/host-check", headers=ip,
+                        json={"allowed": s["configured"], "enforce": False}).json()
         assert s["mode"] == "report-only" and "tfm.lan" in s["configured"]
     finally:
-        client.post("/api/host-check", json={"allowed": []})
+        client.post("/api/host-check", headers=ip, json={"allowed": []})
         mw._seen.clear(); mw.invalidate_allowlist_cache()
 
 

@@ -127,7 +127,10 @@ v2.4.19 and v2.5.0):
   password. The first one can only be set on a request that arrived by IP
   address, localhost or a saved hostname: with auth off, a DNS-rebinding page
   can pass the CSRF check, but it arrives under its own domain, so it can't
-  set a password the operator doesn't know. Environment credentials always
+  set a password the operator doesn't know. For the same reason, while no
+  sign-in exists the saved-hostname list only changes from an IP, localhost
+  or an already-saved name (2.5.2): otherwise the page could save its own
+  domain first and then pass the password guard from it. Environment credentials always
   win and can't be changed from the page. Locked out:
   `python -m threatfeedme.main --reset-dashboard-auth` on the host.
 - **CSRF**: all mutating endpoints require the `X-Requested-With` header the

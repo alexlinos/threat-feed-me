@@ -719,7 +719,15 @@ def host_check_update(body: HostCheckRequest, request: Request,
     switch is OFF by default (upgrades and fresh installs refuse nothing).
     An empty list is always off. The hostname this request arrived on is
     always kept, so switching on can never lock out the page doing it."""
-    from threatfeedme import middleware as mw
+    from threatfeedme import auth, middleware as mw
+    # With no sign-in, a DNS-rebinding page can pass the CSRF check; if it
+    # could save its own domain here, it could then pass the first-password
+    # guard (dashboard_auth_update) from a "saved" name. So until a password
+    # exists, the list only changes from a request that arrived by IP,
+    # localhost or an already-saved name.
+    if not auth.auth_enabled() and not _bootstrap_host_ok(request):
+        raise HTTPException(status_code=403, detail="Open the dashboard by the server's IP address "
+                            "to change saved hostnames while no sign-in is set")
     names = []
     for value in body.allowed[:64]:
         name = mw.normalize_hostname(value)

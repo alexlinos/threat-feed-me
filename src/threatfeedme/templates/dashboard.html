@@ -618,9 +618,10 @@
             <p class="hint">Stored as a salted hash, never the password itself. Locked out? On the server run
                <code>docker exec threat-feed-me python -m threatfeedme.main --reset-dashboard-auth</code>.</p>
             {% else %}
-            <p class="hint">To set the first password, open this page by the server's IP address, or add the
-               name you're using under Dashboard hostnames first. This stops another website that tricks your
-               browser into reaching this page from setting a password you don't know.</p>
+            <p class="hint">To set the first password, open this page by the server's IP address
+               (for example <code>http://&lt;server-ip&gt;:8080/#system</code>). Once a password exists, any name
+               works. This stops another website that tricks your browser into reaching this page from setting a
+               password you don't know.</p>
             {% endif %}
             {% endif %}
         </div>

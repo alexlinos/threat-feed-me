@@ -138,3 +138,19 @@ def test_a_verified_login_is_not_rehashed_on_every_request(client, monkeypatch):
         auth.require_auth(_creds("alex", PW))
     assert len(calls) == 1
 
+
+
+def test_a_rebinding_page_cant_save_its_own_name_to_pass_the_guard(db):
+    # the bypass: save evil.example as a hostname, then set the first
+    # password from that now-"saved" name
+    from threatfeedme.routers import system
+    app = FastAPI()
+    app.add_api_route("/api/host-check", system.host_check_update, methods=["POST"])
+    app.add_api_route("/api/dashboard-auth", system.dashboard_auth_update, methods=["POST"])
+    c = TestClient(app)
+    evil = {**H, "host": "evil.example"}
+    assert c.post("/api/host-check", headers=evil, json={"allowed": ["evil.example"]}).status_code == 403
+    assert _set(c, headers=evil).status_code == 403
+    # the operator, by IP, can still save names (then use them)
+    assert c.post("/api/host-check", headers=IP, json={"allowed": ["threatfeedme.lan"]}).status_code == 200
+    assert _set(c, headers={**H, "host": "threatfeedme.lan"}).status_code == 200
