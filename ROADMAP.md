@@ -54,6 +54,50 @@ says so.
   `?limit=N`, last-polled-by per URL, TAXII not required.
 - **Out of scope.** Default-deny RMM lists (parked; see `CLAUDE.md`).
 
+## 2.6: decisions waiting on the maintainer
+
+Researched 2026-09-25 and parked here so they ship together with 2.6. Nothing
+below is in the product yet; each item is the maintainer's call.
+
+**New feeds (ratify one at a time).** Probed keyless and live, unique share
+measured against the roster, adoption and terms checked.
+
+- Proposed default ON: `spamhaus_drop_v6` (91 IPv6 CIDRs, same terms as
+  DROP; needs a small JSON-lines parser), `drb_ra_c2_ips` (C2 IPs, 99%
+  unique, CC BY-NC-SA like `drb_ra_c2`), `etnetera_aggressive` (569 IPs,
+  63% unique, MIT, in the Suricata rule index), `echap_stalkerware`
+  (969 domains, CC BY 4.0, AdGuard's built-in filter).
+- Proposed opt-in OFF: `opendbl_darknet` (22.9k IPs, 35% unique, own
+  sensor, but no licence: ask the operator first), `ipnoise` (SekuriPy,
+  "free for any use", only collecting since 2026-09-05: ON after two
+  steady weeks), APNIC honeynet telnet and RDP (terms unpublished; telnet
+  is 80% inside Dataplane telnet, pick one), `dataplane_telnetlogin`,
+  `jamesbrine_honeypots` (non-commercial), `phishdestroy_live` (watch
+  false positives), `threatview_ips`, `sfs_toxic_cidrs`, `sblam`.
+- Rejected, with reasons in the research notes: Rutgers DROP and InterServer
+  (almost all already in the roster), Stratosphere AIP (stopped updating
+  2026-08-06), DroneBL (no keyless bulk access), Project Honey Pot and
+  CleanTalk (terms), BotScout (Cloudflare addresses in a 35-IP list),
+  myip.ms and Tor lists (policy, not threats), Feodo and AlienVault
+  reputation (stale), aggregators (bitwire, IPFire DBL, NERD, FireHOL
+  levels). FireHOL comparison: we cover 100% of the threat sources in its
+  levels 1 to 3; the rest is bogon space and rejected sources.
+
+**Non-commercial feeds.** `dataplane_sshpwauth`, `phishing_army` and
+`drb_ra_c2` already ship ON under non-commercial or no-redistribution
+terms, and CrowdSec publishing and TAXII re-serve their data to other
+systems. Options: (1) leave as is, (2) ship them opt-in, (3) keep them for
+the operator's own firewalls but exclude them from CrowdSec publish and
+TAXII. Recommended: 3.
+
+**Interface.** Mockups on the maintainer's design canvas (row "2.6
+proposal: expanded lists"): the Lists view as a tier matrix plus lists by
+threat type (`/feeds/<type>/<tier>.txt`), a list builder
+(`/feeds/custom/<name>.txt`), the Apps view and a per-app detail page for
+the application lists above, and a Feeds view with a terms column, trial
+state and a vetted opt-in catalog. Threat-type lists and the builder are
+proposals, not yet agreed scope.
+
 ## Other candidates
 
 - **Generic JSON feeds with a filter expression.** The application-list
