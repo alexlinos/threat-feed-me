@@ -713,10 +713,9 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod (soc-grfna01) runs 2.5.1; its dashboard password must be set once by
-  IP (`http://172.31.10.4:8080/#system`). The 2.5.0 canary (`tfm-canary`,
-  `~/tfm-canary`, holds a prod DB copy + .env) still needs tearing down by
-  the maintainer.
+- Prod (soc-grfna01) runs 2.5.2 (rolled 2026-09-26); its dashboard
+  password must be set once by IP (`http://172.31.10.4:8080/#system`). The
+  2.5.0 canary was removed the same day.
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
