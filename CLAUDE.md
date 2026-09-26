@@ -717,6 +717,29 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   password must be set once by IP (`http://172.31.10.4:8080/#system`). The
   2.5.0 canary was removed the same day.
 
+## v2.5.3 (2026-09-26): refresh-click lockup
+
+- **Report**: "hit Refresh, the interface locks up, then the browser can't
+  connect". The server was never down (a live deployment: no restarts, no
+  OOM, 536 MB peak at 605k indicators). The page was: one failed
+  /api/refresh/status poll threw out of `pollRefresh` and ended polling for
+  good. Typical trigger: a tab left open across an upgrade clicks into the
+  `--init-db` 503 holding page or a closed port (container recreate, the
+  ~1 s hand-off to `--serve`). Polls now retry with backoff and say so.
+  **Only tabs loaded from 2.5.3 on are protected**: an older open tab still
+  runs the old code, so reload the dashboard after upgrading.
+- **Nothing blocks the event loop**: `upload_feed` parsed/stored inline (a
+  5 MB list froze /healthz 1.5 s) and `HostCheckMiddleware` read SQLite on
+  the loop; both now run in the threadpool, pinned by tests that assert the
+  work is off the loop thread.
+- **Refresh/web split considered and rejected again, with numbers**: during a
+  forced full rescore the longest write-lock hold was 0.48 s and /healthz
+  stayed at 0.05 s, and a split would not have prevented this (an upgrade
+  restarts both). Revive only on a memory-capped deployment being OOM-killed
+  mid-refresh, or measured dashboard latency during refreshes degrading.
+  Still open: Delete feed / Recalculate / UniFi+CrowdSec push clicked
+  mid-refresh wait on `jobs.write_lock` for the rest of the rescore.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
