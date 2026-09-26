@@ -698,6 +698,26 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   (atomic write). Kept at maintainer's call: 15/30-min openphish/dshield
   cadence, weekly retrain.
 
+## v2.5.2 (2026-09-26): bugfix, and where 2.6 starts
+
+- **Sign-in guard bypass closed** (bd3caa6): with no password set, POST
+  /api/host-check accepted any names from any request, so a DNS-rebinding
+  page could save its own domain, then pass the first-password guard from
+  that "saved" name. Until a sign-in exists, the hostname list only changes
+  from an IP, localhost or an already-saved name. A "Trust this name" button
+  was considered and dropped: it is the same bypass.
+- **Main is bugfix-only until the maintainer opens 2.6** (2026-09-25). Every
+  open 2.6 decision is in ROADMAP.md, "2.6: decisions waiting on the
+  maintainer": the vetted feed shortlist with URLs (ratify one at a time,
+  re-probe first), the non-commercial-feed options (recommended: exclude
+  those feeds from CrowdSec publish and TAXII), and the UI mockups on the
+  maintainer's design canvas. The application lists section above it is
+  the agreed 2.6 core; threat-type lists and the list builder are proposals.
+- Prod (soc-grfna01) runs 2.5.1; its dashboard password must be set once by
+  IP (`http://172.31.10.4:8080/#system`). The 2.5.0 canary (`tfm-canary`,
+  `~/tfm-canary`, holds a prod DB copy + .env) still needs tearing down by
+  the maintainer.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the

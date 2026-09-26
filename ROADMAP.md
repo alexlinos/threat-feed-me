@@ -83,6 +83,24 @@ measured against the roster, adoption and terms checked.
   levels). FireHOL comparison: we cover 100% of the threat sources in its
   levels 1 to 3; the rest is bogon space and rejected sources.
 
+Source URLs, all probed keyless on 2026-09-25 (re-probe before adding):
+
+| Feed | URL | Format note |
+|---|---|---|
+| spamhaus_drop_v6 | https://www.spamhaus.org/drop/drop_v6.json | JSON lines, last line is metadata |
+| drb_ra_c2_ips | https://raw.githubusercontent.com/drb-ra/C2IntelFeeds/master/feeds/IPC2s-30day.csv | CSV `ip,ioc` |
+| etnetera_aggressive | https://security.etnetera.cz/feeds/etn_aggressive.txt | plain, `#` header |
+| echap_stalkerware | https://github.com/AssoEchap/stalkerware-indicators/raw/refs/heads/master/generated/quad9_blocklist.txt | plain domains |
+| opendbl_darknet | https://opendbl.net/lists/opendbl-darknet.list | plain, `#` header |
+| ipnoise | https://ipnoise.sekuripy.hr/1d.txt | plain (7d/14d/30d files also exist) |
+| apnic_telnet / _rdp | https://feeds.honeynet.asia/bruteforce/latest-telnetbruteforce-unique.csv (and `latest-rdp-bruteforce-unique.csv`) | CSV, IP first field |
+| dataplane_telnetlogin | https://dataplane.org/telnetlogin.txt | pipe-delimited, IP in field 3 (same parser as sshpwauth) |
+| jamesbrine_honeypots | https://jamesbrine.com.au/csv | CSV `ip,activity,date`; drop junk rows like `0` |
+| phishdestroy_live | https://raw.githubusercontent.com/phishdestroy/destroylist/main/dns/active_domains.txt | plain domains |
+| threatview_ips | https://threatview.io/Downloads/IP-High-Confidence-Feed.txt | plain; contains junk like `0.0.0.2` |
+| sfs_toxic_cidrs | https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt | CIDRs; attribution required |
+| sblam | https://sblam.com/blacklist.txt | plain; web-form spam only |
+
 **Non-commercial feeds.** `dataplane_sshpwauth`, `phishing_army` and
 `drb_ra_c2` already ship ON under non-commercial or no-redistribution
 terms, and CrowdSec publishing and TAXII re-serve their data to other
