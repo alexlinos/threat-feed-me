@@ -334,6 +334,29 @@ def test_upload_path_traversal_is_contained(client):
     assert ".." not in os.path.relpath(feed["url"], dashboard.UPLOAD_DIR)
 
 
+def test_upload_parses_off_the_event_loop(client, monkeypatch):
+    # Parsing a 5 MB list on the event loop froze every connection, /healthz
+    # included, for the ~1.5 s it takes (longer on a small box).
+    import asyncio
+    import sys
+    feeds = sys.modules["threatfeedme.routers.feeds"]
+    real, on_loop = feeds.parse_feed_content, []
+
+    def spy(text):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(text)
+
+    monkeypatch.setitem(feeds.__dict__, "parse_feed_content", spy)
+    r = client.post("/api/feeds/upload", data={"name": "offloop"},
+                    files={"file": ("x.txt", b"198.51.100.7\n", "text/plain")})   # RFC 5737
+    assert r.status_code == 200, r.text
+    assert on_loop == [False]
+
+
 def test_upload_rejects_binary(client):
     r = client.post("/api/feeds/upload", data={"name": "bin"},
                     files={"file": ("x.bin", b"\x00\x01\x02 185.1.1.8", "application/octet-stream")})

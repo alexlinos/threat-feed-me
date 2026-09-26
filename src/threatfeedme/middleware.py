@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
 
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 # The upload route accepts a 5 MB list; multipart framing needs a little more.
@@ -234,10 +235,13 @@ class HostCheckMiddleware:
         from threatfeedme import core
         return core.db
 
-    def _allowed(self) -> frozenset:
+    async def _allowed(self) -> frozenset:
         now = time.monotonic()
         if now - _cache["at"] > _CACHE_TTL:
-            _cache["hosts"] = effective_allowlist(self._db())
+            # A sync SQLite read here would run on the event loop and, if it
+            # ever waited (busy_timeout is 5 s), stall every connection the
+            # server has, /healthz included. Off-loop, it stalls only this one.
+            _cache["hosts"] = await run_in_threadpool(effective_allowlist, self._db())
             _cache["at"] = now
         return _cache["hosts"]
 
@@ -251,7 +255,7 @@ class HostCheckMiddleware:
                     if k == b"host"), "")
         host = host_of_header(raw)
         if not always_allowed(host):
-            allowed = self._allowed()
+            allowed = await self._allowed()
             if host not in allowed:
                 _record(host)
                 if allowed:   # an allowlist exists -> enforcing

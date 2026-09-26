@@ -256,8 +256,10 @@ async function startRefresh(name, initiator) {
     btn.disabled = true;
     if (globalBtn !== btn) globalBtn.disabled = true;  // block the toolbar button too
     const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
-    const r = await apiFetch(url, {method:'POST'});
-    if (r.status === 409) {
+    let r;
+    try { r = await apiFetch(url, {method:'POST'}); }
+    catch (e) { r = null; }   // server unreachable: the poll below says so and keeps trying
+    if (r && r.status === 409) {
         // Rejected, not queued: another refresh (often the container's
         // startup fetch of every feed) holds the lock. Restore the button
         // immediately — leaving it "Feeding" would claim THIS refresh is
@@ -265,6 +267,14 @@ async function startRefresh(name, initiator) {
         // refresh finishes and the operator can retry.
         endRefreshUi();
         status.textContent = 'Another refresh is already running (this one was not queued) — retry when it finishes.';
+    }
+    else if (!r || !r.ok) {
+        // Nothing started: typically a tab left open across an upgrade, whose
+        // click lands on the 503 "starting" page or a closed port. Keep
+        // polling; the page reloads once the server is back.
+        endRefreshUi();
+        status.textContent = r ? ('The server is not ready (HTTP ' + r.status + '); waiting for it…')
+                               : 'Could not reach the server; waiting for it…';
     }
     else { status.textContent = 'Refreshing' + (name ? ' ' + name : ' all feeds') + '… this can take a minute.'; }
     pollRefresh();
@@ -292,12 +302,39 @@ function setBrandState(state) {
     logo.classList.toggle('brand-running', state === 'running');
     logo.classList.toggle('brand-error', state === 'error');
 }
+// One failed poll used to throw out of here and end polling for good: the
+// buttons stayed disabled on "Feeding" and the page never reloaded, even
+// after the server came back. A poll that fails (connection refused while
+// the container restarts, a proxy's HTML error page) now retries with
+// backoff and says so.
+let pollFailures = 0;
 async function pollRefresh() {
     const status = document.getElementById('refresh-status');
-    const r = await fetch('/api/refresh/status');
-    const j = await r.json();
-    if (j.running) { setBrandState('running'); setTimeout(pollRefresh, 2000); return; }
+    let j;
+    try {
+        const r = await fetch('/api/refresh/status');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        j = await r.json();
+    } catch (e) {
+        pollFailures++;
+        status.textContent = 'The server isn’t answering (restarting or upgrading?); still trying…';
+        setTimeout(pollRefresh, Math.min(2000 * pollFailures, 10000));
+        return;
+    }
+    const reconnected = pollFailures > 0;
+    pollFailures = 0;
+    if (j.running) {
+        if (reconnected) status.textContent = 'The server is back and refreshing feeds; this page reloads when it finishes.';
+        setBrandState('running'); setTimeout(pollRefresh, 2000); return;
+    }
     endRefreshUi();
+    if (reconnected && !j.last_finished) {
+        // a restarted server has no record of the run it was in
+        status.textContent = 'The server restarted during the refresh. Reloading…';
+        setBrandState('error');
+        setTimeout(() => reloadPage(), 4000);
+        return;
+    }
     if (j.last_error) {
         status.textContent = 'Last refresh error: ' + j.last_error;
         setBrandState('error');

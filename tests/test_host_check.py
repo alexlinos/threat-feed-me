@@ -62,6 +62,33 @@ def test_report_only_lets_unknown_names_through_and_records_them():
     assert seen == {"threatfeedme.tnh.local": 2}
 
 
+def test_allowlist_is_read_off_the_event_loop():
+    # A SQLite read in this async middleware ran on the event loop: any wait
+    # on it (busy_timeout is 5 s) stalled every connection the server had.
+    import asyncio
+    on_loop = []
+
+    class _Spy(_DB):
+        def get_setting(self, key):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:
+                on_loop.append(False)
+            return super().get_setting(key)
+
+    app = FastAPI()
+
+    @app.get("/api/stats")
+    def stats():
+        return {"ok": True}
+
+    db = _Spy()
+    app.add_middleware(mw.HostCheckMiddleware, db_getter=lambda: db)
+    assert _get(TestClient(app), "/api/stats", "threatfeedme.tnh.local").status_code == 200
+    assert on_loop and not any(on_loop)
+
+
 def test_enforcing_refuses_unknown_names():
     c = _client(["threatfeedme.tnh.local"], enforce="1")
     assert _get(c, "/api/stats", "threatfeedme.tnh.local:80").status_code == 200

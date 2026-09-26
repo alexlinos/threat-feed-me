@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
@@ -211,7 +212,15 @@ async def upload_feed(
                 status_code=413,
                 detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024*1024)} MB limit",
             )
+    # The rest is sync CPU + disk + SQLite work: on the event loop it froze
+    # every connection (a 5 MB list parses in ~1.5 s, longer on a small box,
+    # plus any wait on the write lock). A worker thread stalls only this one.
+    return await run_in_threadpool(_store_upload, bytes(data), name, dest, ftype, weight,
+                                   indicator_kind)
 
+
+def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: float,
+                  indicator_kind: str) -> WhitelistResponse:
     # Reject binary content: null bytes, or anything that isn't valid UTF-8
     # (strict decode rather than silently replacing mangled bytes).
     if b"\x00" in data:
