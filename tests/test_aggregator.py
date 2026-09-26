@@ -206,11 +206,11 @@ def test_predictor_cannot_mask_feed_fp_penalty(db):
     cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in CONFIG.items()}
     cfg["scoring"]["predictor_weight"] = 0.08
     cfg["predictor"] = {"enabled": True, "model_path": _LIVE_MODEL}  # live factor
-    db.add_indicator("1.1.1.1", "abuse_ch_malware", {"predictive_score": 1.0})
+    db.add_indicator("185.1.1.1", "abuse_ch_malware", {"predictive_score": 1.0})
     db.add_indicator("2.2.2.2", "abuse_ch_malware", {})
     db.add_indicator("2.2.2.2", "spamhaus_drop", {})
     scorer = ConfidenceScorer(db, cfg)
-    s1 = scorer.calculate_score("1.1.1.1")[0]
+    s1 = scorer.calculate_score("185.1.1.1")[0]
     s2 = scorer.calculate_score("2.2.2.2")[0]
     assert s2 > s1  # one more corroborating source outweighs a perfect predictor
 
@@ -656,17 +656,17 @@ def test_sync_treats_pre_upgrade_rows_as_customized(db):
 def test_query_indicators_search_and_paginate(db):
     for i in range(5):
         db.add_indicator(f"10.0.0.{i}", "cins_army", {})
-    db.add_indicator("8.8.8.8", "cins_army", {})
+    db.add_indicator("185.1.1.8", "cins_army", {})
     res = db.query_indicators(q="10.0.0", limit=2, offset=0)
     assert res["total"] == 5 and len(res["rows"]) == 2
     assert all(r["ip"].startswith("10.0.0") for r in res["rows"])
 
 
 def test_query_indicators_excludes_globally_whitelisted(db):
-    db.add_indicator("9.9.9.9", "cins_army", {})
-    db.add_to_whitelist("9.9.9.9", "removed", "alex")  # global by default
+    db.add_indicator("185.1.1.9", "cins_army", {})
+    db.add_to_whitelist("185.1.1.9", "removed", "alex")  # global by default
     ips = [r["ip"] for r in db.query_indicators()["rows"]]
-    assert "9.9.9.9" not in ips
+    assert "185.1.1.9" not in ips
 
 
 def test_query_indicators_total_matches_rows_under_global_cidr(db):
@@ -731,7 +731,7 @@ def test_query_indicators_search_with_global_cidr(db):
         db.add_indicator(f"203.0.113.{i}", "cins_army", {})   # match q, hidden
     for i in range(2):
         db.add_indicator(f"203.0.200.{i}", "cins_army", {})   # match q, visible
-    db.add_indicator("8.8.8.8", "cins_army", {})              # no q match
+    db.add_indicator("185.1.1.8", "cins_army", {})              # no q match
     db.add_to_whitelist("203.0.113.0/24", "internal", "alex", feed_name=ALL_FEEDS)
 
     res = db.query_indicators(q="203.0", limit=100)
@@ -1302,7 +1302,7 @@ def test_run_refresh_honors_churn_log_exclude(db, monkeypatch):
 
     def fake_fetch(db_, config, only=None, collect_values=None):
         if collect_values is not None:
-            collect_values.update({"rotator": {"1.1.1.1"}, "honest": {"2.2.2.2"}})
+            collect_values.update({"rotator": {"185.1.1.1"}, "honest": {"2.2.2.2"}})
         return {"rotator": {"status": "success"}, "honest": {"status": "success"}}
 
     monkeypatch.setattr(pipeline, "fetch_feeds", fake_fetch)
@@ -1879,16 +1879,16 @@ def test_otx_pulses_single_page_extracts_ipv4_only(db, monkeypatch):
     """IPv4 indicator values are kept; IPv6/hostname/domain/URL/hash are dropped."""
     monkeypatch.setenv("OTX_API_KEY", "test-key-123")
     body = _pulse_page([
-        [("1.1.1.1", "IPv4"), ("2.2.2.2", "IPv4"),
+        [("185.1.1.1", "IPv4"), ("2.2.2.2", "IPv4"),
          ("2001:db8::1", "IPv6"), ("evil.com", "hostname"),
          ("https://x/y", "URL"), ("aa11bb", "FileHash-SHA1")],
-        [("1.1.1.1", "IPv4")],  # duplicate across pulses must collapse
+        [("185.1.1.1", "IPv4")],  # duplicate across pulses must collapse
     ])
     _stub_get(monkeypatch, [_FakeResponse(200, {}, body)])
     feed = _otx_feed()
     entries = FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     ips = sorted(e["ip"] for e in entries)
-    assert ips == ["1.1.1.1", "2.2.2.2"]
+    assert ips == ["185.1.1.1", "2.2.2.2"]
     # no IPv6/hostname/URL/hash leaked in
     assert all(ipaddress.ip_address(ip).version == 4 for ip in ips)
 
@@ -1896,7 +1896,7 @@ def test_otx_pulses_single_page_extracts_ipv4_only(db, monkeypatch):
 def test_otx_pulses_paginates_via_next(db, monkeypatch):
     """Page 2 is fetched from page 1's `next` URL; IPs from both pages ingested."""
     monkeypatch.setenv("OTX_API_KEY", "test-key-123")
-    page1 = _pulse_page([[("1.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    page1 = _pulse_page([[("185.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
     page2 = _pulse_page([[("2.2.2.2", "IPv4")]])
     calls = _stub_get(monkeypatch, [
         _FakeResponse(200, {}, page1),
@@ -1905,7 +1905,7 @@ def test_otx_pulses_paginates_via_next(db, monkeypatch):
     feed = _otx_feed()
     entries = FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     ips = sorted(e["ip"] for e in entries)
-    assert ips == ["1.1.1.1", "2.2.2.2"]
+    assert ips == ["185.1.1.1", "2.2.2.2"]
     assert calls[1]["url"] == "https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2"
 
 
@@ -1915,7 +1915,7 @@ def test_otx_pulses_pagination_cap_stops(db, monkeypatch):
     # Patch the module global by string path so the scraper's __globals__ sees it.
     monkeypatch.setattr("threatfeedme.feed_ingestor._OTX_MAX_PAGES", 1)
     # page1 -> next page2 -> next page3; with cap=1 only pages 1 and 2 are fetched.
-    page1 = _pulse_page([[("1.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    page1 = _pulse_page([[("185.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
     page2 = _pulse_page([[("2.2.2.2", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=3")
     page3 = _pulse_page([[("3.3.3.3", "IPv4")]])
     calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1), _FakeResponse(200, {}, page2), _FakeResponse(200, {}, page3)])
@@ -1923,7 +1923,7 @@ def test_otx_pulses_pagination_cap_stops(db, monkeypatch):
     entries = FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(feed)
     # cap=1: the scraper ingests page 1 and stops before ever pulling page 2
     # (it never fetches a page it wouldn't process on a later iteration).
-    assert sorted(e["ip"] for e in entries) == ["1.1.1.1"]
+    assert sorted(e["ip"] for e in entries) == ["185.1.1.1"]
     assert len(calls) == 1  # pages 2 and 3 never fetched
 
 
@@ -1952,7 +1952,7 @@ def test_otx_pulses_malformed_json_raises(db, monkeypatch):
 def test_otx_pulses_sends_auth_header_on_every_page(db, monkeypatch):
     """X-OTX-API-KEY must be present on page 1 and every paginated page."""
     monkeypatch.setenv("OTX_API_KEY", "test-key-123")
-    page1 = _pulse_page([[("1.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    page1 = _pulse_page([[("185.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
     page2 = _pulse_page([[("2.2.2.2", "IPv4")]])
     calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1), _FakeResponse(200, {}, page2)])
     feed = _otx_feed()

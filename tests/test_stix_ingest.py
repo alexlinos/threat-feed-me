@@ -43,7 +43,7 @@ def test_unconditional_values_are_read(pattern, expected):
 @pytest.mark.parametrize("pattern", [
     "[ipv4-addr:value = '198.51.100.1' AND network-traffic:dst_port = 443]",   # IP on a port
     "[ipv4-addr:value = '198.51.100.1' AND domain-name:value = 'x.example']",
-    "[(ipv4-addr:value = '1.1.1.1' OR ipv4-addr:value = '2.2.2.2') AND network-traffic:dst_port = 22]",
+    "[(ipv4-addr:value = '198.51.100.1' OR ipv4-addr:value = '2.2.2.2') AND network-traffic:dst_port = 22]",
     "[ipv4-addr:value = '198.51.100.1'] AND [domain-name:value = 'x.example']",
     "[ipv4-addr:value = '198.51.100.1'] FOLLOWEDBY [ipv4-addr:value = '198.51.100.2']",
     "[ipv4-addr:value = '198.51.100.1'] WITHIN 300 SECONDS",
@@ -58,7 +58,7 @@ def test_unconditional_values_are_read(pattern, expected):
     "",
     # oversized; a short id, since pytest puts the id in PYTEST_CURRENT_TEST and
     # Windows caps an environment value at 32,767 characters
-    pytest.param("[" + "ipv4-addr:value = '1.1.1.1' OR " * 2000 + "ipv4-addr:value = '1.1.1.1']",
+    pytest.param("[" + "ipv4-addr:value = '198.51.100.1' OR " * 2000 + "ipv4-addr:value = '198.51.100.1']",
                  id="oversized-or-list"),
 ])
 def test_conditional_or_malformed_patterns_are_skipped(pattern):

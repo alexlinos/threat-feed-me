@@ -325,7 +325,7 @@ def test_upload_path_traversal_is_contained(client):
     from threatfeedme import dashboard
     r = client.post("/api/feeds/upload",
                     data={"name": "../../etc/evil"},
-                    files={"file": ("x.txt", b"9.9.9.9\n", "text/plain")})
+                    files={"file": ("x.txt", b"185.1.1.9\n", "text/plain")})
     assert r.status_code == 200, r.text
     feed = {f["name"]: f for f in client.get("/api/feed-sources").json()}.get(
         r.json()["message"].split("'")[1])
@@ -336,7 +336,7 @@ def test_upload_path_traversal_is_contained(client):
 
 def test_upload_rejects_binary(client):
     r = client.post("/api/feeds/upload", data={"name": "bin"},
-                    files={"file": ("x.bin", b"\x00\x01\x02 8.8.8.8", "application/octet-stream")})
+                    files={"file": ("x.bin", b"\x00\x01\x02 185.1.1.8", "application/octet-stream")})
     assert r.status_code == 415
 
 
@@ -350,7 +350,7 @@ def test_upload_rejects_non_utf8(client):
     # Invalid UTF-8 (lone 0xFF bytes, no null byte) must be rejected, not
     # silently mangled and stored.
     r = client.post("/api/feeds/upload", data={"name": "latin"},
-                    files={"file": ("x.txt", b"8.8.8.8 \xff\xfe bad bytes", "text/plain")})
+                    files={"file": ("x.txt", b"185.1.1.8 \xff\xfe bad bytes", "text/plain")})
     assert r.status_code == 415
 
 
@@ -364,7 +364,7 @@ def test_indicator_delete_removes_and_whitelists(client):
 
 
 def test_upload_rejects_oversize(client):
-    big = (b"8.8.8.8\n" * (dashboard_max() // 8 + 1000))
+    big = (b"5.6.7.8\n" * (dashboard_max() // 8 + 1000))
     r = client.post("/api/feeds/upload", data={"name": "big"},
                     files={"file": ("x.txt", big, "text/plain")})
     assert r.status_code == 413

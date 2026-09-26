@@ -197,11 +197,11 @@ def test_sync_creates_chunked_groups():
     s = FakeSession()
     p = _pusher(s, max_per_group=2)
     p.login()
-    summary = p.sync(["1.1.1.1", "2.2.2.2", "3.3.3.3"])
+    summary = p.sync(["198.51.100.1", "2.2.2.2", "3.3.3.3"])
     assert summary == {"entries": 3, "groups": 2, "created": 2,
                        "updated": 0, "unchanged": 0, "emptied": 0}
     names = {g["name"]: g["group_members"] for g in s.groups.values()}
-    assert names == {"tfm-medium-1": ["1.1.1.1", "2.2.2.2"],
+    assert names == {"tfm-medium-1": ["198.51.100.1", "2.2.2.2"],
                      "tfm-medium-2": ["3.3.3.3"]}
     assert all(g["group_type"] == "address-group" for g in s.groups.values())
 
@@ -209,17 +209,17 @@ def test_sync_creates_chunked_groups():
 def test_sync_updates_changed_keeps_identical_empties_stale():
     s = FakeSession(groups=[
         {"_id": "a", "name": "tfm-medium-1", "group_type": "address-group",
-         "group_members": ["1.1.1.1", "2.2.2.2"]},          # identical -> untouched
+         "group_members": ["198.51.100.1", "2.2.2.2"]},          # identical -> untouched
         {"_id": "b", "name": "tfm-medium-2", "group_type": "address-group",
-         "group_members": ["9.9.9.9"]},                     # differs -> updated
+         "group_members": ["198.51.100.9"]},                     # differs -> updated
         {"_id": "c", "name": "tfm-medium-3", "group_type": "address-group",
-         "group_members": ["8.8.8.8"]},                     # stale -> emptied
+         "group_members": ["198.51.100.8"]},                     # stale -> emptied
         {"_id": "d", "name": "unrelated", "group_type": "address-group",
          "group_members": ["7.7.7.7"]},                     # not ours -> untouched
     ])
     p = _pusher(s, max_per_group=2)
     p.login()
-    summary = p.sync(["1.1.1.1", "2.2.2.2", "3.3.3.3"])
+    summary = p.sync(["198.51.100.1", "2.2.2.2", "3.3.3.3"])
     assert summary["created"] == 0
     assert summary["unchanged"] == 1
     assert summary["updated"] == 1
@@ -242,7 +242,7 @@ def test_sync_switching_tier_empties_other_tiers_groups():
     ])
     p = _pusher(s, max_per_group=2)   # tier=medium
     p.login()
-    summary = p.sync(["1.1.1.1"])
+    summary = p.sync(["198.51.100.1"])
     assert summary["created"] == 1 and summary["emptied"] == 2
     assert s.groups["L1"]["group_members"] == []
     assert s.groups["L2"]["group_members"] == []
@@ -255,10 +255,10 @@ def test_sync_fixed_list_count_pads_with_empty_lists():
     s = FakeSession()
     p = _pusher(s, max_per_group=2)
     p.login()
-    summary = p.sync(["1.1.1.1", "2.2.2.2", "3.3.3.3"], list_count=4)
+    summary = p.sync(["198.51.100.1", "2.2.2.2", "3.3.3.3"], list_count=4)
     assert summary["groups"] == 4 and summary["created"] == 4
     by_name = {g["name"]: g["group_members"] for g in s.groups.values()}
-    assert by_name == {"tfm-medium-1": ["1.1.1.1", "2.2.2.2"],
+    assert by_name == {"tfm-medium-1": ["198.51.100.1", "2.2.2.2"],
                        "tfm-medium-2": ["3.3.3.3"],
                        "tfm-medium-3": [], "tfm-medium-4": []}
     # Overflow beyond count x per_group truncates, never mints list 5.
@@ -304,7 +304,7 @@ def test_domain_sync_creates_domain_groups_isolated_from_ip_groups():
     p = _pusher(s, tier="high", domain_tier="high", max_per_group=2)
     p.login()
     # IP sync runs first and must not touch the (stale-looking) domain list.
-    p.sync(["1.1.1.1"])
+    p.sync(["198.51.100.1"])
     assert s.groups["d1"]["group_members"] == ["old.example.io"]
     # Domain sync updates its own list and leaves the IP group alone.
     r = p.sync(["evil-a.example.io", "evil-b.example.io", "evil-c.example.io"],
@@ -314,7 +314,7 @@ def test_domain_sync_creates_domain_groups_isolated_from_ip_groups():
     by_name = {g["name"]: g for g in s.groups.values()}
     assert by_name["tfm-dom-high-1"]["group_members"] == ["evil-a.example.io", "evil-b.example.io"]
     assert by_name["tfm-dom-high-2"]["group_type"] == "domain-group"
-    assert by_name["tfm-high-1"]["group_members"] == ["1.1.1.1"]
+    assert by_name["tfm-high-1"]["group_members"] == ["198.51.100.1"]
 
 
 def test_push_includes_domain_summary(tmp_path, monkeypatch):
@@ -438,7 +438,7 @@ def test_api_push_records_outcome(api_client, monkeypatch):
     api_client.post("/api/integrations/unifi/credentials",
                     json={"username": "svc", "password": "pw"})
     monkeypatch.setattr(pu.UniFiPusher, "login", lambda self: None)
-    monkeypatch.setattr(pu.UniFiPusher, "collect", lambda self, db: ["1.1.1.1"])
+    monkeypatch.setattr(pu.UniFiPusher, "collect", lambda self, db: ["198.51.100.1"])
     monkeypatch.setattr(pu.UniFiPusher, "sync",
                         lambda self, values, **kw: {"entries": 1, "groups": 1, "created": 1,
                                                     "updated": 0, "unchanged": 0, "emptied": 0})
