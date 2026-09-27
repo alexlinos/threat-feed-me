@@ -5,7 +5,9 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # Importing `core` triggers lazy init on first attribute access — no work is
@@ -40,7 +42,21 @@ async def lifespan(app: FastAPI):
     _scheduler_stop.set()
 
 
-app = FastAPI(title="Threat Feed Me! Dashboard", lifespan=lifespan)
+# No /docs, /redoc or /openapi.json: FastAPI serves them outside every route
+# dependency, so they handed a full map of the API to anyone on the network
+# even with sign-in on (auth pentest, 2026-09-27). Nothing here uses them.
+app = FastAPI(title="Threat Feed Me! Dashboard", lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
+
+
+# FastAPI's default 422 echoes each rejected value back ("input"). That both
+# reflects whatever was sent (an oversized or malformed API key included) and
+# crashed into a 500 on weight=inf, since the error body itself isn't valid
+# JSON (QA, 2026-09-27). Say what was wrong and where, never the value.
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request, exc: RequestValidationError):
+    errors = [{k: e[k] for k in ("type", "loc", "msg") if k in e} for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 # Compress anything sizeable: the world-map paths, the dashboard HTML, and the
 # plain-text feeds a firewall polls (a 50k-line block list is mostly digits and

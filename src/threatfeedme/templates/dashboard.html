@@ -9,7 +9,7 @@
 {% block topbar %}
     <a class="health{% if pulse.first_problem %} warn{% elif pulse.pending_count %} pending{% endif %}" href="/#feeds"
        title="{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }} more{% endif %}{% elif pulse.pending_count %}{{ pulse.pending_count }} awaiting first fetch{% else %}all feeds reporting{% endif %}">
-        <i aria-hidden="true"></i>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} feeds healthy{% if pulse.first_problem %}<span class="health-name">: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }}{% endif %}</span>{% endif %}
+        <i aria-hidden="true"></i>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} enabled feeds healthy{% if pulse.first_problem %}<span class="health-name">: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }}{% endif %}</span>{% endif %}
     </a>
     <button class="btn" id="refresh-all-btn" onclick="refreshAll(this)">{{ icon('<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>', 18) }}<span>Refresh</span></button>
 {% endblock %}
@@ -95,8 +95,8 @@
                     <span class="num" aria-hidden="true">1</span>
                     <div class="step-body">
                         <b>Feeds are in</b>
-                        {% if guide.feeds_in %}<p>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} feeds fetched{% if pulse.first_problem %}; {{ pulse.first_problem }} needs a look under <a href="#feeds">Feeds</a>{% endif %}.</p>
-                        {% else %}<p><span class="feeding"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span></span> Fetching every feed for the first time. This page updates as they land.</p>{% endif %}
+                        {% if guide.feeds_in %}<p>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} enabled feeds fetched{% if pulse.first_problem %}; {{ pulse.first_problem }} needs a look under <a href="#feeds">Feeds</a>{% endif %}.</p>
+                        {% else %}<p>Fetching every feed for the first time<span class="feeding"><span class="feeding-dots" aria-hidden="true"><i></i><i></i><i></i></span></span> This page updates as they land.</p>{% endif %}
                     </div>
                 </li>
                 <li class="step{% if guide.ip_poll %} done{% endif %}">
@@ -184,7 +184,7 @@
                 {% if row.recommended %}<span class="rec">Recommended</span>{% endif %}
             </header>
             <div class="lc-count feed-count" title="{{ '{:,}'.format(cell.count) }} entries served by this URL right now">
-                {% if cell.processing %}<span class="feeding" title="First fetch for this kind is running"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span>Feeding…</span>
+                {% if cell.processing %}<span class="feeding" title="First fetch for this kind is running">Feeding<span class="feeding-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
                 {% else %}<span class="count-full">{{ '{:,}'.format(cell.count) }}</span><span class="count-compact">{{ cell.compact }}</span>{% endif %}
             </div>
             <p class="lc-blurb">{{ row.blurb }}</p>
@@ -248,7 +248,7 @@
             <tr class="{% if not row.enabled %}row-off{% endif %}{% if row.problem %} row-problem{% endif %}">
                 <td>
                     <b>{{ row.name }}</b>{% if row.problem %} <span class="reorder-flag" title="Sorted to the top of its group because this feed needs attention (see the last error)">↑ needs attention</span>{% endif %}
-                    <div class="feed-url" title="{{ row.url }}">{{ row.url }}</div>
+                    <div class="feed-url" title="{{ row.url }}"><bdi>{{ row.url }}</bdi></div>
                     <div class="muted">{{ row.feed_type }} · {{ row.source_kind }} · w={{ row.weight }}{% if row.every %} · every {{ row.every }}{% if row.next_min is not none %} · <span class="next-fetch">{% if row.next_min < 1 %}due now{% else %}next in ~{{ row.next_min }}m{% endif %}</span>{% endif %}{% endif %}</div>
                 </td>
                 <td><label class="switch"><input type="checkbox" {% if row.enabled %}checked{% endif %}
@@ -285,8 +285,8 @@
                         aria-label="Set API key for {{ row.name }}"
                         onclick='setApiKey({{ row.name|tojson }}, {{ row.auth_env|tojson }}, {{ row.taxii|tojson }})'>{% if row.key_configured %}Key ✓{% else %}Set key{% endif %}</button>
                     {% endif %}
-                    <button class="mini-btn" aria-label="Refresh {{ row.name }}" onclick='refreshFeed({{ row.name|tojson }}, this)'>Refresh</button>
-                    <button class="rm-btn" aria-label="Remove {{ row.name }}" onclick='removeFeed({{ row.name|tojson }})'>Remove</button>
+                    <button class="mini-btn row-refresh" aria-label="Refresh {{ row.name }}" onclick='refreshFeed({{ row.name|tojson }}, this)'>Refresh</button>
+                    <button class="rm-btn" aria-label="Remove {{ row.name }}" onclick='removeFeed({{ row.name|tojson }}, this)'>Remove</button>
                 </td>
             </tr>
             {% endfor %}
@@ -647,12 +647,13 @@
     <div class="modal">
         <h3 id="key-modal-title">API key</h3>
         <p class="muted">Saved server-side to the data volume's <code>.env</code> and applied
-           immediately; never displayed again. Leave a field empty to clear that credential.</p>
+           immediately; never displayed again. Leave a field empty to keep what is saved.</p>
         <p class="hint" id="key-modal-hint" hidden></p>
         <div id="key-modal-fields"></div>
         <div class="actions">
+            <button class="cancel" onclick="saveKeyModal(true)" style="margin-right:auto">Clear saved</button>
             <button class="cancel" onclick="closeKeyModal()">Cancel</button>
-            <button class="btn" onclick="saveKeyModal()">Save</button>
+            <button class="btn" onclick="saveKeyModal(false)">Save</button>
         </div>
     </div>
 </div>

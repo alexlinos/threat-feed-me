@@ -1,19 +1,21 @@
 """Pydantic request/response models shared by the API routers."""
 from typing import Dict, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from threatfeedme.models import ALL_FEEDS, FeedType, REASON_OTHER
 
 
+# Caps on free text a client can store: a 900 KB whitelist reason was
+# accepted and rendered into every Indicators page (QA, 2026-09-27).
 class WhitelistRequest(BaseModel):
-    ip: str
-    reason: str = ""
-    added_by: str = "dashboard"
-    expires_at: Optional[str] = None
+    ip: str = Field(max_length=300)
+    reason: str = Field("", max_length=500)
+    added_by: str = Field("dashboard", max_length=64)
+    expires_at: Optional[str] = Field(None, max_length=64)
     # ALL_FEEDS ("*") or empty = whitelist from every feed; otherwise a feed name.
-    feed_name: Optional[str] = ALL_FEEDS
-    reason_code: str = REASON_OTHER
+    feed_name: Optional[str] = Field(ALL_FEEDS, max_length=128)
+    reason_code: str = Field(REASON_OTHER, max_length=64)
 
 
 class WhitelistResponse(BaseModel):
@@ -25,7 +27,10 @@ class FeedRequest(BaseModel):
     name: str
     url: str
     feed_type: str = FeedType.CUSTOM.value
-    weight: float = 1.0
+    # Finite and 0-1, as the UI documents: weight=inf reached the scorer,
+    # stored confidence_score=inf, and every JSON surface that carried the
+    # row (lookup, feed list, TAXII paging) returned 500 (QA, 2026-09-27).
+    weight: float = Field(1.0, ge=0.0, le=1.0, allow_inf_nan=False)
     update_interval: int = 3600
     requires_auth: bool = False
     auth_env: Optional[str] = None

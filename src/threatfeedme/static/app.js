@@ -37,7 +37,24 @@ function fallback(url, done) {
     const ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta);
     ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
 }
-async function addWl(e) {
+// A 422's detail is a list of {loc, msg}; show the messages, not [object Object].
+function detailText(d) {
+    return Array.isArray(d) ? d.map(e => (e.loc ? e.loc[e.loc.length - 1] + ': ' : '') + e.msg).join('; ') : d;
+}
+// Submit once: the button stays disabled until the request settles. Three
+// quick clicks on Add feed sent three POSTs, and two concurrent adds of a new
+// name both succeeded (QA, 2026-09-27).
+function guardSubmit(handler) {
+    return async function (e) {
+        e.preventDefault();
+        const btn = e.submitter || (e.target && e.target.querySelector('[type=submit], button:not([type])'));
+        if (btn && btn.disabled) return false;
+        if (btn) btn.disabled = true;
+        try { await handler(e); } finally { if (btn) btn.disabled = false; }
+        return false;
+    };
+}
+const addWl = guardSubmit(async function (e) {
     e.preventDefault();
     if (!document.getElementById('wl-reason-code').value) {
         alert('Choose a reason. Only "False positive" lowers the reporting feeds\' reputation.');
@@ -55,19 +72,19 @@ async function addWl(e) {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.success !== false) { reloadPage(); }
-    else { alert('Could not add: ' + (j.message || j.detail || r.status)); }
+    else { alert('Could not add: ' + (j.message || detailText(j.detail) || r.status)); }
     return false;
-}
+});
 async function removeWl(ip, feed) {
     const scopeLabel = feed === '*' ? 'all tiers' : feed.startsWith('tier:') ? feed.split(':')[1] + ' only' : feed;
     if (!confirm('Remove whitelist entry for ' + ip + ' (' + scopeLabel + ')?')) return;
     const r = await apiFetch('/api/whitelist?ip=' + encodeURIComponent(ip) + '&feed=' + encodeURIComponent(feed), {method: 'DELETE'});
     if (r.ok) { reloadPage(); }
-    else { const j = await r.json().catch(() => ({})); alert('Could not remove: ' + (j.detail || r.status)); }
+    else { const j = await r.json().catch(() => ({})); alert('Could not remove: ' + (detailText(j.detail) || r.status)); }
 }
 
 // ---- Feeds ----
-async function addFeed(e) {
+const addFeed = guardSubmit(async function (e) {
     e.preventDefault();
     // NaN check, not ||: parseFloat('0') is falsy, and an explicit weight of
     // 0 (neutralize a feed without disabling it) must not turn into 0.5.
@@ -94,10 +111,10 @@ async function addFeed(e) {
         j = await r.json().catch(() => ({}));
     }
     if (r.ok && j.success !== false) { reloadPage(); }
-    else if (r.status !== 409) { alert('Could not add feed: ' + (j.message || j.detail || r.status)); }
+    else if (r.status !== 409) { alert('Could not add feed: ' + (j.message || detailText(j.detail) || r.status)); }
     return false;
-}
-async function uploadFeed(e) {
+});
+const uploadFeed = guardSubmit(async function (e) {
     e.preventDefault();
     const file = document.getElementById('u-file').files[0];
     if (!file) { alert('Choose a file'); return false; }
@@ -109,13 +126,21 @@ async function uploadFeed(e) {
     const r = await apiFetch('/api/feeds/upload', {method:'POST', body: fd});
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.success !== false) { alert(j.message || 'Uploaded'); reloadPage(); }
-    else { alert('Upload failed: ' + (j.message || j.detail || r.status)); }
+    else { alert('Upload failed: ' + (j.message || detailText(j.detail) || r.status)); }
     return false;
-}
-async function removeFeed(name) {
+});
+async function removeFeed(name, btn) {
     if (!confirm('Remove feed "' + name + '"? Existing indicators stay until the next refresh.')) return;
-    const r = await apiFetch('/api/feeds/' + encodeURIComponent(name), {method:'DELETE'});
-    if (r.ok) { reloadPage(); } else { alert('Could not remove feed'); }
+    // Removing rescores the rest, and waits for a running refresh to finish
+    // its own rescore first: it can take a minute, so show that it's working.
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+    let r = null;
+    try { r = await apiFetch('/api/feeds/' + encodeURIComponent(name), {method:'DELETE'}); } catch (e) { /* below */ }
+    if (r && r.ok) { reloadPage(); return; }
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    const j = r ? await r.json().catch(() => ({})) : {};
+    alert('Could not remove feed' + (j.detail ? ': ' + j.detail : r ? '' : ' (server not answering)'));
 }
 // Flip a feed on/off. Update the row's dimmed styling immediately so the
 // change is visible without waiting for a full page reload (the row used to
@@ -179,17 +204,25 @@ function closeKeyModal() {
     closeModal('key-modal');
     keyModalFeed = null;
 }
-async function saveKeyModal() {
+// A blank field KEEPS its saved value: sending it empty cleared it, so
+// updating one of HoneyDB's two credentials silently deleted the other
+// (QA, 2026-09-27). Clearing is its own button (clear=true).
+async function saveKeyModal(clear) {
     if (!keyModalFeed) return;
     const keys = {};
-    document.querySelectorAll('#key-modal-fields input').forEach(i => { keys[i.dataset.var] = i.value; });
+    document.querySelectorAll('#key-modal-fields input').forEach(i => {
+        if (clear) keys[i.dataset.var] = '';
+        else if (i.value.trim()) keys[i.dataset.var] = i.value;
+    });
+    if (clear && !confirm('Clear the saved key(s) for ' + keyModalFeed + '? The feed stops authenticating.')) return;
+    if (!Object.keys(keys).length) { closeKeyModal(); return; }   // nothing typed: nothing to change
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(keyModalFeed) + '/api-key', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({keys: keys}),
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) { closeKeyModal(); reloadPage(); }
-    else { alert('Could not save key: ' + (j.detail || r.status)); }
+    else { alert('Could not save key: ' + (detailText(j.detail) || r.status)); }
 }
 
 // ---- Modal accessibility: focus in on open, Esc closes, focus returns ----
@@ -236,58 +269,92 @@ async function saveRetention() {
 function refreshAll(btn) { startRefresh(null, btn); }
 function refreshFeed(name, btn) { startRefresh(name, btn); }
 
-// The button that kicked off the running refresh, plus its original label, so
-// pollRefresh can restore it when the run finishes (it may not be the toolbar
-// button — a per-feed "Refresh" row button initiates too).
-let refreshBtn = null, refreshBtnHtml = '';
-async function startRefresh(name, initiator) {
+// Refresh UI state, in one place (QA 2026-09-27 found every way the old
+// "remember the clicked button" globals went wrong): while a run is going,
+// the toolbar button and EVERY row Refresh button are disabled, so nothing
+// can start a second run and clobber the first one's saved label; there is
+// exactly one status poller; and a page loaded mid-run adopts the run
+// (adoptRunningRefresh) instead of offering a Refresh that can only 409.
+const FEEDING_HTML = 'Feeding<span class="feeding-dots" aria-hidden="true"><i></i><i></i><i></i></span>';
+let refreshActive = false, pollActive = false, globalBtnHtml = null;
+function rowRefreshButtons() { return document.querySelectorAll('.row-refresh'); }
+function setRunningUi(initiator) {
     const globalBtn = document.getElementById('refresh-all-btn');
-    const btn = initiator || globalBtn;
-    const status = document.getElementById('refresh-status');
-    // Flip the clicked button into an obvious animated "Refreshing…" state so
-    // it's clear something is happening even when scrolled down the page.
-    refreshBtn = btn;
-    refreshBtnHtml = btn.innerHTML;
-    // The brand eats while it works: chomper + prey replaces the plain
-    // marching dots (chomper inherits the button's dark text color).
-    btn.innerHTML = 'Feeding<span class="feeding"><span class="chomp"><i></i><b></b></span><span class="prey"><i></i><i></i><i></i></span></span>';
-    btn.classList.add('refreshing');
+    if (globalBtn && globalBtnHtml === null) globalBtnHtml = globalBtn.innerHTML;
+    refreshActive = true;
+    // The toolbar button always shows the run; a row that started it does too.
+    [globalBtn, initiator].forEach(b => {
+        if (!b) return;
+        if (!b.dataset.label) b.dataset.label = b.innerHTML;
+        b.innerHTML = FEEDING_HTML;
+        b.classList.add('refreshing');
+    });
+    if (globalBtn) globalBtn.disabled = true;
+    rowRefreshButtons().forEach(b => { b.disabled = true; });
     setBrandState('running');
-    btn.disabled = true;
-    if (globalBtn !== btn) globalBtn.disabled = true;  // block the toolbar button too
-    const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
-    let r;
-    try { r = await apiFetch(url, {method:'POST'}); }
-    catch (e) { r = null; }   // server unreachable: the poll below says so and keeps trying
-    if (r && r.status === 409) {
-        // Rejected, not queued: another refresh (often the container's
-        // startup fetch of every feed) holds the lock. Restore the button
-        // immediately — leaving it "Feeding" would claim THIS refresh is
-        // running — and keep polling so the page reloads when the other
-        // refresh finishes and the operator can retry.
-        endRefreshUi();
-        status.textContent = 'Another refresh is already running (this one was not queued) — retry when it finishes.';
-    }
-    else if (!r || !r.ok) {
-        // Nothing started: typically a tab left open across an upgrade, whose
-        // click lands on the 503 "starting" page or a closed port. Keep
-        // polling; the page reloads once the server is back.
-        endRefreshUi();
-        status.textContent = r ? ('The server is not ready (HTTP ' + r.status + '); waiting for it…')
-                               : 'Could not reach the server; waiting for it…';
-    }
-    else { status.textContent = 'Refreshing' + (name ? ' ' + name : ' all feeds') + '… this can take a minute.'; }
-    pollRefresh();
 }
 function endRefreshUi() {
+    refreshActive = false;
     const globalBtn = document.getElementById('refresh-all-btn');
-    if (globalBtn) globalBtn.disabled = false;
-    if (refreshBtn) {
-        refreshBtn.classList.remove('refreshing');
-        refreshBtn.disabled = false;
-        refreshBtn.innerHTML = refreshBtnHtml;
-        refreshBtn = null;
+    [globalBtn, ...rowRefreshButtons()].forEach(b => {
+        if (!b) return;
+        if (b.dataset.label) { b.innerHTML = b.dataset.label; delete b.dataset.label; }
+        b.classList.remove('refreshing');
+        b.disabled = false;
+    });
+}
+// A row click's only other feedback is the status line at the top of the
+// page, often a screen away: say it on the button too, briefly.
+function flashButton(btn, text) {
+    if (!btn || btn.id === 'refresh-all-btn') return;
+    const label = btn.innerHTML;
+    btn.textContent = text;
+    setTimeout(() => { if (!btn.classList.contains('refreshing')) btn.innerHTML = label; }, 3000);
+}
+async function startRefresh(name, initiator) {
+    if (refreshActive) return;          // buttons are disabled; belt and braces
+    const status = document.getElementById('refresh-status');
+    setRunningUi(initiator && initiator.id !== 'refresh-all-btn' ? initiator : null);
+    const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
+    let r = null;
+    try { r = await apiFetch(url, {method:'POST'}); } catch (e) { /* unreachable: below */ }
+    if (r && r.ok) {
+        status.textContent = 'Refreshing' + (name ? ' ' + name : ' all feeds') + '… this can take a minute.';
+    } else if (r && r.status === 409) {
+        // Rejected, not queued: another refresh (the scheduler's, another
+        // tab's, the startup fetch) holds the lock. One IS running, so keep
+        // showing it and reload when it ends; say this click didn't start it.
+        status.textContent = 'A refresh was already running (this click did not start another); ' +
+                             'this page updates when it finishes.';
+    } else if (!r || r.status === 502 || r.status === 503 || r.status === 504) {
+        // Server (or its proxy) not answering: typically a tab left open across
+        // an upgrade. The poller waits for it and reloads once it's back.
+        status.textContent = 'The server isn’t answering (restarting or upgrading?); still trying…';
+    } else {
+        // A real refusal (404: feed removed in another tab; 403; 500): report
+        // it and stop. Polling here used to show the PREVIOUS run's result as
+        // if it were this one.
+        const j = await r.json().catch(() => ({}));
+        endRefreshUi();
+        setBrandState('error');
+        status.textContent = 'Refresh failed: ' + (j.detail || ('HTTP ' + r.status));
+        flashButton(initiator, 'Failed');
+        return;
     }
+    ensurePolling();
+}
+// Adopt a run this page didn't start (loaded mid-refresh, or the scheduler's).
+function adoptRunningRefresh() {
+    if (refreshActive) return;
+    setRunningUi(null);
+    const status = document.getElementById('refresh-status');
+    if (status && !status.textContent) status.textContent = 'A refresh is running; this page updates when it finishes.';
+    ensurePolling();
+}
+function ensurePolling() {
+    if (pollActive) return;
+    pollActive = true;
+    pollRefresh();
 }
 // Names of feeds that errored in a refresh result map ({feed: {status,...}}).
 function failedFeeds(lastResult) {
@@ -302,11 +369,34 @@ function setBrandState(state) {
     logo.classList.toggle('brand-running', state === 'running');
     logo.classList.toggle('brand-error', state === 'error');
 }
+// Unsaved typing or an open dialog: a finished refresh must not reload the
+// page out from under it (form.reset() in reloadPage wiped half-typed feeds,
+// and an open key dialog would lose the secret being typed).
+function pageHasUnsavedWork() {
+    if (document.querySelector('.modal-overlay.open')) return true;
+    return [...document.querySelectorAll('form input, form textarea, form select')].some(el => {
+        if (el.type === 'file') return el.files && el.files.length > 0;
+        if (el.type === 'checkbox' || el.type === 'radio') return el.checked !== el.defaultChecked;
+        if (el.tagName === 'SELECT') {
+            // No option marked selected in the HTML means the first is the default.
+            const opts = [...el.options];
+            const dflt = Math.max(0, opts.findIndex(o => o.defaultSelected));
+            return el.multiple ? opts.some(o => o.selected !== o.defaultSelected) : el.selectedIndex !== dflt;
+        }
+        return el.value !== el.defaultValue;
+    });
+}
+function reloadWhenIdle(status, delay) {
+    if (!pageHasUnsavedWork()) { setTimeout(() => reloadPage(), delay); return; }
+    const btn = document.createElement('button');
+    btn.className = 'mini-btn'; btn.type = 'button'; btn.textContent = 'Reload';
+    btn.onclick = () => reloadPage();
+    status.append(' Reload to see the new numbers when you’re done here. ', btn);
+}
 // One failed poll used to throw out of here and end polling for good: the
 // buttons stayed disabled on "Feeding" and the page never reloaded, even
 // after the server came back. A poll that fails (connection refused while
-// the container restarts, a proxy's HTML error page) now retries with
-// backoff and says so.
+// the container restarts, a proxy's HTML error page) retries with backoff.
 let pollFailures = 0;
 async function pollRefresh() {
     const status = document.getElementById('refresh-status');
@@ -324,15 +414,16 @@ async function pollRefresh() {
     const reconnected = pollFailures > 0;
     pollFailures = 0;
     if (j.running) {
-        if (reconnected) status.textContent = 'The server is back and refreshing feeds; this page reloads when it finishes.';
+        if (reconnected) status.textContent = 'The server is back and refreshing feeds; this page updates when it finishes.';
         setBrandState('running'); setTimeout(pollRefresh, 2000); return;
     }
+    pollActive = false;
     endRefreshUi();
     if (reconnected && !j.last_finished) {
         // a restarted server has no record of the run it was in
-        status.textContent = 'The server restarted during the refresh. Reloading…';
+        status.textContent = 'The server restarted. Reloading…';
         setBrandState('error');
-        setTimeout(() => reloadPage(), 4000);
+        reloadWhenIdle(status, 4000);
         return;
     }
     if (j.last_error) {
@@ -345,12 +436,12 @@ async function pollRefresh() {
     const failed = failedFeeds(j.last_result);
     status.textContent = failed.length
         ? ('Refresh complete — ' + failed.length + ' feed' + (failed.length > 1 ? 's' : '') +
-           ' errored: ' + failed.join(', '))
+           ' errored: ' + failed.join(', ') + '.')
         : 'Refresh complete.';
     setBrandState(failed.length ? 'error' : '');
-    // Reload either way so the table (health badges, "needs attention" flags)
-    // reflects the run; linger longer when there's an error to read.
-    setTimeout(() => reloadPage(), failed.length ? 4000 : 800);
+    // Reload so the table (health badges, "needs attention" flags) reflects
+    // the run; linger longer when there's an error to read.
+    reloadWhenIdle(status, failed.length ? 4000 : 800);
 }
 async function restoreDefaults() {
     if (!confirm('Re-add the curated default feeds that are currently missing?')) return;
@@ -378,11 +469,18 @@ async function loadIndicators() {
                         {signal: indAbort.signal});
     } catch (e) {
         if (e.name === 'AbortError') return;  // superseded by a newer search
-        throw e;
+        r = null;
     }
-    const j = await r.json();
-    indTotal = j.total;
     const body = document.getElementById('ind-body');
+    // A failed search used to leave the previous results under the new query.
+    const j = r && r.ok ? await r.json().catch(() => null) : null;
+    if (!j || !Array.isArray(j.indicators)) {
+        body.innerHTML = '<tr><td colspan="6" class="muted">Search failed' +
+            (r ? ' (HTTP ' + esc(r.status) + ')' : ' (server not answering)') + '. Try again.</td></tr>';
+        document.getElementById('ind-pageinfo').textContent = '';
+        return;
+    }
+    indTotal = j.total;
     if (!j.indicators.length) {
         body.innerHTML = '<tr><td colspan="6" class="muted">No matching indicators.</td></tr>';
     } else {
@@ -439,7 +537,7 @@ async function addIndicator(e) {
     const r = await apiFetch('/api/indicators', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip})});
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.success !== false) { document.getElementById('ind-add').value=''; indOffset=0; loadIndicators(); }
-    else { alert('Could not add: ' + (j.message || j.detail || r.status)); }
+    else { alert('Could not add: ' + (j.message || detailText(j.detail) || r.status)); }
     return false;
 }
 async function removeIndicator(ip) {
@@ -470,7 +568,7 @@ async function openFpModal(feed) {
         ).join('') : '<span class="muted">none</span>';
     } catch (e) { list.textContent = 'Could not load false positives'; }
 }
-function closeFpModal() { document.getElementById('fp-modal').classList.remove('open'); fpModalFeed = null; }
+function closeFpModal() { closeModal('fp-modal'); fpModalFeed = null; }   // closeModal returns focus
 async function clearOneFp(ip) {
     if (!fpModalFeed) return;
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) +
@@ -512,7 +610,7 @@ async function openWhitelistModal(ip) {
     } catch (e) { srcBox.textContent = 'Could not load sources'; }
     openModal('wl-modal');
 }
-function closeWlModal() { document.getElementById('wl-modal').classList.remove('open'); wlModalIp = null; }
+function closeWlModal() { closeModal('wl-modal'); wlModalIp = null; }
 async function confirmWlModal() {
     if (!wlModalIp) return;
     const reasonSel = document.getElementById('wl-modal-reason');
@@ -531,7 +629,7 @@ async function confirmWlModal() {
     const r = await apiFetch('/api/whitelist', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.success !== false) { closeWlModal(); reloadPage(); }
-    else { alert('Could not whitelist: ' + (j.message || j.detail || r.status)); }
+    else { alert('Could not whitelist: ' + (j.message || detailText(j.detail) || r.status)); }
 }
 
 // The pulse row is server-rendered, but SOC dashboards sit open for days —
@@ -552,9 +650,10 @@ function updateRefreshPulse() {
         document.getElementById('pulse-refresh-run').hidden = !j.running;
         if (j.running) {
             card.classList.remove('warn');
-            setBrandState('running');
+            adoptRunningRefresh();   // loaded mid-run, or the scheduler's run
             return;
         }
+        if (refreshActive) return;   // our poller is finishing it off
         // Idle: mascot reflects whether the last completed run had a feed error.
         setBrandState(failedFeeds(j.last_result).length ? 'error' : '');
         if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
@@ -571,7 +670,14 @@ function updateRefreshPulse() {
     }).catch(() => {});  // transient failure: keep last shown values
 }
 document.addEventListener('DOMContentLoaded', () => {
-    if (!document.getElementById('pulse-refresh')) return;
+    if (!document.getElementById('pulse-refresh')) {
+        // Views without the pulse card still show the run and its buttons.
+        if (document.getElementById('refresh-all-btn')) {
+            fetch('/api/refresh/status').then(r => r.json())
+                .then(j => { if (j.running) adoptRunningRefresh(); }).catch(() => {});
+        }
+        return;
+    }
     updateRefreshPulse();
     setInterval(updateRefreshPulse, 30000);
     document.addEventListener('visibilitychange', () => {
@@ -825,7 +931,7 @@ async function unifiSave(quiet) {
         }
         return true;
     }
-    alert('Could not save: ' + (j.detail || r.status));
+    alert('Could not save: ' + (detailText(j.detail) || r.status));
     return false;
 }
 
@@ -852,7 +958,7 @@ async function saveUnifiCreds() {
         closeUnifiCredsModal();
         unifiLoaded = false; loadUnifiOnce();
         alert(j.credentials_configured ? 'Credentials saved' : 'Credentials cleared');
-    } else { alert('Could not save credentials: ' + (j.detail || r.status)); }
+    } else { alert('Could not save credentials: ' + (detailText(j.detail) || r.status)); }
 }
 
 async function unifiTest(btn) {
@@ -861,7 +967,7 @@ async function unifiTest(btn) {
     try {
         const r = await apiFetch('/api/integrations/unifi/test', {method: 'POST'});
         const j = await r.json().catch(() => ({}));
-        el.textContent = r.ok ? j.message : ('Test failed: ' + (j.detail || r.status));
+        el.textContent = r.ok ? j.message : ('Test failed: ' + (detailText(j.detail) || r.status));
     } finally { btn.disabled = false; }
 }
 
@@ -881,7 +987,7 @@ async function unifiPush(btn) {
             el.textContent = 'Pushed ' + s.entries.toLocaleString() + ' entries into ' + s.groups +
                 ' group(s): ' + s.created + ' created, ' + s.updated + ' updated, ' +
                 s.unchanged + ' unchanged, ' + s.emptied + ' emptied. Now reference the groups in a UDM block rule.';
-        } else { el.textContent = 'Push failed: ' + (j.detail || r.status); }
+        } else { el.textContent = 'Push failed: ' + (detailText(j.detail) || r.status); }
     } finally { btn.disabled = false; }
 }
 
@@ -944,7 +1050,7 @@ async function csSave(quiet) {
     const r = await apiFetch('/api/integrations/crowdsec', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert('Could not save: ' + (j.detail || r.status)); return false; }
+    if (!r.ok) { alert('Could not save: ' + (detailText(j.detail) || r.status)); return false; }
     csRenderStatus(j);
     if (j.credentials_cleared) {
         alert('The LAPI address changed, so the saved CrowdSec credentials were cleared '
@@ -969,7 +1075,7 @@ async function _postCsCreds(body) {
     const r = await apiFetch('/api/integrations/crowdsec/credentials', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert('Could not save credentials: ' + (j.detail || r.status)); return; }
+    if (!r.ok) { alert('Could not save credentials: ' + (detailText(j.detail) || r.status)); return; }
     closeCsCredsModal();
     csLoaded = false; loadCsOnce();
 }
@@ -993,7 +1099,7 @@ async function csTest(btn) {
     try {
         const r = await apiFetch('/api/integrations/crowdsec/test', {method: 'POST'});
         const j = await r.json().catch(() => ({}));
-        el.textContent = r.ok ? ((j.ok ? '✓ ' : '✗ ') + j.message) : ('Test failed: ' + (j.detail || r.status));
+        el.textContent = r.ok ? ((j.ok ? '✓ ' : '✗ ') + j.message) : ('Test failed: ' + (detailText(j.detail) || r.status));
     } finally { btn.disabled = false; }
 }
 
@@ -1010,7 +1116,7 @@ async function csPush(btn) {
             el.textContent = 'Published ' + s.entries.toLocaleString() + ' ' + s.tier +
                 '-tier IPs as ' + s.scenario + ' (' + s.expired_previous.toLocaleString() +
                 ' from the previous publish expired). Your bouncers pick them up on their next pull.';
-        } else { el.textContent = 'Publish failed: ' + (j.detail || r.status); }
+        } else { el.textContent = 'Publish failed: ' + (detailText(j.detail) || r.status); }
     } finally { btn.disabled = false; }
 }
 
@@ -1021,7 +1127,7 @@ async function backupNow(btn) {
     try {
         const r = await apiFetch('/api/backup', {method: 'POST'});
         const j = await r.json().catch(() => ({}));
-        el.textContent = r.ok ? 'Backup written.' : ('Backup failed: ' + (j.detail || r.status));
+        el.textContent = r.ok ? 'Backup written.' : ('Backup failed: ' + (detailText(j.detail) || r.status));
     } finally { btn.disabled = false; }
 }
 async function recalcNow(btn) {
@@ -1031,7 +1137,7 @@ async function recalcNow(btn) {
         const r = await apiFetch('/api/recalculate-scores', {method: 'POST'});
         const j = await r.json().catch(() => ({}));
         el.textContent = r.ok ? ('Recalculated ' + Number(j.recalculated).toLocaleString() + ' indicators.')
-                              : ('Recalculate failed: ' + (j.detail || r.status));
+                              : ('Recalculate failed: ' + (detailText(j.detail) || r.status));
     } finally { btn.disabled = false; }
 }
 
@@ -1053,6 +1159,29 @@ function showView(v, focus) {
 }
 window.addEventListener('hashchange', () => {
     showView((location.hash || '').replace('#', '').split('/')[0], true);
+    railShowCurrent();
+});
+// On a phone the rail is a sideways strip with its scrollbar hidden, and
+// "Connect"/"System" sat off-screen with nothing to say so (QA, 2026-09-27):
+// fade the edge that has more, and keep the current view's link in sight.
+function railFade() {
+    const rail = document.querySelector('.rail');
+    if (!rail) return;
+    rail.classList.toggle('more-start', rail.scrollLeft > 2);
+    rail.classList.toggle('more-end', rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 2);
+}
+function railShowCurrent() {
+    const v = document.documentElement.getAttribute('data-view');
+    const link = v && document.querySelector('.rail-link[data-view="' + v + '"]');
+    if (link && link.scrollIntoView) link.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    railFade();
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const rail = document.querySelector('.rail');
+    if (!rail) return;
+    rail.addEventListener('scroll', railFade, {passive: true});
+    window.addEventListener('resize', railFade);
+    railShowCurrent();
 });
 document.addEventListener('DOMContentLoaded', () => {
     const v = document.documentElement.getAttribute('data-view');
@@ -1161,7 +1290,7 @@ async function saveHostName(name) {
     const names = (hostState ? hostState.configured : []).concat([name]);
     const r = await _hostPost(names);          // enforce omitted: the switch stays as it is
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert('Could not save: ' + (j.detail || r.status)); return false; }
+    if (!r.ok) { alert('Could not save: ' + (detailText(j.detail) || r.status)); return false; }
     hostState = j; renderHostCheck();
     return true;
 }
@@ -1169,7 +1298,7 @@ async function removeHostName(name) {
     const names = (hostState ? hostState.configured : []).filter(h => h !== name);
     const r = await _hostPost(names);
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { hostState = j; renderHostCheck(); } else alert('Could not save: ' + (j.detail || r.status));
+    if (r.ok) { hostState = j; renderHostCheck(); } else alert('Could not save: ' + (detailText(j.detail) || r.status));
 }
 async function setHostEnforce(box) {
     const s = hostState;
@@ -1184,7 +1313,7 @@ async function setHostEnforce(box) {
     const r = await _hostPost(s.configured, box.checked);
     const j = await r.json().catch(() => ({}));
     if (r.ok) { hostState = j; renderHostCheck(); }
-    else { box.checked = !box.checked; alert('Could not save: ' + (j.detail || r.status)); }
+    else { box.checked = !box.checked; alert('Could not save: ' + (detailText(j.detail) || r.status)); }
 }
 // "Check & add": resolve the name (a DNS lookup only, server-side), say
 // whether it points at this server, then save it WITHOUT switching the

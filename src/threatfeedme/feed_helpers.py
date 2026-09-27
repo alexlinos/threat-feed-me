@@ -23,9 +23,9 @@ TIER_FEEDS = [
     {
         "key": "high",
         "label": "High Confidence",
-        "description": ("Strongest evidence: several independent sources agree, or a "
-                        "primary curator (e.g. URLhaus) lists the domain. Smallest list, "
-                        "for strict or capacity-limited devices"),
+        "description": ("Strongest evidence: several independent sources agree (for "
+                        "domains, a primary curator such as URLhaus is enough). Smallest "
+                        "list, for strict or capacity-limited devices"),
         "recommended": False,
     },
     {

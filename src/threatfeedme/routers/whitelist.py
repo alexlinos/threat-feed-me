@@ -1,6 +1,7 @@
 """Whitelist management endpoints."""
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,8 @@ from threatfeedme.schemas import WhitelistRequest, WhitelistResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_BIDI_CONTROLS = re.compile(r"[\u202a-\u202e\u2066-\u2069\u200e\u200f]")
 
 
 def _feedback_scope(feed_name: Optional[str]) -> Optional[str]:
@@ -68,6 +71,13 @@ def add_to_whitelist(request: WhitelistRequest, _=Depends(require_auth), _csrf=D
         expires = datetime.fromisoformat(request.expires_at) if request.expires_at else None
     except ValueError:
         raise HTTPException(status_code=400, detail="expires_at must be an ISO-8601 date/time")
+    if expires is not None:
+        # An entry born expired suppresses nothing, silently (QA, 2026-09-27).
+        cmp = expires if expires.tzinfo else expires.replace(tzinfo=timezone.utc)
+        if cmp <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="expires_at is in the past")
+    # Bidi overrides make a reason render as different text than was stored.
+    request.reason = _BIDI_CONTROLS.sub("", request.reason)
     try:
         feed_name = request.feed_name or ALL_FEEDS
 

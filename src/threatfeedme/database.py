@@ -984,8 +984,10 @@ class Database:
             )
             params.extend([ALL_FEEDS, now])
         if q:
-            where.append("i.ip LIKE ?")
-            params.append(f"%{q}%")
+            # Escaped: a bare "%" or "_" searched the whole corpus, and
+            # "a_b.com" matched "axb.com" (QA, 2026-09-27).
+            where.append("i.ip LIKE ? ESCAPE '!'")
+            params.append("%" + q.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%")
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
         matcher = None

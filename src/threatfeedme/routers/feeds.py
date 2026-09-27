@@ -1,6 +1,8 @@
 """Feed source management, custom-list uploads, and manual refresh endpoints."""
+import math
 import os
 import re
+import threading
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -21,6 +23,8 @@ router = APIRouter()
 # Uploaded custom lists are stored here (never a client-supplied path), and all
 # runtime local-file feeds must resolve within this directory.
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap on uploaded lists
+MAX_KEY_CHARS = 4096                # an Authorization header value, generously
+_add_feed_lock = threading.Lock()
 
 
 def _safe_upload_path(feed_name: str) -> str:
@@ -76,7 +80,10 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
     url = request.url.strip()
     # Constrain the name to a safe slug (keeps it usable as a source key and
     # prevents any markup/script from a crafted name reaching the dashboard).
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+    # ...and at least one letter or digit: "." and ".." passed, and the
+    # browser normalizes /api/feeds/../enabled away, so the feed could never
+    # be toggled, refreshed or removed from the dashboard (QA, 2026-09-27).
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name) or not re.search(r"[A-Za-z0-9]", name):
         raise HTTPException(
             status_code=400,
             detail="Feed name may only contain letters, numbers, dot, dash, underscore (max 64)",
@@ -134,14 +141,6 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
             status_code=400,
             detail="Local-file feeds must be uploaded via /api/feeds/upload",
         )
-    existing = core.db.get_feed_source(feed.name)
-    if existing is not None and not request.overwrite:
-        raise HTTPException(
-            status_code=409,
-            detail=(f"A feed named '{feed.name}' already exists "
-                    f"({'uploaded list' if existing.local_file else existing.url}). "
-                    "Choose another name, or confirm to replace it."),
-        )
     # Early SSRF feedback: an internal or metadata-service URL is refused here
     # with a clear reason, instead of being stored and failing every refresh.
     # Not the enforcing check (the connect-time guard is, on every fetch); an
@@ -155,7 +154,19 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
             raise HTTPException(status_code=400, detail=str(e))
         except Exception:
             pass
-    core.db.add_feed(feed)
+    # Check-then-insert under one lock: with the (slow, DNS) SSRF check between
+    # them, two quick submits of the same new name both passed the check and
+    # the second silently replaced the first (QA, 2026-09-27).
+    with _add_feed_lock:
+        existing = core.db.get_feed_source(feed.name)
+        if existing is not None and not request.overwrite:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"A feed named '{feed.name}' already exists "
+                        f"({'uploaded list' if existing.local_file else existing.url}). "
+                        "Choose another name, or confirm to replace it."),
+            )
+        core.db.add_feed(feed)
     return WhitelistResponse(success=True, message=f"Feed '{feed.name}' saved")
 
 
@@ -193,6 +204,8 @@ async def upload_feed(
         raise HTTPException(status_code=400, detail="Invalid feed_type")
     if indicator_kind not in ("ip", "domain"):
         raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
+    if not (math.isfinite(weight) and 0.0 <= weight <= 1.0):     # same rule as FeedRequest
+        raise HTTPException(status_code=400, detail="weight must be a number from 0 to 1")
 
     # Resolve a safe destination path (raises on traversal / bad name).
     try:
@@ -238,11 +251,6 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
         if not indicators:
             raise HTTPException(status_code=422, detail="No valid IPs or CIDRs found in file")
 
-    # Persist the sanitized list, then register/point the feed at it.
-    with open(dest, "w", encoding="utf-8", newline="\n") as f:
-        for entry in indicators:
-            f.write((entry.get("cidr") or entry["ip"]) + "\n")
-
     feed = FeedSource(
         name=re.sub(r'[^A-Za-z0-9._-]', '_', name).strip('._')[:64],
         url=dest, feed_type=ftype, weight=weight, local_file=True, enabled=True,
@@ -250,12 +258,18 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
     )
     # Re-uploading your own list is how it gets updated; turning a REMOTE feed
     # (a shipped default, say) into an upload by reusing its name is not.
+    # Checked before the file is written, so a refused upload leaves nothing.
     existing = core.db.get_feed_source(feed.name)
     if existing is not None and not existing.local_file:
         raise HTTPException(
             status_code=409,
             detail=f"'{feed.name}' is a remote feed ({existing.url}); upload under another name",
         )
+
+    # Persist the sanitized list, then register/point the feed at it.
+    with open(dest, "w", encoding="utf-8", newline="\n") as f:
+        for entry in indicators:
+            f.write((entry.get("cidr") or entry["ip"]) + "\n")
     core.db.add_feed(feed)
     return WhitelistResponse(
         success=True,
@@ -445,10 +459,22 @@ def set_api_key(name: str, request: ApiKeyRequest,
                    "submit them as {\"keys\": {VAR: value}}",
         )
 
+    # Validate EVERY value before writing ANY: a 500 KB key used to be written
+    # to .env first, then os.environ refused it (Windows caps a value at
+    # 32,767 chars) and the next start died loading that .env. Real API keys
+    # are short printable ASCII; anything else also failed later as a latin-1
+    # header encode error that echoed the key's position (QA, 2026-09-27).
+    values = {}
     for var, raw in submitted.items():
         value = raw.strip()
         if any(ord(c) < 32 or ord(c) == 127 for c in value):
             raise HTTPException(status_code=400, detail="API key contains control characters")
+        if len(value) > MAX_KEY_CHARS:
+            raise HTTPException(status_code=400, detail=f"API key is longer than {MAX_KEY_CHARS} characters")
+        if not value.isascii():
+            raise HTTPException(status_code=400, detail="API key must be plain ASCII text")
+        values[var] = value
+    for var, value in values.items():
         _write_env_var(core.env_file(), var, value or None)
         if value:
             os.environ[var] = value

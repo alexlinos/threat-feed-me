@@ -683,6 +683,113 @@ def test_api_key_set_status_clear_and_never_echoed(client):
         client.delete("/api/feeds/keyed_feed")
 
 
+# ---- hostile-input QA pass (2026-09-27) ----
+
+@pytest.mark.parametrize("weight", ["1e400", "-0.5", "5", "NaN"])
+def test_feed_weight_must_be_finite_and_0_to_1(client, weight):
+    # weight=inf reached the scorer as confidence_score=inf, and every JSON
+    # surface carrying the row (lookup, feed list, TAXII paging) went 500.
+    body = ('{"name": "w_feed", "url": "https://example.com/w.txt", '
+            '"feed_type": "custom", "weight": ' + weight + '}')
+    r = client.post("/api/feeds", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 422, r.text
+    assert "w_feed" not in [f["name"] for f in client.get("/api/feed-sources").json()]
+
+
+def test_upload_weight_must_be_finite_and_0_to_1(client):
+    for weight in ("inf", "nan", "2"):
+        r = client.post("/api/feeds/upload", data={"name": "w_upload", "weight": weight},
+                        files={"file": ("x.txt", b"198.51.100.7\n", "text/plain")})
+        assert r.status_code == 400, (weight, r.text)
+
+
+@pytest.mark.parametrize("name", [".", "..", "._-"])
+def test_feed_name_needs_a_letter_or_digit(client, name):
+    # "." and ".." passed; the browser normalizes /api/feeds/../x away, so
+    # the feed could never be managed from the dashboard.
+    r = client.post("/api/feeds", json={"name": name, "url": "https://example.com/d.txt"})
+    assert r.status_code == 400
+
+
+def test_bad_api_key_is_refused_before_anything_is_written(client):
+    # A 500 KB key was written to .env, then os.environ refused it, and the
+    # next start died loading that .env.
+    from threatfeedme import core
+    var = "TFM_FEED_QA_KEYED"
+    assert client.post("/api/feeds", json={
+        "name": "qa_keyed", "url": "https://example.com/k.txt", "auth_env": var,
+    }).status_code == 200
+    try:
+        for bad in ("A" * 5000, "kéy-value"):
+            r = client.post("/api/feeds/qa_keyed/api-key", json={"api_key": bad})
+            assert r.status_code == 400, r.text
+        env = core.env_file()
+        assert not os.path.exists(env) or var not in open(env, encoding="utf-8").read()
+        assert var not in os.environ
+    finally:
+        client.delete("/api/feeds/qa_keyed")
+
+
+def test_indicator_search_treats_percent_and_underscore_literally(client):
+    # Unescaped, "%" and "_" were LIKE wildcards: "%" matched the whole corpus.
+    total = lambda q: client.get("/api/indicators", params={"q": q}).json()["total"]
+    assert total("45.66.230") >= 1
+    assert total("%") == 0
+    assert total("45.66.230._") == 0
+
+
+def test_api_docs_are_not_served(client):
+    # FastAPI serves these outside every route dependency, so they mapped the
+    # whole API for anyone even with sign-in on.
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        assert client.get(path).status_code == 404, path
+
+
+def test_whitelist_refuses_past_expiry_and_oversized_text(client):
+    base = {"ip": "198.51.100.61", "reason_code": "other"}
+    r = client.post("/api/whitelist", json={**base, "expires_at": "2000-01-01T00:00:00"})
+    assert r.status_code == 400
+    r = client.post("/api/whitelist", json={**base, "reason": "x" * 600})
+    assert r.status_code == 422
+    r = client.post("/api/whitelist", json={**base, "added_by": "y" * 100})
+    assert r.status_code == 422
+
+
+def test_validation_errors_never_echo_the_rejected_value(client):
+    # The default 422 put each rejected value back in the body ("input").
+    marker = "ECHO-MARKER-" + "z" * 600
+    r = client.post("/api/whitelist", json={"ip": "198.51.100.63", "reason_code": "other",
+                                            "reason": marker})
+    assert r.status_code == 422
+    assert "ECHO-MARKER" not in r.text
+    assert r.json()["detail"][0]["loc"][-1] == "reason"
+
+
+def test_whitelist_reason_drops_bidi_overrides(client):
+    r = client.post("/api/whitelist", json={"ip": "198.51.100.62", "reason_code": "other",
+                                            "reason": "mail " + chr(0x202E) + "relay" + chr(0x202C)})
+    assert r.status_code == 200, r.text
+    try:
+        rows = client.get("/api/whitelist").json()
+        rows = rows.get("entries", rows) if isinstance(rows, dict) else rows
+        reason = next(e["reason"] for e in rows if e["ip"] == "198.51.100.62")
+        assert reason == "mail relay"
+    finally:
+        client.delete("/api/whitelist", params={"ip": "198.51.100.62", "feed": "*"})
+
+
+def test_upload_over_a_remote_feed_name_writes_no_file(client):
+    import sys
+    feeds = sys.modules["threatfeedme.routers.feeds"]
+    dest = feeds._safe_upload_path("spamhaus_drop")
+    if os.path.exists(dest):
+        os.remove(dest)
+    r = client.post("/api/feeds/upload", data={"name": "spamhaus_drop"},
+                    files={"file": ("x.txt", b"198.51.100.7\n", "text/plain")})
+    assert r.status_code == 409
+    assert not os.path.exists(dest)
+
+
 def test_load_env_file_never_overrides_real_env(tmp_path, monkeypatch):
     from threatfeedme import core
     p = tmp_path / ".env"

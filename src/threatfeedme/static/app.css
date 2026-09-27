@@ -12,39 +12,19 @@ tr.row-problem td { box-shadow: inset 3px 0 0 var(--amber); }
 .reorder-flag { display:inline-block; margin-left:6px; padding:0 6px; border-radius:8px;
     font-size:11px; font-weight:600; color:var(--amber); border:1px solid var(--amber); white-space:nowrap; }
 .processing { color:var(--amber); animation:pulse 1.8s ease-in-out infinite; display:inline-block; }
-/* "Feeding…": the brand's flytrap doing its job. Two TOOTHED jaws (zigzag
-   clip-paths, hinged at the back) snap shut on red prey dots drifting in —
-   deliberately a trap, not an arcade wedge: no circle, teeth on both jaws,
-   hinge at the rear. Jaws inherit currentColor so they read green in matrix
-   cells and dark on the green refresh button; prey stays the logo's red. */
-.feeding { display:inline-flex; align-items:center; gap:6px; color:var(--accent-hi);
-           font-family:var(--mono); font-size:.85em; }
-.feeding .chomp { position:relative; width:15px; height:14px; flex:none; }
-.feeding .chomp i, .feeding .chomp b { position:absolute; left:0; width:15px; height:7px;
-           background:currentColor; transform-origin:0% 100%; }
-.feeding .chomp i { top:0;
-           clip-path:polygon(0% 0%, 62% 4%, 100% 30%, 100% 55%, 84% 100%, 68% 55%,
-                             52% 100%, 36% 55%, 20% 100%, 4% 55%, 0% 80%);
-           animation:trap-top .5s ease-in infinite alternate; }
-.feeding .chomp b { bottom:0; transform-origin:0% 0%;
-           clip-path:polygon(0% 100%, 62% 96%, 100% 70%, 100% 45%, 84% 0%, 68% 45%,
-                             52% 0%, 36% 45%, 20% 0%, 4% 45%, 0% 20%);
-           animation:trap-bot .5s ease-in infinite alternate; }
-@keyframes trap-top { from { transform:rotate(-22deg); } 60% { transform:rotate(-22deg); } to { transform:rotate(0); } }
-@keyframes trap-bot { from { transform:rotate(22deg); } 60% { transform:rotate(22deg); } to { transform:rotate(0); } }
-.feeding .prey { position:relative; width:30px; height:14px; overflow:hidden; flex:none; }
-.feeding .prey i { position:absolute; top:5px; width:4px; height:4px; border-radius:50%;
-           background:var(--red); animation:prey-march 1.5s linear infinite; }
-.feeding .prey i:nth-child(2) { animation-delay:.5s; }
-.feeding .prey i:nth-child(3) { animation-delay:1s; }
-@keyframes prey-march { from { left:30px; opacity:1; } 92% { opacity:1; } to { left:-2px; opacity:0; } }
-.btn .feeding, .mini-btn .feeding { color:inherit; font-size:1em; gap:5px; margin-left:8px; }
-.mini-btn .feeding .chomp { width:11px; height:10px; }
-.mini-btn .feeding .chomp i, .mini-btn .feeding .chomp b { width:11px; height:5px; }
+/* "Feeding…": plain words plus three dots lighting in turn. The flytrap in
+   the rail is the one animation (it bites while a refresh runs), so the
+   inline indicator stays quiet: currentColor dots, not red prey, so it
+   reads green in matrix cells and dark on the green refresh button. */
+.feeding { color:var(--accent-hi); font-family:var(--mono); font-size:.85em; white-space:nowrap; }
+.feeding-dots { display:inline-flex; gap:3px; margin-left:4px; vertical-align:middle; }
+.feeding-dots i { width:4px; height:4px; border-radius:50%; background:currentColor;
+           opacity:.4; animation:feeding-dot 1.2s ease-in-out infinite; }
+.feeding-dots i:nth-child(2) { animation-delay:.2s; }
+.feeding-dots i:nth-child(3) { animation-delay:.4s; }
+@keyframes feeding-dot { 0%,60%,100% { opacity:.4; transform:none; } 30% { opacity:1; transform:translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) {
-  .feeding .chomp i, .feeding .chomp b, .feeding .prey i { animation:none; }
-  .feeding .prey { display:none; }
-  .feeding { animation:pulse 1.8s ease-in-out infinite; }
+  .feeding-dots i { animation:none; opacity:.7; }
 }
 .badge { padding:2px 9px; border-radius:6px; font-size:.78em; font-weight:600; font-family:var(--mono); border:1px solid transparent; white-space:nowrap; display:inline-block; }
 .badge-success { background:rgba(16,185,129,.12); color:var(--accent-hi); border-color:rgba(16,185,129,.3); }
@@ -55,9 +35,15 @@ tr.row-problem td { box-shadow: inset 3px 0 0 var(--amber); }
 .badge-warn { background:rgba(251,191,36,.1); color:var(--amber); border-color:rgba(251,191,36,.3); }
 
 /* modal */
+/* The overlay scrolls, and the dialog centres with auto margins rather than
+   align-items:center: centred flex children overflow BOTH edges when taller
+   than the screen, so a landscape phone lost the heading off the top and the
+   buttons off the bottom with no way to reach them (QA, 2026-09-27). */
 .modal-overlay { display:none; position:fixed; inset:0; background:rgba(5,5,7,.7);
-                  backdrop-filter:blur(3px); align-items:center; justify-content:center; z-index:50; }
+                  backdrop-filter:blur(3px); align-items:flex-start; justify-content:center; z-index:50;
+                  overflow-y:auto; padding:12px 0; }
 .modal-overlay.open { display:flex; }
+.modal-overlay .modal { margin:auto 0; }
 .modal { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px; width:min(460px,92vw); box-shadow:0 10px 50px rgba(0,0,0,.6), 0 0 40px var(--accent-glow); border-color:var(--line-2); }
 .modal h3 { margin:0 0 4px; }
 .modal .field { margin:12px 0; }
@@ -78,7 +64,7 @@ input::placeholder { color:var(--dim); }
 .text-input { padding:9px 12px; min-width:200px; font-size:14px; }
 
 .wl-form { display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:12px; }
-.wl-form input, .wl-form select { padding:8px 10px; font-size:.9em; }
+.wl-form input, .wl-form select { padding:8px 10px; font-size:.9em; max-width:100%; min-width:0; }  /* a long <option> sized the select past a phone's width */
 .wl-form input.ip { width:150px; font-family:var(--mono); }
 .wl-form input.reason { flex:1; min-width:160px; }
 .wl-form button { padding:8px 16px; border:none; border-radius:10px; cursor:pointer; background:var(--accent-hi); color:#05180f; font-weight:700; font-family:var(--sans); }
@@ -170,8 +156,12 @@ input::placeholder { color:var(--dim); }
 .fp-row code { flex:0 0 auto; }
 .hint { color:var(--muted); font-size:13.5px; margin:0 0 10px; }
 
+/* Clipped from the LEFT like the block-list URL boxes: every raw.github feed
+   read "https://raw.githubusercontent.com/b…" and the three CrowdSec URLs,
+   which differ only in the query, looked identical. The <bdi> keeps the URL
+   itself left-to-right inside the rtl box, so no punctuation moves. */
 .feed-url { color:var(--dim); font-size:.76em; font-family:var(--mono); max-width:230px;
-             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
 .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
 .toolbar .grow { flex:1; }
 .btn { padding:9px 15px; border:0; border-radius:10px; cursor:pointer; background:var(--accent-hi); color:#05180f; font-weight:650; transition:box-shadow .15s, filter .15s; display:inline-flex; align-items:center; justify-content:center; gap:6px; font:700 13.5px var(--sans); text-decoration:none; white-space:nowrap; }
@@ -180,6 +170,7 @@ input::placeholder { color:var(--dim); }
 /* While a refresh runs, the button stays lit (not dimmed like a plain disabled
    button) and shows marching dots, so it's obvious work is happening. */
 .btn.refreshing, .mini-btn.refreshing { cursor:progress; }
+#refresh-all-btn { min-width:112px; justify-content:center; }   /* "Feeding •••" is wider than "Refresh": no shift */
 .btn.refreshing:disabled { opacity:1; box-shadow:0 0 18px var(--accent-glow); }
 
 .interval-box { display:flex; align-items:center; gap:6px; background:var(--card-2); border:1px solid var(--line); border-radius:10px; padding:6px 10px; font-size:.88em; color:var(--muted); }
@@ -257,6 +248,9 @@ body { margin:0; font-family:var(--sans); color:var(--ink); background:var(--bg)
 a { color:var(--accent-hi); }
 a:hover { color:#6ee7b7; }
 :focus-visible { outline:2px solid var(--accent-hi); outline-offset:2px; }
+/* Focus moved to the content region after a view switch (for screen
+   readers) isn't a control: no ring drawn around the whole page. */
+[tabindex="-1"]:focus, [tabindex="-1"]:focus-visible { outline:none; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 .skip { position:absolute; left:-999px; top:8px; z-index:100; background:var(--accent-hi); color:#05180f;
         padding:8px 12px; border-radius:8px; font-weight:700; }
@@ -461,18 +455,45 @@ tr:last-child td { border-bottom:none; }
 tbody tr:hover td { background:rgba(255,255,255,.018); }
 
 /* ---- brand mark state (class set by app.js on .logo-mark): idle is
-   still (perpetual motion reads as "stuck"), running chomps the jaws on
-   their hinge, error turns the prey amber. ---- */
-.logo-mark { display:block; }
-.logo-mark.brand-running .jaw-u { animation:jaw-u .7s ease-in-out infinite; }
-.logo-mark.brand-running .jaw-l { animation:jaw-l .7s ease-in-out infinite; }
-.logo-mark.brand-running .prey { animation:pulse 1.4s ease-in-out infinite; }
+   still (perpetual motion reads as "stuck"), running bites (jaws on
+   their hinge, see below), error turns the prey amber. ---- */
+.logo-mark { display:block; overflow:visible; }   /* wide open, the upper jaw pokes past the viewBox */
+/* Running = a bite, not a twitch: rest, open wide as the red prey flies
+   into the mouth, snap shut (teeth mesh at 0deg), a short chew, and the
+   prey stays swallowed until the next one appears at the lip. The old
+   12deg-to-1deg wobble read as idle at 38px. One 1.4s cycle drives all
+   three so jaws and prey can't drift apart. */
+.logo-mark.brand-running .jaw-u { animation:bite-u 1.4s infinite; }
+.logo-mark.brand-running .jaw-l { animation:bite-l 1.4s infinite; }
+.logo-mark.brand-running .prey { animation:bite-prey 1.4s infinite; transform-box:fill-box; transform-origin:center; }
 .logo-mark.brand-error .prey { fill:var(--amber); animation:pulse 1s ease-in-out infinite; }
-@keyframes jaw-u { 0%,100% { transform:rotate(-12deg); } 50% { transform:rotate(-1deg); } }
-@keyframes jaw-l { 0%,100% { transform:rotate(12deg); } 50% { transform:rotate(1deg); } }
+@keyframes bite-u {
+  0%   { transform:rotate(-10deg); animation-timing-function:ease-out; }
+  34%  { transform:rotate(-34deg); animation-timing-function:cubic-bezier(.6,0,1,1); }
+  44%  { transform:rotate(0deg);   animation-timing-function:ease-out; }
+  52%  { transform:rotate(-5deg);  animation-timing-function:ease-in; }
+  60%  { transform:rotate(0deg);   animation-timing-function:ease-in-out; }
+  100% { transform:rotate(-10deg); }
+}
+@keyframes bite-l {
+  0%   { transform:rotate(10deg); animation-timing-function:ease-out; }
+  34%  { transform:rotate(34deg); animation-timing-function:cubic-bezier(.6,0,1,1); }
+  44%  { transform:rotate(0deg);  animation-timing-function:ease-out; }
+  52%  { transform:rotate(5deg);  animation-timing-function:ease-in; }
+  60%  { transform:rotate(0deg);  animation-timing-function:ease-in-out; }
+  100% { transform:rotate(10deg); }
+}
+@keyframes bite-prey {
+  0%, 12% { transform:translateX(0) scale(1); opacity:1; animation-timing-function:cubic-bezier(.5,0,.9,.6); }
+  42%     { transform:translateX(-46px) scale(.7); opacity:1; }
+  44%     { transform:translateX(-50px) scale(.5); opacity:0; }
+  80%     { transform:translateX(8px) scale(.4); opacity:0; animation-timing-function:ease-out; }
+  96%, 100% { transform:translateX(0) scale(1); opacity:1; }
+}
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
 @media (prefers-reduced-motion: reduce) {
   .logo-mark.brand-running .jaw-u, .logo-mark.brand-running .jaw-l { animation:none; }
+  .logo-mark.brand-running .prey { animation:pulse 1.4s ease-in-out infinite; }
 }
 
 /* ---- narrow screens: the rail becomes a scrolling top strip ---- */
@@ -486,6 +507,21 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
           gap:2px; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line);
           scrollbar-width:none; }
   .rail::-webkit-scrollbar { display:none; }
+  /* The strip can't fit every item on a phone and its scrollbar is hidden, so
+     fade whichever edge has more (app.js sets .more-end / .more-start). */
+  .rail.more-end { -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 36px), transparent);
+                   mask-image:linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+  .rail.more-start { -webkit-mask-image:linear-gradient(to left, #000 calc(100% - 36px), transparent);
+                     mask-image:linear-gradient(to left, #000 calc(100% - 36px), transparent); }
+  .rail.more-start.more-end { -webkit-mask-image:linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+                              mask-image:linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
+  /* Legible and tappable on a phone: nothing below 12px, controls >= 36px. */
+  .feed-url, .health-detail, .badge, th, .reorder-flag, .rm-btn, .hl-col, .hl-row,
+  .geo-bar-val, .geo-credit, .rail-link, .modal label, .vt-btn, .sysinfo dt { font-size:12px; }
+  .heat .hl-row, .heat .hl-col, .heat-title { font-size:12px; }   /* out-specify .heat's own */
+  .mini-btn, .rm-btn, .vt-btn, .fmt a { min-height:36px; display:inline-flex; align-items:center; }
+  .switch { margin:8px 0; }   /* 20px track, a 36px row to hit */
+  a.health { padding:8px 0; }
   .topbar-end { flex-wrap:wrap; gap:10px; min-width:0; }
   .health { white-space:normal; }
   .health-name { display:none; }
