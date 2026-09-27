@@ -740,6 +740,33 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   Still open: Delete feed / Recalculate / UniFi+CrowdSec push clicked
   mid-refresh wait on `jobs.write_lock` for the rest of the rescore.
 
+## v2.5.4 (2026-09-27): hostile QA pass
+
+Four parallel testers (refresh chaos, hostile feed input, auth bypass,
+phone layouts) against isolated DB copies; no auth/CSRF bypass found.
+Fixed in fb445ca, details in its message. Things to know before touching
+these areas again:
+
+- **Refresh UI has one state** (`refreshActive` / `pollActive` in app.js):
+  row Refresh buttons are disabled during any run, a page loaded mid-run
+  adopts it (`adoptRunningRefresh`), and the post-run reload is skipped
+  while a form is dirty or a dialog open (`pageHasUnsavedWork`; an unset
+  `<select>` defaults to index 0, not "no option selected").
+- **422s never echo the rejected value** (app.py handler): the default
+  put refused API keys back in the response and crashed on `inf`.
+- **Feed weight is finite and 0-1** on both add paths; `inf` used to reach
+  the scorer and 500 every JSON surface carrying the row.
+- **API docs routes are off** (`docs_url/redoc_url/openapi_url=None`).
+- **Deliberately not done**: login rate limiting (scrypt throttles already;
+  a per-IP lockout behind a reverse proxy locks everyone out), homograph
+  URLs shown as Unicode, logo can stay red for a deleted failing feed.
+- **QA safety lesson**: a local dev DB copied from a real deployment kept
+  its UniFi push ENABLED with real gateway credentials in `data/.env`, and
+  a dev server's scheduled refresh pushed a stale High list to the real
+  gateway (the deployment's next push overwrote it). Before running any
+  server on a copied DB: disable `unifi_integration` / `crowdsec_integration`
+  in its settings and keep its `.env` out.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
