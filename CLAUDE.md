@@ -713,9 +713,9 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod (soc-grfna01) runs 2.5.4 (rolled 2026-09-29); its dashboard
-  password must be set once by IP (`http://172.31.10.4:8080/#system`). The
-  2.5.0 canary was removed the same day.
+- Prod (soc-grfna01) runs 2.5.4 (rolled 2026-09-29). Its dashboard has
+  no sign-in by the maintainer's choice: access is segmented at the
+  firewall. Not an open item. The 2.5.0 canary was removed 2026-09-26.
 
 ## v2.5.3 (2026-09-26): refresh-click lockup
 
