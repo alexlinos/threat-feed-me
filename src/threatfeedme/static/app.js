@@ -276,11 +276,14 @@ function refreshFeed(name, btn) { startRefresh(name, btn); }
 // exactly one status poller; and a page loaded mid-run adopts the run
 // (adoptRunningRefresh) instead of offering a Refresh that can only 409.
 const FEEDING_HTML = 'Feeding<span class="feeding-dots" aria-hidden="true"><i></i><i></i><i></i></span>';
-let refreshActive = false, pollActive = false, globalBtnHtml = null;
+// runOwned: THIS page asked for the run, so it reloads when the run ends.
+// An adopted run (the scheduler's, another tab's) doesn't: openphish alone
+// refreshes every 15 min, and reloading on each one jumped every open
+// dashboard back to the top with its panels closed (review, 2026-09-28).
+let refreshActive = false, pollActive = false, runOwned = false;
 function rowRefreshButtons() { return document.querySelectorAll('.row-refresh'); }
 function setRunningUi(initiator) {
     const globalBtn = document.getElementById('refresh-all-btn');
-    if (globalBtn && globalBtnHtml === null) globalBtnHtml = globalBtn.innerHTML;
     refreshActive = true;
     // The toolbar button always shows the run; a row that started it does too.
     [globalBtn, initiator].forEach(b => {
@@ -315,6 +318,7 @@ async function startRefresh(name, initiator) {
     if (refreshActive) return;          // buttons are disabled; belt and braces
     const status = document.getElementById('refresh-status');
     setRunningUi(initiator && initiator.id !== 'refresh-all-btn' ? initiator : null);
+    runOwned = true;     // the operator asked: show them the result when it lands
     const url = '/api/refresh' + (name ? '?feed=' + encodeURIComponent(name) : '');
     let r = null;
     try { r = await apiFetch(url, {method:'POST'}); } catch (e) { /* unreachable: below */ }
@@ -347,8 +351,9 @@ async function startRefresh(name, initiator) {
 function adoptRunningRefresh() {
     if (refreshActive) return;
     setRunningUi(null);
+    runOwned = false;
     const status = document.getElementById('refresh-status');
-    if (status && !status.textContent) status.textContent = 'A refresh is running; this page updates when it finishes.';
+    if (status && !status.textContent) status.textContent = 'A refresh is running.';
     ensurePolling();
 }
 function ensurePolling() {
@@ -375,6 +380,9 @@ function setBrandState(state) {
 function pageHasUnsavedWork() {
     if (document.querySelector('.modal-overlay.open')) return true;
     return [...document.querySelectorAll('form input, form textarea, form select')].some(el => {
+        // A browser fills these from saved logins on every load (System's
+        // sign-in form): that is not typing, and it blocked every auto-reload.
+        if (/^(username|current-password)$/.test(el.autocomplete)) return false;
         if (el.type === 'file') return el.files && el.files.length > 0;
         if (el.type === 'checkbox' || el.type === 'radio') return el.checked !== el.defaultChecked;
         if (el.tagName === 'SELECT') {
@@ -388,10 +396,13 @@ function pageHasUnsavedWork() {
 }
 function reloadWhenIdle(status, delay) {
     if (!pageHasUnsavedWork()) { setTimeout(() => reloadPage(), delay); return; }
+    offerReload(status, ' Reload to see the new numbers when you’re done here. ');
+}
+function offerReload(status, text) {
     const btn = document.createElement('button');
     btn.className = 'mini-btn'; btn.type = 'button'; btn.textContent = 'Reload';
     btn.onclick = () => reloadPage();
-    status.append(' Reload to see the new numbers when you’re done here. ', btn);
+    status.append(text, btn);
 }
 // One failed poll used to throw out of here and end polling for good: the
 // buttons stayed disabled on "Feeding" and the page never reloaded, even
@@ -440,8 +451,10 @@ async function pollRefresh() {
         : 'Refresh complete.';
     setBrandState(failed.length ? 'error' : '');
     // Reload so the table (health badges, "needs attention" flags) reflects
-    // the run; linger longer when there's an error to read.
-    reloadWhenIdle(status, failed.length ? 4000 : 800);
+    // the run; linger longer when there's an error to read. A run this page
+    // only watched leaves the page where the operator is and offers it.
+    if (runOwned) reloadWhenIdle(status, failed.length ? 4000 : 800);
+    else offerReload(status, ' ');
 }
 async function restoreDefaults() {
     if (!confirm('Re-add the curated default feeds that are currently missing?')) return;
