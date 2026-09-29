@@ -751,7 +751,11 @@ these areas again:
   row Refresh buttons are disabled during any run, a page loaded mid-run
   adopts it (`adoptRunningRefresh`), and the post-run reload is skipped
   while a form is dirty or a dialog open (`pageHasUnsavedWork`; an unset
-  `<select>` defaults to index 0, not "no option selected").
+  `<select>` defaults to index 0, not "no option selected"). **2.5.5**:
+  only a run the page asked for reloads (`runOwned`); an adopted
+  scheduler run offers Reload instead (openphish's 15-min cadence made
+  every open dashboard jump to the top), and autofilled
+  `username`/`current-password` fields don't count as unsaved work.
 - **422s never echo the rejected value** (app.py handler): the default
   put refused API keys back in the response and crashed on `inf`.
 - **Feed weight is finite and 0-1** on both add paths; `inf` used to reach
