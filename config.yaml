@@ -281,7 +281,10 @@ feeds:
   - name: alienVault_otx
     url: https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50
     feed_type: "threat_intel"
-    update_interval: 3600
+    # Every 6 h (was hourly, 2.5.6): each run pages through every subscribed
+    # pulse, OTX answered a deployment's hourly polls ever more slowly until
+    # the fetch failed outright, and subscribed pulses rarely change faster.
+    update_interval: 21600
     requires_auth: true
     auth_env: OTX_API_KEY
     auth_header: X-OTX-API-KEY

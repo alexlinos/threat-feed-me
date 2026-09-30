@@ -70,6 +70,16 @@ def due_feeds(db: Database, default_interval_seconds: int) -> List[str]:
     return [n for n, (_i, left) in feed_schedule(db, default_interval_seconds).items() if left <= 0]
 
 
+def failing_feeds(db: Database) -> List[str]:
+    """Enabled feeds whose latest fetch failed, whichever refresh fetched them.
+    The logo's warning state reads this: most refreshes fetch only the feeds
+    that are due, so judging by the last run alone turned the logo green while
+    a feed fetched in an earlier run was still failing."""
+    enabled = {f.name for f in db.get_feed_sources(enabled_only=True)}
+    return sorted(s.feed_name for s in db.get_feed_stats()
+                  if s.feed_name in enabled and s.status == "error")
+
+
 def next_due(db: Database, default_interval_seconds: int) -> Optional[Dict]:
     """The soonest feed to come due: {"feed", "in_s", "late"}; late = more than
     a full interval past due (the scheduler has fallen behind)."""

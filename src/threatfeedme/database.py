@@ -47,6 +47,15 @@ def _plumbing_differs(a: FeedSource, b: FeedSource) -> bool:
     return any(getattr(a, f) != getattr(b, f) for f in _PLUMBING_FIELDS)
 
 
+def _fingerprint_interval(fp: Optional[str]) -> Optional[int]:
+    """The update_interval a seed fingerprint recorded, or None."""
+    try:
+        value = json.loads(fp).get('update_interval') if fp else None
+        return int(value) if value is not None else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _feed_fingerprint(feed: FeedSource) -> str:
     """Stable digest of a feed definition's seedable fields.
 
@@ -54,8 +63,9 @@ def _feed_fingerprint(feed: FeedSource) -> str:
     row as seed/sync/restore provenance, whose PLUMBING (url/scraper/auth/
     type) follows shipped defaults on upgrade. A dashboard add/override
     stores NULL (see add_feed), freezing the row — that is the operator's
-    way of owning a feed's plumbing. Preferences (enabled/weight/interval)
-    are never synced either way."""
+    way of owning a feed's plumbing. Preferences (enabled/weight) are never
+    synced; an interval is, but only while it still equals the one recorded
+    here (the operator never changed it)."""
     return json.dumps({
         'url': feed.url,
         'feed_type': feed.feed_type.value,
@@ -1652,8 +1662,13 @@ class Database:
           - present with seed provenance and
             shipped PLUMBING changed (url,
             scraper, auth, type)                 -> plumbing updated in place;
-                                                    enabled/weight/interval
+                                                    enabled/weight
                                                     (preferences) untouched
+          - present with seed provenance and an
+            update_interval still equal to the
+            one it was seeded with, where the
+            shipped interval has changed        -> interval follows the ship
+                                                    (untouched preference)
           - operator-overridden row (dashboard
             add nulls seed_fingerprint) or
             predating fingerprints               -> left exactly as-is
@@ -1693,23 +1708,45 @@ class Database:
             # merely ENABLED it, which guaranteed opt-in feeds (OTX ships
             # disabled) could never receive their own fixes.
             #
-            # enabled/weight/update_interval are PREFERENCES — sync never
-            # touches them on an existing row.
+            # enabled/weight are PREFERENCES — sync never touches them on an
+            # existing row. update_interval is one too, except while the
+            # operator has never changed it (below).
             #
             # A non-NULL seed_fingerprint marks the row as seed/sync/restore
             # provenance; a dashboard add/override nulls it (see add_feed),
             # which is the one way an operator can change plumbing — those
             # rows stay frozen, protecting deliberate URL overrides.
-            if fingerprints.get(feed.name) and _plumbing_differs(existing[feed.name], feed):
+            # An interval the operator never changed follows a new shipped
+            # default (2.5.6: OTX hourly -> 6 h). The fingerprint records the
+            # interval the row was seeded or last synced with; if the row still
+            # holds exactly that, nobody chose it, so the old default was just
+            # an old default. A changed interval differs from the fingerprint
+            # and stays the operator's. enabled and weight are never touched.
+            # Decided BEFORE the plumbing update, which rewrites the
+            # fingerprint and would otherwise make an untouched interval look
+            # customized from then on.
+            row = existing[feed.name]
+            seeded = _fingerprint_interval(fingerprints.get(feed.name))
+            interval = (feed.update_interval
+                        if seeded is not None and row.update_interval == seeded
+                        else row.update_interval)
+            if fingerprints.get(feed.name) and _plumbing_differs(row, feed):
                 with self._cursor() as cur:
                     cur.execute(
                         "UPDATE feeds SET url = ?, feed_type = ?, requires_auth = ?, "
                         "auth_env = ?, auth_header = ?, local_file = ?, scraper = ?, "
-                        "indicator_kind = ?, seed_fingerprint = ? WHERE name = ?",
+                        "indicator_kind = ?, update_interval = ?, seed_fingerprint = ? "
+                        "WHERE name = ?",
                         (feed.url, feed.feed_type.value, int(feed.requires_auth),
                          feed.auth_env, feed.auth_header, int(feed.local_file),
-                         feed.scraper, feed.indicator_kind or 'ip', new_fp, feed.name),
+                         feed.scraper, feed.indicator_kind or 'ip', interval, new_fp,
+                         feed.name),
                     )
+                actions["updated"].append(feed.name)
+            elif interval != row.update_interval:
+                with self._cursor() as cur:
+                    cur.execute("UPDATE feeds SET update_interval = ?, seed_fingerprint = ? "
+                                "WHERE name = ?", (interval, new_fp, feed.name))
                 actions["updated"].append(feed.name)
         return actions
 

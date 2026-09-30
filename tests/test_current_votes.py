@@ -213,3 +213,18 @@ def test_an_unchanged_refetch_does_not_move_the_gate(db):
     before = pipeline.scoring_input_key(db, _cfg())
     db.update_source_sightings("feed_b", _own("185.3.0") | {X}, TICK2)
     assert pipeline.scoring_input_key(db, _cfg()) == before
+
+
+def test_failing_feeds_lists_enabled_feeds_whose_latest_fetch_failed(tmp_path):
+    # the logo reads this: a later refresh that didn't fetch a broken feed
+    # used to turn it green while that feed was still failing
+    from threatfeedme.models import FeedSource
+    d = Database(str(tmp_path / "t.db"))
+    for name, on in (("ok_feed", True), ("broken", True), ("broken_off", False)):
+        d.add_feed(FeedSource(name=name, url=f"https://example.com/{name}.txt", enabled=on))
+    d.update_feed_stats("ok_feed", 10, "success")
+    d.update_feed_stats("broken", 0, "error", "502 Bad Gateway")
+    d.update_feed_stats("broken_off", 0, "error", "timeout")
+    assert pipeline.failing_feeds(d) == ["broken"]
+    d.update_feed_stats("broken", 5, "success")
+    assert pipeline.failing_feeds(d) == []

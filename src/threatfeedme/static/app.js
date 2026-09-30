@@ -362,6 +362,14 @@ function ensurePolling() {
     pollRefresh();
 }
 // Names of feeds that errored in a refresh result map ({feed: {status,...}}).
+// The logo warns while ANY enabled feed's latest fetch failed (server's
+// `failing`), not just feeds in the last run: most runs fetch only the feeds
+// that are due, so a later run without the broken feed used to clear it. An
+// older server without the field falls back to the last run's failures.
+function brandFailing(status, lastRunFailed) {
+    return Array.isArray(status && status.failing) ? status.failing.length > 0
+                                                    : lastRunFailed.length > 0;
+}
 function failedFeeds(lastResult) {
     return Object.entries(lastResult || {})
         .filter(([, v]) => v && v.status === 'error')
@@ -449,7 +457,7 @@ async function pollRefresh() {
         ? ('Refresh complete — ' + failed.length + ' feed' + (failed.length > 1 ? 's' : '') +
            ' errored: ' + failed.join(', ') + '.')
         : 'Refresh complete.';
-    setBrandState(failed.length ? 'error' : '');
+    setBrandState(brandFailing(j, failed) ? 'error' : '');
     // Reload so the table (health badges, "needs attention" flags) reflects
     // the run; linger longer when there's an error to read. A run this page
     // only watched leaves the page where the operator is and offers it.
@@ -667,8 +675,8 @@ function updateRefreshPulse() {
             return;
         }
         if (refreshActive) return;   // our poller is finishing it off
-        // Idle: mascot reflects whether the last completed run had a feed error.
-        setBrandState(failedFeeds(j.last_result).length ? 'error' : '');
+        // Idle: mascot reflects whether any enabled feed is failing right now.
+        setBrandState(brandFailing(j, failedFeeds(j.last_result)) ? 'error' : '');
         if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
         const ageMin = Math.max(0, Math.floor((Date.now() - Date.parse(j.last_finished)) / 60000));
         n.innerHTML = ageMin + 'm<small> ago</small>';

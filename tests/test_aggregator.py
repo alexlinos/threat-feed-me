@@ -443,14 +443,52 @@ def test_sync_never_clobbers_customized_feed(db):
 
 
 def test_sync_enabled_toggle_counts_as_customization(db):
-    """Preferences are never synced: a disabled toggle sticks across updates,
-    and a shipped update_interval change does not apply to existing rows."""
+    """A disabled toggle sticks across updates (enabled is a preference)."""
     db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
     db.set_feed_enabled("a", False)
-    db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
-                                      "update_interval": 60}]})
+    db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    assert db.get_feed_source("a").enabled is False
+
+
+def _set_interval(db, name, seconds):
+    with db._cursor() as cur:       # how an operator's chosen interval is stored
+        cur.execute("UPDATE feeds SET update_interval = ? WHERE name = ?", (seconds, name))
+
+
+def test_sync_an_untouched_interval_follows_a_new_shipped_default(db):
+    """2.5.6: OTX's shipped interval went hourly -> 6 h. A row still on the
+    interval it was seeded with was never chosen, so it follows; enabled is
+    left alone (the operator had switched OTX on)."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                          "update_interval": 3600}]})
+    db.set_feed_enabled("a", False)
+    actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                                "update_interval": 21600}]})
     feed = db.get_feed_source("a")
-    assert feed.enabled is False and feed.update_interval == 3600
+    assert actions["updated"] == ["a"]
+    assert feed.update_interval == 21600 and feed.enabled is False
+    assert db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                             "update_interval": 21600}]})["updated"] == []
+
+
+def test_sync_keeps_an_interval_the_operator_changed(db):
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                          "update_interval": 3600}]})
+    _set_interval(db, "a", 7200)
+    db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                      "update_interval": 21600}]})
+    assert db.get_feed_source("a").update_interval == 7200
+
+
+def test_sync_moves_plumbing_and_an_untouched_interval_together(db):
+    """The plumbing update rewrites the fingerprint; the interval decision
+    must be made first or it would look customized forever after."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/old.txt",
+                                          "update_interval": 3600}]})
+    db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/new.txt",
+                                      "update_interval": 21600}]})
+    feed = db.get_feed_source("a")
+    assert feed.url == "http://a/new.txt" and feed.update_interval == 21600
 
 
 def test_sync_respects_deletion_tombstones(db):
@@ -1609,7 +1647,7 @@ def _stub_get(monkeypatch, responses):
     seq = iter(responses)
 
     def fake_get(url, headers=None, timeout=None, **kwargs):
-        calls.append({"url": url, "headers": dict(headers or {})})
+        calls.append({"url": url, "headers": dict(headers or {}), "timeout": timeout})
         item = next(seq)
         if isinstance(item, Exception):
             raise item
@@ -1907,6 +1945,19 @@ def test_otx_pulses_paginates_via_next(db, monkeypatch):
     ips = sorted(e["ip"] for e in entries)
     assert ips == ["185.1.1.1", "2.2.2.2"]
     assert calls[1]["url"] == "https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2"
+
+
+def test_otx_pages_get_a_long_read_timeout(db, monkeypatch):
+    """OTX can take 20-30 s to start answering a page from some networks; the
+    generic 30 s read timeout failed one page and with it the whole fetch."""
+    from threatfeedme import feed_ingestor as fi
+    monkeypatch.setenv("OTX_API_KEY", "test-key-123")
+    page1 = _pulse_page([[("185.1.1.1", "IPv4")]], next_url="https://otx.alienvault.com/api/v1/pulses/subscribed/?limit=50&page=2")
+    calls = _stub_get(monkeypatch, [_FakeResponse(200, {}, page1),
+                                    _FakeResponse(200, {}, _pulse_page([[("2.2.2.2", "IPv4")]]))])
+    FeedIngestor(db, key_policy=_SHIPPED_KEYS).fetch_feed(_otx_feed())
+    assert [c["timeout"] for c in calls] == [fi._OTX_TIMEOUT, fi._OTX_TIMEOUT]
+    assert fi._OTX_TIMEOUT[1] > fi._FETCH_TIMEOUT
 
 
 def test_otx_pulses_pagination_cap_stops(db, monkeypatch):
@@ -3100,7 +3151,7 @@ def test_429_is_retried_honoring_retry_after(db, monkeypatch):
     responses = [_CodeResponse(429, {"Retry-After": "7"}), _CodeResponse(200)]
     ing = FeedIngestor(db)
     monkeypatch.setattr(ing, "_get_following_redirects",
-                        lambda url, headers: responses.pop(0))
+                        lambda url, headers, timeout=None: responses.pop(0))
     r = ing._get_with_retries("https://example.com/feed.txt", {})
     assert r.status_code == 200
     assert sleeps == [7]          # Retry-After honored, not the default backoff
@@ -3114,7 +3165,7 @@ def test_429_retry_after_is_capped_and_final_attempt_raises(db, monkeypatch):
                  _CodeResponse(429), _CodeResponse(429)]
     ing = FeedIngestor(db)
     monkeypatch.setattr(ing, "_get_following_redirects",
-                        lambda url, headers: responses.pop(0))
+                        lambda url, headers, timeout=None: responses.pop(0))
     with pytest.raises(requests.exceptions.HTTPError):
         ing._get_with_retries("https://example.com/feed.txt", {})
     # hostile Retry-After capped; missing header falls back to backoff
@@ -3152,5 +3203,5 @@ def test_other_4xx_still_fails_immediately(db, monkeypatch):
     monkeypatch.setattr(fi, "_sleep", lambda s: pytest.fail("must not retry 404"))
     ing = FeedIngestor(db)
     monkeypatch.setattr(ing, "_get_following_redirects",
-                        lambda url, headers: _CodeResponse(404))
+                        lambda url, headers, timeout=None: _CodeResponse(404))
     assert ing._get_with_retries("https://example.com/x.txt", {}).status_code == 404

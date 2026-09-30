@@ -86,6 +86,7 @@ def _assert_public(host: str, addresses: List[str]) -> None:
 
 # requests merges env proxies with setdefault, then drops None values, so
 # naming every scheme (and ALL_PROXY's "all") as None disables them all.
+_FETCH_TIMEOUT = 30   # seconds, connect and read; a slow source can pass its own
 _NO_PROXIES = {"http": None, "https": None, "all": None}
 
 
@@ -364,7 +365,7 @@ class FeedIngestor:
             )
         return parsed
 
-    def _fetch_url(self, feed: FeedSource) -> Union[str, _NotModified]:
+    def _fetch_url(self, feed: FeedSource, timeout=None) -> Union[str, _NotModified]:
         """Fetch raw feed content from a URL, applying auth if required.
 
         Sends the validators from the last full download so an unchanged feed
@@ -400,7 +401,7 @@ class FeedIngestor:
         if last_modified:
             headers['If-Modified-Since'] = last_modified
 
-        response = self._get_with_retries(feed.url, headers)
+        response = self._get_with_retries(feed.url, headers, timeout=timeout)
         if response.status_code == 304:
             return NOT_MODIFIED
         response.raise_for_status()
@@ -417,7 +418,8 @@ class FeedIngestor:
         )
         return content
 
-    def _get_with_retries(self, url: str, headers: Dict[str, str]) -> requests.Response:
+    def _get_with_retries(self, url: str, headers: Dict[str, str],
+                          timeout=None) -> requests.Response:
         """GET with up to _MAX_ATTEMPTS attempts on transient failures.
 
         5xx responses, timeouts, connection errors, and 429 are retried;
@@ -433,7 +435,7 @@ class FeedIngestor:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             retry_after = None
             try:
-                response = self._get_following_redirects(url, headers)
+                response = self._get_following_redirects(url, headers, timeout=timeout)
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 if attempt == _MAX_ATTEMPTS:
                     raise
@@ -467,7 +469,8 @@ class FeedIngestor:
         # Defensive: every path above returns or raises on the final attempt.
         raise RuntimeError(f"retry loop exited without a response for {url}")
 
-    def _get_following_redirects(self, url: str, headers: Dict[str, str]) -> requests.Response:
+    def _get_following_redirects(self, url: str, headers: Dict[str, str],
+                                 timeout=None) -> requests.Response:
         """Single GET, following redirects manually so every hop passes the
         SSRF guard (requests' automatic redirects would only let us check the
         first URL)."""
@@ -486,7 +489,7 @@ class FeedIngestor:
             # the check-then-connect rebinding window. An install that opted
             # into private feed URLs has no guard to protect, so it keeps its
             # proxy.
-            response = requests.get(url, headers=hop_headers, timeout=30,
+            response = requests.get(url, headers=hop_headers, timeout=timeout or _FETCH_TIMEOUT,
                                     stream=True, allow_redirects=False,
                                     proxies=None if self.allow_private_urls else _NO_PROXIES)
             if response.status_code in _REDIRECT_STATUSES:
@@ -746,10 +749,17 @@ def _scrape_dshield_block(self: FeedIngestor, feed: FeedSource):
 # type=="IPv4" and flatten them back into the same one-IP-per-line text the
 # generic parser expects, so the rest of the pipeline needs no changes.
 _OTX_MAX_PAGES = 20  # guard against a runaway `next` chain
+# (connect, read) seconds. OTX can take ~20-30 s to START answering a pulses
+# page from some networks (measured from a deployment, 2026-09-29: DNS, TCP
+# and TLS in 0.1 s, first byte 18-25 s, while other vantage points got <2 s).
+# The generic 30 s read timeout then failed a page now and then, and one
+# failed page fails the whole paged fetch. Connect stays short: a dead host
+# should still fail fast.
+_OTX_TIMEOUT = (10, 90)
 
 
 def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
-    content = self._fetch_url(feed)
+    content = self._fetch_url(feed, timeout=_OTX_TIMEOUT)
     if content is NOT_MODIFIED:
         return NOT_MODIFIED
     try:
@@ -792,7 +802,7 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
             if not self.key_policy.may_send(feed.auth_env, next_url):
                 raise RuntimeError(self.key_policy.send_refusal(feed.auth_env, next_url))
             headers[feed.auth_header] = api_key
-        response = self._get_with_retries(next_url, headers)
+        response = self._get_with_retries(next_url, headers, timeout=_OTX_TIMEOUT)
         response.raise_for_status()
         try:
             page = json.loads(_read_capped(response, feed.name))

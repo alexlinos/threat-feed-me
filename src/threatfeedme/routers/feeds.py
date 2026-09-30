@@ -513,6 +513,7 @@ def refresh_status(_=Depends(require_auth)):
     from threatfeedme.scheduler import _refresh_interval_minutes
     try:
         nxt = pipeline.next_due(core.db, _refresh_interval_minutes() * 60)
+        failing = pipeline.failing_feeds(core.db)
     except Exception:
-        nxt = None
-    return {**_refresh_state, "next": nxt}
+        nxt, failing = None, None
+    return {**_refresh_state, "next": nxt, "failing": failing}
