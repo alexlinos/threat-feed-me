@@ -771,6 +771,29 @@ these areas again:
   server on a copied DB: disable `unifi_integration` / `crowdsec_integration`
   in its settings and keep its `.env` out.
 
+## v2.5.6 (2026-09-30): OTX from a slow network, and a truthful logo
+
+- **OTX failed from a deployment for over a day**: its CDN connected in
+  0.1 s but OTX took 18-25 s to send a pulses page's first byte from that
+  network (under 2 s elsewhere), so a page now and then crossed the 30 s
+  read timeout and failed the whole paged fetch. OTX pages now get
+  `_OTX_TIMEOUT = (10, 90)` (connect stays short); its shipped interval is
+  6 h.
+- **Sync rule changed**: an interval the operator never changed follows a
+  new shipped default (row interval == the interval in its seed
+  fingerprint). Changed intervals, enabled and weight stay the operator's.
+  Decided before the plumbing update, which rewrites the fingerprint.
+- **Logo**: `/api/refresh/status` carries `failing` (enabled feeds whose
+  latest fetch failed, from any run); the logo reads it. It used to read
+  only the last run, which fetches just the due feeds, so a 15-minute
+  OpenPhish run cleared a warning OTX was still earning. This also closes
+  2.5.4's "logo can stay red for a deleted failing feed".
+- **Scratch-dir lesson**: macOS clears /private/tmp items after a few days.
+  It removed a scratch demo's config and DB, and a server started with
+  CONFIG_PATH at the missing file fell back to the repo's `./data` DB.
+  Recreate a throwaway config before starting a server, and confirm the
+  DB file it opened (its mtime moves) is the scratch one.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
