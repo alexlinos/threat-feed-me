@@ -76,7 +76,7 @@ Designed to run on a small on-prem box or VM with no tuning and no API keys.
 **Fastest: run the published image** (nothing to clone or build):
 
 ```bash
-docker run -d --name threat-feed-me -p 8080:8080 \
+docker run -d --name threat-feed-me --restart unless-stopped -p 8080:8080 \
   -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest
 # then open the dashboard at http://<this-server-ip>:8080
 ```

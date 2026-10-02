@@ -234,7 +234,7 @@
     <div class="wrap">
       <h2>Migrating PAN-OS EDLs</h2>
       <ol class="mig">
-        <li><b>Run it:</b> <code>docker run -d --name threat-feed-me -p 8080:8080 -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest</code>.
+        <li><b>Run it:</b> <code>docker run -d --name threat-feed-me --restart unless-stopped -p 8080:8080 -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest</code>.
           The first fetch of all 22 feeds takes one to three minutes; the dashboard's set-up guide shows progress.</li>
         <li><b>Swap the EDL source:</b> in PAN-OS, <i>Objects → External Dynamic Lists</i>, edit each list that pointed
           at a MineMeld output and paste the matching URL: <code>/feeds/high.txt</code>, <code>/feeds/medium.txt</code>
