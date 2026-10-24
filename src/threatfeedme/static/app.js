@@ -402,7 +402,10 @@ function setBrandState(state) {
 // and an open key dialog would lose the secret being typed).
 function pageHasUnsavedWork() {
     if (document.querySelector('.modal-overlay.open')) return true;
-    return [...document.querySelectorAll('form input, form textarea, form select')].some(el => {
+    // The Schedule rows and the Connect settings are not forms; they carry
+    // data-unsaved-scope (dashboard.html) so an edit there counts too.
+    return [...document.querySelectorAll('form input, form textarea, form select, ' +
+                                         '[data-unsaved-scope] input, [data-unsaved-scope] textarea, [data-unsaved-scope] select')].some(el => {
         // A browser fills these from saved logins on every load (System's
         // sign-in form): that is not typing, and it blocked every auto-reload.
         if (/^(username|current-password)$/.test(el.autocomplete)) return false;
@@ -415,6 +418,18 @@ function pageHasUnsavedWork() {
             return el.multiple ? opts.some(o => o.selected !== o.defaultSelected) : el.selectedIndex !== dflt;
         }
         return el.value !== el.defaultValue;
+    });
+}
+// Make the current values the saved baseline. pageHasUnsavedWork compares
+// against the defaults (defaultValue / defaultChecked / defaultSelected), so a
+// value the server fills in with .value is not an operator edit: call this
+// after loading or saving a settings panel.
+function markSaved(root) {
+    if (!root) return;
+    root.querySelectorAll('input, select, textarea').forEach(el => {
+        if (el.type === 'checkbox' || el.type === 'radio') el.defaultChecked = el.checked;
+        else if (el.tagName === 'SELECT') [...el.options].forEach(o => { o.defaultSelected = o.selected; });
+        else if (el.type !== 'file') el.defaultValue = el.value;
     });
 }
 function reloadWhenIdle(status, delay) {
@@ -914,6 +929,7 @@ async function loadUnifiOnce() {
         document.getElementById('unifi-host').value = s.host || '';
         document.getElementById('unifi-tier').value = s.tier || 'high';
         document.getElementById('unifi-domain-tier').value = s.domain_tier || '';
+        markSaved(document.getElementById('unifi-panel'));
         unifiRenderStatus(s);
     } catch (e) {
         unifiLoaded = false;
@@ -961,6 +977,7 @@ async function unifiSave(quiet) {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
+        markSaved(document.getElementById('unifi-panel'));   // saved: what is shown is the baseline now
         unifiRenderStatus(j);
         // A new gateway host clears the saved login server-side (it was bound
         // to the old gateway) — say so, even on a quiet save, or the next
@@ -1071,6 +1088,7 @@ async function loadCsOnce() {
         document.getElementById('cs-tier').value = s.tier || 'medium';
         document.getElementById('cs-duration').value = s.duration_hours || 24;
         document.getElementById('cs-console').value = s.console_integration_id || '';
+        markSaved(document.getElementById('crowdsec-panel'));
         csRenderStatus(s);
     } catch (e) {
         csLoaded = false;
@@ -1095,6 +1113,7 @@ async function csSave(quiet) {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { alert('Could not save: ' + (detailText(j.detail) || r.status)); return false; }
+    markSaved(document.getElementById('crowdsec-panel'));
     csRenderStatus(j);
     if (j.credentials_cleared) {
         alert('The LAPI address changed, so the saved CrowdSec credentials were cleared '

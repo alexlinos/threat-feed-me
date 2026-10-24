@@ -463,7 +463,7 @@
            Decisions threat-feed-me published are never read back as votes.<br>
            <b>Never publish into a honeypot's CrowdSec</b>: a honeypot needs attackers to reach
            it. Pull from it; publish to the CrowdSec that protects your services.</p>
-        <div class="wl-form" style="margin-top:8px">
+        <div class="wl-form" style="margin-top:8px" data-unsaved-scope>
             <label class="unifi-enable-label" title="When enabled, every refresh publishes the tier to the LAPI">
                 Publish
                 <span class="switch"><input type="checkbox" id="cs-enabled" aria-label="Publish to CrowdSec"><span></span></span>
@@ -522,7 +522,7 @@
            Destination column shows "–" for domain-list policies; open the policy to see the
            reference (it's saved and enforced). Alternatively a Pi-hole/AdGuard polling the domain
            feed URLs above does the same job off-gateway.</p>
-        <div class="wl-form" style="margin-top:8px">
+        <div class="wl-form" style="margin-top:8px" data-unsaved-scope>
             {# The bare switch shipped unlabeled and an operator saved with it
                untouched, then hit "enable the integration first" on Push —
                the label names the control. Push now also saves the visible
@@ -562,12 +562,12 @@
     <div class="panel-grid">
         <div class="panel card" id="schedule-panel">
             <h2 class="card-title">Schedule</h2>
-            <div class="setting-row">
+            <div class="setting-row" data-unsaved-scope>
                 <label for="interval-min">Refresh every</label>
                 <span class="interval-box"><input id="interval-min" type="number" min="1" value="{{ interval_min }}"> min</span>
                 <button class="mini-btn" onclick="saveInterval()">Save</button>
             </div>
-            <div class="setting-row" title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
+            <div class="setting-row" data-unsaved-scope title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
                 <label for="retention-days">Keep entries for</label>
                 <span class="interval-box"><input id="retention-days" type="number" min="0" max="3650" value="{{ retention_days }}"> days</span>
                 <button class="mini-btn" onclick="saveRetention()">Save</button>
