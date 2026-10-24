@@ -252,14 +252,29 @@ const _MODAL_CLOSERS = {
     'key-modal': () => closeKeyModal(),
     'unifi-creds-modal': () => closeUnifiCredsModal(),
     'cs-creds-modal': () => closeCsCredsModal(),
-    'fp-modal': () => (typeof closeFpModal === 'function' ? closeFpModal()
-                       : document.getElementById('fp-modal').classList.remove('open')),
+    'fp-modal': () => closeFpModal(),
     'wl-modal': () => closeWlModal(),
 };
+// While a modal is open, Esc closes it and Tab stays inside it. Without the
+// trap, Tab walked off the dialog into the page behind the overlay, where the
+// controls still took focus and the background looked live.
+const _MODAL_FOCUSABLE = 'input, select, textarea, button, a[href]';
 document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
     const open = document.querySelector('.modal-overlay.open');
-    if (open && _MODAL_CLOSERS[open.id]) { e.preventDefault(); _MODAL_CLOSERS[open.id](); }
+    if (!open) return;
+    if (e.key === 'Escape') {
+        if (_MODAL_CLOSERS[open.id]) { e.preventDefault(); _MODAL_CLOSERS[open.id](); }
+        return;
+    }
+    if (e.key !== 'Tab') return;
+    const f = [...open.querySelectorAll(_MODAL_FOCUSABLE)]
+        .filter(el => !el.disabled && el.getClientRects().length > 0);
+    if (!f.length) { e.preventDefault(); return; }
+    const first = f[0], last = f[f.length - 1], a = document.activeElement;
+    const inside = open.contains(a);
+    if (e.shiftKey) {
+        if (!inside || a === first) { e.preventDefault(); last.focus(); }
+    } else if (!inside || a === last) { e.preventDefault(); first.focus(); }
 });
 async function saveInterval() {
     const el = document.getElementById('interval-min');
@@ -1018,7 +1033,7 @@ function closeUnifiCredsModal() {
     // Clear the fields on close so the password never lingers in the DOM.
     document.getElementById('unifi-cred-user').value = '';
     document.getElementById('unifi-cred-pass').value = '';
-    document.getElementById('unifi-creds-modal').classList.remove('open');
+    closeModal('unifi-creds-modal');   // returns focus to the opener, like the others
 }
 async function saveUnifiCreds() {
     const body = {
@@ -1147,7 +1162,7 @@ function openCsCredsModal() {
 }
 function closeCsCredsModal() {
     _csCredFields().forEach(f => { f.value = ''; });   // never linger in the DOM
-    document.getElementById('cs-creds-modal').classList.remove('open');
+    closeModal('cs-creds-modal');
 }
 async function _postCsCreds(body) {
     const r = await apiFetch('/api/integrations/crowdsec/credentials', {
@@ -1279,6 +1294,7 @@ function leaveGuide() {
 // "/" jumps to the lookup box, unless the operator is typing somewhere.
 document.addEventListener('keydown', (e) => {
     if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (document.querySelector('.modal-overlay.open')) return;   // the dialog owns the keyboard
     const t = e.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
     const box = document.getElementById('lookup-ip');

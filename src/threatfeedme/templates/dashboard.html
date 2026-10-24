@@ -361,8 +361,9 @@
                 <div class="hl-row" title="{{ r.name }}">{{ r.name }}</div>
                 {% for c in r.cells %}
                     {% if c.pct is none %}<div class="hc diag"></div>
-                    {% else %}<div class="hc ov-{{ (c.pct // 20) if c.pct < 100 else 5 }}"
-                          title="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"></div>{% endif %}
+                    {% else %}<div class="hc ov-{{ (c.pct // 20) if c.pct < 100 else 5 }}" tabindex="0"
+                          title="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"
+                          aria-label="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"></div>{% endif %}
                 {% endfor %}
             {% endfor %}
         </div>
@@ -488,7 +489,7 @@
             <button type="button" class="mini-btn" onclick="csTest(this)">Test connection</button>
             <button type="button" class="mini-btn" onclick="csPush(this)" title="Saves the settings above, then publishes">Save &amp; publish now</button>
         </div>
-        <p class="hint" id="cs-status">—</p>
+        <p class="hint" id="cs-status" role="status" aria-live="polite">—</p>
     </details>
     {# UniFi push integration: UDMs can't poll a URL, so the app pushes the
        tier into firewall groups after every refresh. Everything managed
@@ -548,7 +549,7 @@
             <button type="button" class="mini-btn" onclick="unifiPush(this)" title="Saves the settings above, then pushes">Save &amp; push now</button>
         </div>
         <p class="hint" id="unifi-tier-warning" style="display:none;color:var(--amber)"></p>
-        <p class="hint" id="unifi-status">—</p>
+        <p class="hint" id="unifi-status" role="status" aria-live="polite">—</p>
     </details>
 
 </section>
@@ -588,7 +589,7 @@
             <dt>Scores</dt><dd><button type="button" class="mini-btn" onclick="recalcNow(this)">Recalculate now</button>
                 <span class="muted">refreshes run this automatically when anything that affects scores changes</span></dd>
         </dl>
-            <p class="hint" id="system-status"></p>
+            <p class="hint" id="system-status" role="status" aria-live="polite"></p>
         </div>
 
         {# Host check (DNS-rebinding allowlist). Report-only until LOCKED;
@@ -671,11 +672,11 @@
            restrict to local access). Stored write-only in the server's data-volume
            <code>.env</code> — never displayed again. Leave both empty to clear.</p>
         <div class="field">
-            <label>Username</label>
+            <label for="unifi-cred-user">Username</label>
             <input id="unifi-cred-user" type="text" autocomplete="off" placeholder="svc-threatfeedme">
         </div>
         <div class="field">
-            <label>Password</label>
+            <label for="unifi-cred-pass">Password</label>
             <input id="unifi-cred-pass" type="password" autocomplete="new-password">
         </div>
         <div class="actions">
