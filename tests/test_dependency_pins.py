@@ -44,3 +44,24 @@ def test_runtime_pins_match_between_requirements_and_pyproject():
     assert pyproject == _requirements_pins(), (
         "requirements.txt and pyproject.toml disagree — bump BOTH, or "
         "`pip install -e .` silently reverts the requirements.txt version")
+
+
+def _constraints_pins():
+    pins = {}
+    with open(os.path.join(ROOT, "constraints.txt"), encoding="utf-8") as f:
+        for line in f:
+            m = _PIN.match(line)
+            if m:
+                pins[_norm(m.group(1))] = m.group(2)
+    return pins
+
+
+def test_constraints_lock_covers_every_runtime_pin_at_the_same_version():
+    """constraints.txt is the transitive lock the image installs with. A direct
+    pin bumped in requirements.txt but not regenerated here would make pip
+    fail the build (conflicting pins), and a lock that drops a package lets it
+    float again. starlette is imported directly, so it must be locked too."""
+    lock = _constraints_pins()
+    for name, version in _requirements_pins().items():
+        assert lock.get(name) == version, f"{name}: requirements {version}, constraints {lock.get(name)}"
+    assert "starlette" in lock, "starlette must be locked: middleware.py imports it"

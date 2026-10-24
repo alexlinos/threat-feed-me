@@ -127,6 +127,12 @@ _BACKFILL_DAYS = 14
 # refresh's rescore gate sees a leave even when no attribution row moved.
 MEMBERSHIP_STAMP_KEY = "membership_stamp"
 
+# Per-feed shrink-guard settings (pipeline._collapsed_fetch): the streak of
+# held-back fetches, and the size of a collapse accepted as the feed's real
+# list (cleared once the feed relists at the collapse threshold again).
+SHRINK_STREAK_KEY = "shrink_guard:{}"
+SHRINK_ACCEPTED_KEY = "shrink_accepted:{}"
+
 
 class Database:
     def __init__(self, db_path: str = "./data/threatfeedme.db"):
@@ -525,13 +531,25 @@ class Database:
                     "WHERE metadata LIKE '%fetched_at%'")
                 migrated = migrated or cursor.rowcount > 0
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('metadata_slim', '1')")
-            conn.commit()
+            # The VACUUM is retry-safe. `vacuum_pending` is committed in the
+            # same transaction as the migration flags above, and cleared only
+            # after VACUUM commits. Without it, a kill during VACUUM left the
+            # flags committed and the file at its old size forever: the
+            # migration never ran again to reach the VACUUM.
+            cursor.execute("SELECT 1 FROM settings WHERE key = 'vacuum_pending'")
+            pending = cursor.fetchone() is not None
             if migrated:
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('vacuum_pending', '1')")
+                pending = True
+            conn.commit()
+            if pending:
                 # A DROP only frees pages inside the file; without this the
                 # main file (and every backup) stays at its old size.
                 logger.info("[migration] VACUUM to reclaim the space (one-time, may take minutes)...")
                 conn.execute("VACUUM")
                 logger.info("[migration] VACUUM done")
+                conn.execute("DELETE FROM settings WHERE key = 'vacuum_pending'")
+                conn.commit()
 
             conn.commit()
         finally:
@@ -612,7 +630,8 @@ class Database:
             conn.close()
 
     def update_source_sightings(self, source_name: str, current_values: Set[str],
-                                tick: str, record: bool = True) -> Dict[str, int]:
+                                tick: str, record: bool = True,
+                                rebaseline: bool = False) -> Dict[str, int]:
         """Record a source's churn as TRANSITIONS, not presence snapshots.
 
         `record=False` (churn_log: false on a feed) diffs and syncs
@@ -640,6 +659,12 @@ class Database:
         arrival events: a baseline is a censoring boundary, not churn, and
         recording it would flood the log with one corpus-sized wave per feed
         (and pollute return-detection with meaningless "arrivals").
+
+        `rebaseline=True` is for a feed refilling after an accepted collapse
+        (pipeline._regrew_after_collapse). Its arrivals are the list coming
+        back from a stub the guard already accepted, not new churn: state is
+        synced and no arrival rows are written, so no leave->return pair
+        is manufactured. Leaves still record normally.
 
         Returns {"arrived": n, "left": n, "baseline": n}.
         """
@@ -671,7 +696,7 @@ class Database:
             arrived = current_values - prior
             left = prior - current_values
             if arrived:
-                if record:
+                if record and not rebaseline:
                     cur.executemany(
                         "INSERT OR REPLACE INTO churn.sightings (source_name, ip, tick, present) "
                         "VALUES (?, ?, ?, 1)",
@@ -1158,22 +1183,28 @@ class Database:
                 scoped = whitelist_map.scoped_feeds(ip.ip)
                 if scoped:
                     protected.add(ip.ip)
-        base_sql = (
-            "DELETE FROM indicators "
-            "WHERE last_seen < ? "
-            "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
-            "WHERE source_name = 'manual')"
-        )
-        if protected:
-            sql = base_sql + " AND ip NOT IN ({0})".format(
-                ",".join("?" * len(protected)))
-            params = (cutoff,) + tuple(protected)
-        else:
-            sql = base_sql
-            params = (cutoff,)
-        with self._cursor() as cur:
-            cur.execute(sql, params)
-            return cur.rowcount
+        # The protected set goes through a temp table, not an `ip IN (?,?,...)`
+        # list: a whitelist past SQLite's bound-variable limit (32,766 here)
+        # made this DELETE raise "too many SQL variables", and the refresh
+        # that calls it failed on every run. Same set, same expiry and scoping.
+        conn = self._get_connection()
+        try:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS purge_protected (ip TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM temp.purge_protected")
+            conn.executemany("INSERT OR IGNORE INTO temp.purge_protected (ip) VALUES (?)",
+                             ((ip,) for ip in protected))
+            cur = conn.execute(
+                "DELETE FROM indicators "
+                "WHERE last_seen < ? "
+                "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
+                "WHERE source_name = 'manual') "
+                "AND ip NOT IN (SELECT ip FROM temp.purge_protected)",
+                (cutoff,))
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
 
     def source_state_count(self, source_name: str) -> int:
         """Size of a feed's membership as of its last clean fetch."""
@@ -1833,6 +1864,18 @@ class Database:
                     "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
                     (feed.name,),
                 )
+                # A new URL is a new source. Its membership baseline (and the
+                # shrink guard's streak and accepted-collapse flag) describe the
+                # OLD list: left in place, the first fetch of the new list is
+                # diffed against it, so a legitimate new list reads as a mass
+                # leave or a "collapse". Same reset remove_feed performs.
+                cur.execute("DELETE FROM source_state WHERE source_name = ?", (feed.name,))
+                cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (feed.name,))
+                cur.execute("DELETE FROM source_left WHERE source_name = ?", (feed.name,))
+                cur.execute(
+                    "DELETE FROM settings WHERE key IN (?, ?)",
+                    (SHRINK_STREAK_KEY.format(feed.name), SHRINK_ACCEPTED_KEY.format(feed.name)),
+                )
 
     def remove_feed(self, name: str) -> bool:
         """Remove a configured feed and purge the data it contributed.
@@ -1854,6 +1897,10 @@ class Database:
             cur.execute("DELETE FROM source_state WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM source_left WHERE source_name = ?", (name,))
+            # The shrink guard's streak and accepted-collapse flag too: a feed
+            # re-added under the same name must not inherit them.
+            cur.execute("DELETE FROM settings WHERE key IN (?, ?)",
+                        (SHRINK_STREAK_KEY.format(name), SHRINK_ACCEPTED_KEY.format(name)))
             cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
             cur.execute(
                 "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",

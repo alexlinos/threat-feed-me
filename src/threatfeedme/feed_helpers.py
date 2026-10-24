@@ -69,7 +69,11 @@ def _feed_base(request: Request, tier_key: str = "", swap_loopback: bool = True)
     swap_loopback=False keeps the host the client actually used: right for
     URLs a CLIENT follows (TAXII discovery), where the LAN-IP swap sent a
     client that reached us on localhost or through a proxy somewhere else."""
-    scheme = request.headers.get("X-Forwarded-Proto") or request.headers.get("Proto") or request.url.scheme
+    # Only http/https: the header is client-supplied through a plain proxy_pass,
+    # and a "javascript:" value landed in the CSV/TAXII links (review 2026-10-24).
+    scheme = (request.headers.get("X-Forwarded-Proto") or "").strip().lower()
+    if scheme not in ("http", "https"):
+        scheme = request.url.scheme
     # The Host / X-Forwarded-Host header already carries the port the client
     # reached us on, so split it out rather than re-appending request.url.port
     # (which would double it, e.g. "host:8080:8080").

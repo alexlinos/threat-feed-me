@@ -27,10 +27,51 @@ boundaries are deliberate and worth understanding:
 | Startup holding page | **Unauthenticated, static** | While a first start or an upgrade migrates the database, a stdlib server on the dashboard's port answers every request with one fixed 503 page (`Retry-After: 30`, `no-store`). It echoes nothing from the request, loads nothing external, and closes before the app binds the port. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
 | Dashboard + mutating API | Optional HTTP Basic auth — a sign-in set under System → Dashboard sign-in, or both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` (the environment wins), turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
-| TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
+| TLS | **Opt-in**: set both `TFM_TLS_CERT` and `TFM_TLS_KEY` to serve HTTPS (see [TLS](#tls)), or terminate TLS at a reverse proxy in front of the container | A reverse proxy is still the better choice for public or auto-renewed certificates. |
 | Rate limiting | **None** | The service assumes a LAN with well-behaved clients. Do not expose it to the internet. |
 
 **Do not expose the dashboard or API directly to the internet.**
+
+**Behind a reverse proxy.** `X-Forwarded-Proto` and `X-Forwarded-Host` only
+change the feed URLs the dashboard displays (`_feed_base` in
+`feed_helpers.py`), so the links it shows use the scheme and host the proxy
+reports. The security checks do not read them: the host check
+(`HostCheckMiddleware` in `middleware.py`) and the first-password guard use
+the real `Host` header. Pass the original Host through to the container. nginx
+needs `proxy_set_header Host $host;`; Caddy does this by default. If the proxy
+rewrites Host to an IP address, the host check allows it, because IP-literal
+Hosts are always allowed, so the check refuses nothing. If the proxy rewrites
+Host to the container's own name, the host check refuses every request once it
+is switched on, because that name is not on the list.
+
+### TLS
+
+Setting **both** environment variables `TFM_TLS_CERT` and `TFM_TLS_KEY` (paths
+to PEM files inside the container, e.g. mounted from `./certs`) serves the
+dashboard and the list URLs over HTTPS on the same port. Setting only one of
+them refuses to start, with a clear error. The app never generates
+certificates (no ACME, no self-signed), so make one with:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 825 -subj "/CN=your.host.name"
+```
+
+Rotating a certificate means restarting the container. The "starting" holding
+page shown during a long first start is plain HTTP. For auto-renewed public
+certificates, put a reverse proxy such as Caddy in front instead.
+
+### UniFi gateway certificate
+
+UniFi OS certificates are self-signed, so the push verifies none by default
+(`verify_ssl: false`), and until 2.5.7 the gateway admin password went over
+a TLS session nothing checked. Now the first successful **Test connection**
+pins the certificate the gateway presents (SHA-256 of the leaf), and every
+later login, including the push after each refresh, refuses a different one
+until you press **Trust new certificate** in the UniFi panel. Trust on first
+use: it does not authenticate the gateway the first time, it stops anyone
+silently swapping it in later. Changing the gateway host clears the pin along
+with the saved login. With `verify_ssl: true` the CA check does this job and
+the pin is not used.
 
 What the software stores, sends and logs, and to whom, is documented in
 [PRIVACY.md](PRIVACY.md).
@@ -175,7 +216,7 @@ total (and the Critical count in particular) is misleading without this split:
 | **App dependencies** (`requests`, `fastapi`, `python-multipart`, …) | Pinned in `requirements.txt` **and** `pyproject.toml`, bumped promptly when an advisory affects a version we ship. This is the surface we own. |
 | **Base OS packages with a fix available** (openssl, util-linux, …) | The Dockerfile runs `apt-get upgrade` at build, so a freshly built or pulled image carries the current Debian security fixes — rebuild/repull to refresh them. |
 | **The Python interpreter** (`python` 3.11.x in the base image) | Built into `python:3.11-slim`, not installed by apt, so `apt-get upgrade` can't patch it. Grype may report a fix that exists only in a newer 3.11 patch release; it arrives when the upstream image publishes that release, and the Dockerfile's floating `python:3.11-slim` tag picks it up on the next build. (v2.4.19 and v2.5.0 were scanned against 3.11.16, the newest published; at v2.5.0 these interpreter entries were the only findings with a fix available anywhere in the image.) |
-| **Base OS packages marked `wont-fix` / `not-fixed`** (perl-base, libc, …) | Debian's decision, present in essentially every Debian-based image. Several — e.g. all the perl CVEs — are **not reachable**: perl is never invoked by the application. Driving these to zero requires a different base image (distroless/alpine), a trade-off we have not taken. (v2.5.5 scans at 164 matches against v2.5.0's 162: the two extra are Low-severity Debian `wont-fix`/`not-fixed` entries in this bucket, added by a Grype database update and present unchanged in the v2.5.4 image. v2.5.6 scans at 203: a Grype database update on 2026-09-30 added base-OS entries that score the published v2.5.5 image at 203 too, identical match for match; still none in app dependencies, and the 3.11 interpreter is still the only fixable component.) |
+| **Base OS packages marked `wont-fix` / `not-fixed`** (perl-base, libc, …) | Debian's decision, present in essentially every Debian-based image. Several — e.g. all the perl CVEs — are **not reachable**: perl is never invoked by the application. Driving these to zero requires a different base image (distroless/alpine), a trade-off we have not taken. (v2.5.5 scans at 164 matches against v2.5.0's 162: the two extra are Low-severity Debian `wont-fix`/`not-fixed` entries in this bucket, added by a Grype database update and present unchanged in the v2.5.4 image. v2.5.6 scans at 203: a Grype database update on 2026-09-30 added base-OS entries that score the published v2.5.5 image at 203 too, identical match for match; still none in app dependencies, and the 3.11 interpreter is still the only fixable component. v2.5.7 scans at 166 against the published v2.5.6's 175 on the same day: the base image moved to Python 3.11.17, which closed several interpreter entries including both Criticals, and the new `constraints.txt` lock pulled in the certifi release that closed its one advisory; the interpreter remains the only fixable component.) |
 | **Build tooling** (pip, setuptools, wheel) | Present in the image but not part of the runtime attack surface: the service never installs packages at runtime. Since v2.5.0 the Dockerfile upgrades them past their advisories anyway, so a scan of a fresh build shows none. |
 
 If you believe a finding is reachable and exploitable, report it via the
@@ -191,6 +232,13 @@ you believe it is reachable, not just the CVE id.
   so anyone who can use the dashboard can point those integrations (and
   the credentials you saved for them, until the address change clears
   them) at a LAN host. Enable dashboard auth where that matters.
+- The UniFi and CrowdSec **Test connection** buttons report whether the
+  configured host could be reached and logged in to, so anyone who can use the
+  dashboard can probe LAN hosts with them. Enable sign-in where that matters.
+- GitHub Actions in `.github/workflows/` are pinned to major version tags
+  (`actions/checkout@v4`), not to commit SHAs. An accepted risk: the only
+  secret those workflows hold is the Docker Hub token used to push the
+  image. Pin to SHAs in your fork if your threat model needs it.
 - With dashboard auth AND the host check both off (the defaults), a web
   page opened by anyone on your network can drive the dashboard through DNS
   rebinding: the browser treats the rebound page as same-origin, so the CSRF

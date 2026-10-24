@@ -1,4 +1,5 @@
 """Feed source management, custom-list uploads, and manual refresh endpoints."""
+import logging
 import math
 import os
 import re
@@ -8,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from threatfeedme import pipeline
+from threatfeedme import jobs, pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
 from threatfeedme.credentials import KeyPolicy, split_vars
@@ -19,6 +20,7 @@ from threatfeedme.schemas import ApiKeyRequest, FeedRequest, WhitelistResponse
 from threatfeedme.scorer import fp_penalty_factor
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Uploaded custom lists are stored here (never a client-supplied path), and all
 # runtime local-file feeds must resolve within this directory.
@@ -91,6 +93,10 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
     # Remote feeds must be plain http/https URLs (no file://, ftp://, etc.).
     if not request.local_file and not re.match(r"https?://", url, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Feed URL must start with http:// or https://")
+    # The header NAME is sent verbatim with the key as its value: an RFC 7230
+    # token only, so it can't carry a second header or a CRLF.
+    if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", request.auth_header or ""):
+        raise HTTPException(status_code=400, detail="auth_header must be a plain HTTP header name")
     if request.indicator_kind not in ("ip", "domain"):
         raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
     scraper = _FORMAT_SCRAPERS.get(request.format, "unknown")
@@ -277,15 +283,37 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
     )
 
 
+def _delete_upload_file(feed: FeedSource) -> None:
+    """Remove a deleted local-file feed's stored list: the path the feed row
+    points at (what it actually read), never anywhere outside UPLOAD_DIR; a
+    missing file is fine (already gone)."""
+    path = os.path.realpath(feed.url or "")
+    if not feed.url or not _is_within_uploads(path):
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning(f"could not remove upload for deleted feed '{name}': {e}")
+
+
 @router.delete("/api/feeds/{name}")
 def delete_feed(name: str, _=Depends(require_auth), _csrf=Depends(csrf_check)):
     """Remove a configured feed source (and purge the data it contributed)."""
-    if core.db.remove_feed(name):
+    # Held across the delete AND the rescore. remove_feed is one long
+    # transaction over the whole indicator table; outside the lock it raced the
+    # other heavy writers past the 5 s busy_timeout ("database is locked").
+    with jobs.write_lock:
+        feed = core.db.get_feed_source(name)
+        if not core.db.remove_feed(name):
+            raise HTTPException(status_code=404, detail="Feed not found")
+        if feed is not None and feed.local_file:
+            _delete_upload_file(feed)
         # Purging that feed's source attributions changes source counts, so
         # rescore the remaining indicators to update their tiers.
         pipeline.recalculate(core.db, core.config)
-        return {"success": True, "message": f"Feed '{name}' removed"}
-    raise HTTPException(status_code=404, detail="Feed not found")
+    return {"success": True, "message": f"Feed '{name}' removed"}
 
 
 @router.post("/api/feeds/restore-defaults")

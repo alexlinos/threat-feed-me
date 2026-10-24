@@ -6,12 +6,15 @@ source of truth), not directly from config.
 """
 import logging
 import os
+import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from threatfeedme import jobs
-from threatfeedme.database import Database, MEMBERSHIP_STAMP_KEY
+from threatfeedme.database import (Database, MEMBERSHIP_STAMP_KEY,
+                                   SHRINK_ACCEPTED_KEY, SHRINK_STREAK_KEY)
 from threatfeedme.feed_ingestor import FeedIngestor
 from threatfeedme.scorer import ConfidenceScorer, current_votes_enabled, vote_grace_days
 from threatfeedme.safety import SafetyFilter
@@ -131,6 +134,26 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
     return results
 
 
+# The two small writes in recalculate open their own connections inside
+# database.py at the default 5 s busy_timeout. The write lock covers the
+# in-process writers, but the offline predict pass (another container) can hold
+# the WAL writer lock for a chunk, so these retry on "locked" for a bounded
+# time. Both are idempotent, so a retry is safe. (The 120 s path is set per
+# connection in scorer._write_changes, which these calls don't reach.)
+_LOCKED_RETRIES = 6
+_LOCKED_BACKOFF_S = 2.0
+
+
+def _retry_on_locked(fn, *args):
+    for attempt in range(_LOCKED_RETRIES):
+        try:
+            return fn(*args)
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == _LOCKED_RETRIES - 1:
+                raise
+            time.sleep(_LOCKED_BACKOFF_S * (attempt + 1))
+
+
 def recalculate(db: Database, config: Dict) -> int:
     """Recalculate confidence scores for all indicators. Serialized with every
     other heavy writer (jobs.write_lock): a request-triggered rescore waits
@@ -138,13 +161,13 @@ def recalculate(db: Database, config: Dict) -> int:
     with jobs.write_lock:
         # The grace lives in source_left's contents, so expire it first:
         # otherwise a recalc between refreshes scores last hour's grace.
-        db.prune_left_memberships(vote_grace_days(config))
+        _retry_on_locked(db.prune_left_memberships, vote_grace_days(config))
         scorer = ConfidenceScorer(db, scorer_config(db, config))
         count = scorer.recalculate_all_scores()
         # Tiers and scores changed in place — invisible to row counts — so tell
         # the feed cache its bodies are stale (feed_cache.serve_fingerprint).
         from threatfeedme.feed_cache import mark_scores_changed
-        mark_scores_changed(db)
+        _retry_on_locked(mark_scores_changed, db)
         return count
 
 
@@ -364,15 +387,27 @@ def churn_log_exclude(config: Dict) -> set:
 _COLLAPSE_FRACTION = 0.05
 _COLLAPSE_MIN_PRIOR = 100
 _COLLAPSE_ACCEPT_AFTER = 3
+# A feed whose collapse was accepted is "back" when it relists at least this
+# share of its pre-collapse size. Higher than the collapse threshold on
+# purpose: a list that genuinely shrank to 3% and then grows to 6% is not
+# recovering, and its arrivals are real churn; a stub giving way to the full
+# list jumps straight to ~100%.
+_RECOVERY_FRACTION = 0.5
 
 
 def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
-    key = f"shrink_guard:{name}"
+    key = SHRINK_STREAK_KEY.format(name)
     prior = db.source_state_count(name)
     if prior >= _COLLAPSE_MIN_PRIOR and n_values < _COLLAPSE_FRACTION * prior:
         streak = int(db.get_setting(key) or 0) + 1
         if streak < _COLLAPSE_ACCEPT_AFTER:
             db.set_setting(key, str(streak))
+            # The held fetch's validators must not survive it. A 304 on the
+            # next refresh touches source_state (the OLD, pre-collapse list),
+            # so the streak never advances and the feed keeps voting for its
+            # old membership forever. Clearing forces an unconditional
+            # re-fetch, which is what the streak is counting.
+            db.set_feed_http_cache(name, None, None)
             logger.warning(
                 f"[churn] {name}: list collapsed {prior} -> {n_values} "
                 f"({streak}/{_COLLAPSE_ACCEPT_AFTER}); treating as a bad fetch, "
@@ -380,8 +415,30 @@ def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
             return True
         logger.warning(f"[churn] {name}: collapse persisted {streak} fetches; "
                        f"accepting {n_values} as its real size")
+        # Remember the accepted collapse. When the feed relists at the
+        # threshold again, that refill is recovery, not churn, and must not be
+        # recorded as a mass return (see _regrew_after_collapse).
+        db.set_setting(SHRINK_ACCEPTED_KEY.format(name), str(prior))
     if db.get_setting(key) not in (None, "", "0"):
         db.set_setting(key, "0")
+    return False
+
+
+def _regrew_after_collapse(db: Database, name: str, n_values: int) -> bool:
+    """True once a feed whose collapse was ACCEPTED lists at least the collapse
+    threshold again. Consumes the flag. The refill is the feed recovering from
+    a stub the guard already let through; recording it would replay the stub's
+    mass leave as a mass return, and the leave->return pairs are predictor
+    positives that never happened."""
+    key = SHRINK_ACCEPTED_KEY.format(name)
+    pre = db.get_setting(key)
+    if not pre:
+        return False
+    if n_values >= _RECOVERY_FRACTION * int(pre):
+        db.set_setting(key, "")
+        logger.info(f"[churn] {name}: relisted {n_values} (was {pre} before an "
+                    f"accepted collapse); re-baselined without churn events")
+        return True
     return False
 
 
@@ -416,7 +473,8 @@ def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict
                 "list collapsed to %d entries; churn not recorded" % len(values))
             continue
         stats = db.update_source_sightings(
-            name, values, tick, record=name not in churn_log_exclude(config))
+            name, values, tick, record=name not in churn_log_exclude(config),
+            rebaseline=_regrew_after_collapse(db, name, len(values)))
         if stats["arrived"] or stats["left"]:
             logger.info(f"[churn] {name}: +{stats['arrived']} arrived, "
                         f"-{stats['left']} left")

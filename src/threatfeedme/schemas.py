@@ -24,8 +24,10 @@ class WhitelistResponse(BaseModel):
 
 
 class FeedRequest(BaseModel):
-    name: str
-    url: str
+    name: str = Field(max_length=64)
+    # Bounded like the whitelist fields: a 900 KB URL was accepted and sat in
+    # every dashboard page and roster read (review 2026-10-24).
+    url: str = Field(max_length=2048)
     feed_type: str = FeedType.CUSTOM.value
     # Finite and 0-1, as the UI documents: weight=inf reached the scorer,
     # stored confidence_score=inf, and every JSON surface that carried the
@@ -33,8 +35,8 @@ class FeedRequest(BaseModel):
     weight: float = Field(1.0, ge=0.0, le=1.0, allow_inf_nan=False)
     update_interval: int = 3600
     requires_auth: bool = False
-    auth_env: Optional[str] = None
-    auth_header: str = "Authorization"
+    auth_env: Optional[str] = Field(None, max_length=128)
+    auth_header: str = Field("Authorization", max_length=128)
     local_file: bool = False
     enabled: bool = True
     # 'ip' (default) or 'domain' — what the feed's lines parse as (D8: feeds

@@ -23,12 +23,19 @@
 (function () {
     var views = ['guide', 'lists', 'feeds', 'integrations', 'system'];
     var h = (location.hash || '').replace('#', '').split('/')[0];
-    var pref = null, ret = null;
-    try { pref = localStorage.getItem('tfm.guide'); } catch (e) {}
+    var ret = null;
     try { ret = sessionStorage.getItem('tfm.return'); sessionStorage.removeItem('tfm.return'); } catch (e) {}
+    // The page's default view, re-read on every call: app.js uses it when the
+    // Back button lands on the bare URL (hash gone), and the operator may have
+    // dismissed the guide since this page loaded.
+    window.tfmDefaultView = function () {
+        var pref = null;
+        try { pref = localStorage.getItem('tfm.guide'); } catch (e) {}
+        return ({{ 'true' if guide.default else 'false' }} && pref !== 'dismissed') ? 'guide' : 'lists';
+    };
     var v = views.indexOf(h) >= 0 ? h
           : views.indexOf(ret) >= 0 ? ret          /* back from reloadPage() */
-          : ({{ 'true' if guide.default else 'false' }} && pref !== 'dismissed') ? 'guide' : 'lists';
+          : window.tfmDefaultView();
     document.documentElement.setAttribute('data-view', v);
 })();
 </script>
@@ -49,7 +56,7 @@
             <p class="lede">The <b>Medium</b> list:
                 {% if m.processing or first_run %}it fills in as the first fetch finishes (usually one to three minutes).
                 {% else %}{{ '{:,}'.format(m.count) }} IPs that more than one independent source agrees on.{% endif %}
-                It updates itself every {{ interval_min }} minutes.</p>
+                Each feed refreshes on its own schedule (OpenPhish every 15 minutes, most hourly, Talos daily).</p>
             <div class="url-row url-row-big">
                 <input class="url-box" type="text" readonly value="{{ feed_base }}{{ m.path }}.txt"
                        onclick="this.select()" aria-label="Medium IP list URL">
@@ -354,8 +361,9 @@
                 <div class="hl-row" title="{{ r.name }}">{{ r.name }}</div>
                 {% for c in r.cells %}
                     {% if c.pct is none %}<div class="hc diag"></div>
-                    {% else %}<div class="hc ov-{{ (c.pct // 20) if c.pct < 100 else 5 }}"
-                          title="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"></div>{% endif %}
+                    {% else %}<div class="hc ov-{{ (c.pct // 20) if c.pct < 100 else 5 }}" tabindex="0"
+                          title="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"
+                          aria-label="{{ r.name }} ∩ {{ c.other }} — {{ c.pct }}%"></div>{% endif %}
                 {% endfor %}
             {% endfor %}
         </div>
@@ -402,7 +410,7 @@
         <summary><b>Firewalls and DNS filters</b>: where each URL goes</summary>
         <ul>
             <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL. IP connectors are used as address objects in firewall policies. Domain connectors are used in <b>DNS Filter profiles</b>: Security Profiles → DNS Filter → the connector appears in the category table under the <i>Threat Feeds</i> group (top or bottom of the list depending on firmware) → set it to <i>Redirect to Block Portal</i>, then apply the profile to the policy carrying client DNS. Bonus: adding the IP connector under the same profile's <i>External IP Block Lists</i> also blocks lookups whose answers resolve to blocked IPs.</li>
-            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL.</li>
+            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL with <code>?hosts=1</code> added: SFOS rejects CIDR and range lines, and that option leaves network entries out. Small XGS models (87/88/107) poll only every 24 hours or less often: add <code>?limit=N</code> to the URL (see the entry-limit note below). Keep <i>Validate server certificate</i> ticked; if this server uses a private certificate, upload its CA under Certificates → Certificate authorities first.</li>
             <li><b>SonicWall</b> (SonicOS 7): Object → Match Objects → Dynamic External Object → protocol <i>HTTPS</i>, paste the URL; use the created address group in a rule.</li>
             <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>
             <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> (IPs) / <i>DNS Lists and Feeds</i> (domains).</li>
@@ -456,7 +464,7 @@
            Decisions threat-feed-me published are never read back as votes.<br>
            <b>Never publish into a honeypot's CrowdSec</b>: a honeypot needs attackers to reach
            it. Pull from it; publish to the CrowdSec that protects your services.</p>
-        <div class="wl-form" style="margin-top:8px">
+        <div class="wl-form" style="margin-top:8px" data-unsaved-scope>
             <label class="unifi-enable-label" title="When enabled, every refresh publishes the tier to the LAPI">
                 Publish
                 <span class="switch"><input type="checkbox" id="cs-enabled" aria-label="Publish to CrowdSec"><span></span></span>
@@ -481,7 +489,7 @@
             <button type="button" class="mini-btn" onclick="csTest(this)">Test connection</button>
             <button type="button" class="mini-btn" onclick="csPush(this)" title="Saves the settings above, then publishes">Save &amp; publish now</button>
         </div>
-        <p class="hint" id="cs-status">—</p>
+        <p class="hint" id="cs-status" role="status" aria-live="polite">—</p>
     </details>
     {# UniFi push integration: UDMs can't poll a URL, so the app pushes the
        tier into firewall groups after every refresh. Everything managed
@@ -515,7 +523,7 @@
            Destination column shows "–" for domain-list policies; open the policy to see the
            reference (it's saved and enforced). Alternatively a Pi-hole/AdGuard polling the domain
            feed URLs above does the same job off-gateway.</p>
-        <div class="wl-form" style="margin-top:8px">
+        <div class="wl-form" style="margin-top:8px" data-unsaved-scope>
             {# The bare switch shipped unlabeled and an operator saved with it
                untouched, then hit "enable the integration first" on Push —
                the label names the control. Push now also saves the visible
@@ -537,11 +545,12 @@
             </select>
             <button type="button" onclick="unifiSave()">Save</button>
             <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>
-            <button type="button" class="mini-btn" onclick="unifiTest(this)">Test connection</button>
+            <button type="button" class="mini-btn" onclick="unifiTest(this)" title="Logs in and lists the gateway's firewall groups; nothing is written. The first successful test pins the gateway's certificate.">Test connection</button>
+            <button type="button" class="mini-btn" onclick="unifiTrustCert(this)" title="After you replace the gateway's certificate: forget the pinned one and pin the certificate it presents now">Trust new certificate</button>
             <button type="button" class="mini-btn" onclick="unifiPush(this)" title="Saves the settings above, then pushes">Save &amp; push now</button>
         </div>
         <p class="hint" id="unifi-tier-warning" style="display:none;color:var(--amber)"></p>
-        <p class="hint" id="unifi-status">—</p>
+        <p class="hint" id="unifi-status" role="status" aria-live="polite">—</p>
     </details>
 
 </section>
@@ -555,12 +564,12 @@
     <div class="panel-grid">
         <div class="panel card" id="schedule-panel">
             <h2 class="card-title">Schedule</h2>
-            <div class="setting-row">
+            <div class="setting-row" data-unsaved-scope>
                 <label for="interval-min">Refresh every</label>
                 <span class="interval-box"><input id="interval-min" type="number" min="1" value="{{ interval_min }}"> min</span>
                 <button class="mini-btn" onclick="saveInterval()">Save</button>
             </div>
-            <div class="setting-row" title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
+            <div class="setting-row" data-unsaved-scope title="How long an entry is kept after it was last seen in any feed. 0 = keep forever.">
                 <label for="retention-days">Keep entries for</label>
                 <span class="interval-box"><input id="retention-days" type="number" min="0" max="3650" value="{{ retention_days }}"> days</span>
                 <button class="mini-btn" onclick="saveRetention()">Save</button>
@@ -581,7 +590,7 @@
             <dt>Scores</dt><dd><button type="button" class="mini-btn" onclick="recalcNow(this)">Recalculate now</button>
                 <span class="muted">refreshes run this automatically when anything that affects scores changes</span></dd>
         </dl>
-            <p class="hint" id="system-status"></p>
+            <p class="hint" id="system-status" role="status" aria-live="polite"></p>
         </div>
 
         {# Host check (DNS-rebinding allowlist). Report-only until LOCKED;
@@ -664,11 +673,11 @@
            restrict to local access). Stored write-only in the server's data-volume
            <code>.env</code> — never displayed again. Leave both empty to clear.</p>
         <div class="field">
-            <label>Username</label>
+            <label for="unifi-cred-user">Username</label>
             <input id="unifi-cred-user" type="text" autocomplete="off" placeholder="svc-threatfeedme">
         </div>
         <div class="field">
-            <label>Password</label>
+            <label for="unifi-cred-pass">Password</label>
             <input id="unifi-cred-pass" type="password" autocomplete="new-password">
         </div>
         <div class="actions">

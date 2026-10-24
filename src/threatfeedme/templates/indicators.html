@@ -80,18 +80,18 @@
             <div class="sources" id="wl-modal-sources">—</div>
         </div>
         <div class="field">
-            <label>Scope: whitelist from which tier?</label>
+            <label for="wl-modal-scope">Scope: whitelist from which tier?</label>
             <select id="wl-modal-scope"></select>
         </div>
         <div class="field">
-            <label>Reason</label>
+            <label for="wl-modal-reason">Reason</label>
             <select id="wl-modal-reason" required>
                 <option value="" disabled selected>Choose a reason…</option>
                 {% for code, label in reason_options.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
             </select>
         </div>
         <div class="field">
-            <label>Note (optional)</label>
+            <label for="wl-modal-note">Note (optional)</label>
             <input id="wl-modal-note" type="text" placeholder="e.g. our mail relay, decommissioned host">
         </div>
         <div class="actions">

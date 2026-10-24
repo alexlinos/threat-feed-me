@@ -401,6 +401,10 @@ safety:
   # cloud metadata services or internal hosts). Set true only if you fetch
   # feeds from servers on your own network (e.g. an internal honeypot).
   allow_private_feed_urls: false
+  # Narrowest IPv4 prefix accepted (default 10): entries wider than /10 are refused. 0 turns the floor off.
+  # min_prefix_ipv4: 10
+  # Narrowest IPv6 prefix accepted (default 24): entries wider than /24 are refused. 0 turns the floor off.
+  # min_prefix_ipv6: 24
 
 scoring:
   # How indicators are bucketed into High/Medium/Low.
@@ -514,9 +518,14 @@ integrations:
     group_prefix: threatfeedme
     # UDM certs are self-signed; enable only if yours has a real cert.
     verify_ssl: false
-    # Safety rails: groups cap out around ~10k members on UniFi OS, so the
-    # set is chunked; the total cap keeps a huge tier from wedging a home
-    # gateway (strongest indicators are kept, the log reports any drop).
+    # Safety rails (strongest indicators are kept; the log reports any drop).
+    # max_per_group: members per firewall group; UniFi OS groups hold about
+    # 10k, so 5000 leaves headroom. Each tier has a fixed group count (high 1,
+    # medium 4, Everything 10), so a tier's list is capped at count x
+    # max_per_group: 5,000 (high), 20,000 (medium), 50,000 (Everything).
+    # max_entries: a separate cap per push arm (IP, domain) applied before
+    # chunking. At the default 50000 the per-tier cap above is what applies
+    # (for Everything the two are equal); lower it to hold a tier smaller.
     max_per_group: 5000
     max_entries: 50000
 

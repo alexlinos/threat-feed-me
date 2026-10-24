@@ -42,9 +42,23 @@ if [ -z "$BUILT_FROM" ] || [ "$BUILT_FROM" != "$APP_ID" ]; then
     --label "tfm.app_image_id=$APP_ID" -t "$IMAGE" "$HERE"
 fi
 
+# The config the APP serves with, not the one baked into the image: an
+# operator who mounts ./config.yaml into the app container (the compose
+# file's optional mount) edits churn_log_exclude and the predictor block
+# there, and training on the image's copy reintroduces the train/serve skew
+# v2.4.18 closed. TFM_CONFIG overrides; default is the repo's config.yaml.
+CFG="${TFM_CONFIG:-$HERE/config.yaml}"
+CFG_MOUNT=()
+if [ -f "$CFG" ]; then
+  CFG_MOUNT=(-v "$CFG":/app/config.yaml:ro)
+else
+  echo "[predictor] no config at $CFG; using the image's config.yaml" >&2
+fi
+
 run() {  # run <module-and-args...>
   docker run --rm --memory="$MEM" --cpus=2 \
     -v "$VOLUME":/app/data \
+    "${CFG_MOUNT[@]}" \
     -e THREATFEED_DB=/app/data/threatfeedme.db \
     -e THREATFEED_CONFIG=/app/config.yaml \
     "$IMAGE" python -m "$@"

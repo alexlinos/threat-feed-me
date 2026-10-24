@@ -27,10 +27,14 @@ Design constraints, learned from the community's scar tissue:
 Failures here must never break a refresh — the caller wraps the push and
 logs; the block lists keep serving either way.
 """
+import hashlib
 import json
 import logging
 import os
+import socket
+import ssl
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from typing import Dict, List, Optional
 
 import requests
@@ -74,7 +78,7 @@ class UniFiPusher:
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
                  domain_tier: str = "",
-                 timeout: int = 20, session=None):
+                 timeout: int = 20, session=None, cert_sha256: str = None):
         host = (host or "").strip()
         # Strip any scheme, then drop anything after the first '/' — a path
         # on an http host would otherwise survive into the coerced URL and
@@ -117,6 +121,14 @@ class UniFiPusher:
         self.timeout = timeout
         self.session = session if session is not None else requests.Session()
         self.session.verify = verify_ssl
+        # Trust-on-first-use (2.5.7): UDM certificates are self-signed, so
+        # verify_ssl is off by default and the admin password went over a
+        # TLS session nothing checked. The dashboard's Test connection pins
+        # the gateway's certificate (SHA-256 of the DER leaf); every later
+        # login refuses a different one until the operator re-tests. With
+        # verify_ssl on, the CA check does this job and the pin is unused.
+        self.pinned_cert = (cert_sha256 or "").strip().lower() or None
+        self.seen_cert: Optional[str] = None
         if not verify_ssl:
             # Self-signed UDM cert: silence the per-request nag, we said so once.
             try:
@@ -142,6 +154,7 @@ class UniFiPusher:
             max_entries=cfg.get('max_entries', DEFAULT_MAX_ENTRIES),
             max_per_group=cfg.get('max_per_group', DEFAULT_MAX_PER_GROUP),
             domain_tier=cfg.get('domain_tier', ''),
+            cert_sha256=cfg.get('cert_sha256'),
         )
 
     @classmethod
@@ -165,7 +178,24 @@ class UniFiPusher:
         groups = self._api('GET', '/rest/firewallgroup')
         ours = [g.get('name') for g in groups
                 if (g.get('name') or '').startswith(f"{self.group_prefix}-")]
-        return {"ok": True, "groups_total": len(groups), "our_groups": sorted(ours)}
+        return {"ok": True, "groups_total": len(groups), "our_groups": sorted(ours),
+                "cert_sha256": self.seen_cert}
+
+    def check_certificate(self) -> Optional[str]:
+        """The gateway's current certificate fingerprint, after comparing it
+        with the pin. Only when verify_ssl is off (with it on, the CA check
+        already authenticates the gateway). A probe connection of its own:
+        requests gives no handle on the peer certificate, and an on-path
+        attacker who can intercept the login can intercept the probe."""
+        if self.session.verify:
+            return None
+        self.seen_cert = cert_fingerprint(self.host, self.timeout)
+        if self.pinned_cert and self.seen_cert != self.pinned_cert:
+            raise RuntimeError(
+                "the gateway's TLS certificate changed since it was pinned "
+                f"(now {self.seen_cert[:16]}…); if you replaced it, use Trust "
+                "the new certificate in the UniFi panel to re-test and pin it")
+        return self.seen_cert
 
     def login(self) -> None:
         user = os.environ.get(ENV_USER)
@@ -174,6 +204,7 @@ class UniFiPusher:
             raise RuntimeError(
                 f"UniFi push enabled but {ENV_USER} / {ENV_PASSWORD} are not set "
                 "(add them to the data volume's .env or the environment)")
+        self.check_certificate()        # before the password leaves the box
         r = self.session.post(f"{self.host}/api/auth/login",
                               json={"username": user, "password": password},
                               timeout=self.timeout)
@@ -322,6 +353,24 @@ class UniFiPusher:
 
         return {"entries": len(values), "groups": len(chunks), "created": created,
                 "updated": updated, "unchanged": unchanged, "emptied": emptied}
+
+
+def cert_fingerprint(host_url: str, timeout: float = 20) -> str:
+    """SHA-256 (hex) of the DER leaf certificate the gateway presents.
+    No verification: the point is to learn what it presents."""
+    parts = urlsplit(host_url if "://" in host_url else f"https://{host_url}")
+    hostname, port = parts.hostname, parts.port or 443
+    if not hostname:
+        raise RuntimeError("UniFi host is not set")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((hostname, port), timeout=timeout) as raw:
+        with ctx.wrap_socket(raw, server_hostname=hostname) as tls:
+            der = tls.getpeercert(binary_form=True)
+    if not der:
+        raise RuntimeError("the gateway presented no certificate")
+    return hashlib.sha256(der).hexdigest()
 
 
 def effective_block(db, config: Dict) -> Dict:

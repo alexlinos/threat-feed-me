@@ -21,15 +21,15 @@ RUN useradd -m -u 1000 appuser
 RUN pip install --no-cache-dir --upgrade "pip>=26.2" "setuptools>=83" "wheel>=0.46.2"
 
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
 # Copy application code
 COPY . .
 
 # Install the package so `threatfeedme` is importable (python -m threatfeedme.main,
 # uvicorn threatfeedme.app:app, etc.).
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . -c constraints.txt
 
 # Create directories for data persistence and make the entrypoint executable.
 # The runtime user owns ONLY what the app writes: data/ (DB, .env, uploads,
@@ -49,15 +49,16 @@ USER appuser
 # Expose dashboard port
 EXPOSE 8080
 
-# Health check. Uses an unauthenticated feed endpoint so it still works when
-# dashboard Basic auth is enabled (the /api/* routes would return 401).
-# Health probe: /healthz is constant-cost and unauthenticated. Never probe a
-# feed URL here — /feeds/all.txt response time grows with the corpus and
-# eventually exceeds the probe timeout, marking healthy deployments unhealthy.
+# Health probe: /healthz is constant-cost and unauthenticated (it still works
+# with dashboard sign-in on, where /api/* would 401). Never probe a feed URL
+# here — /feeds/all.txt response time grows with the corpus and eventually
+# exceeds the probe timeout, marking healthy deployments unhealthy. The probe
+# follows DASHBOARD_PORT and switches to https (no verification: the cert is
+# the operator's own, often self-signed) when TFM_TLS_CERT is set.
 # start-period: a first start after an upgrade may migrate the database before
 # serving (2.5.0: ~2 min on a 1.9 GB database); keep in sync with compose.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
-    CMD python -c "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/healthz', timeout=5).ok else 1)" || exit 1
+    CMD python -c "import os,socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); p=os.environ.get('DASHBOARD_PORT') or '8080'; s='https' if os.environ.get('TFM_TLS_CERT') else 'http'; sys.exit(0 if requests.get(s+'://'+ip+':'+p+'/healthz', timeout=5, verify=False).ok else 1)" || exit 1
 
 # Default command: start dashboard immediately; run the pipeline in the
 # background so a failing/slow feed fetch never blocks startup.

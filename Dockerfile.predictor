@@ -26,4 +26,4 @@ RUN pip install --no-cache-dir "numpy>=1.26" "lightgbm>=4.0"
 USER appuser
 
 # No default CMD: the caller picks train_predictor or predict_pass. See
-# scripts/predict-pass.sh.
+# scripts/predictor.sh.

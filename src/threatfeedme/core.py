@@ -39,12 +39,17 @@ _config_path = None
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    """Load configuration from YAML, falling back to sane defaults."""
+    """Load configuration from YAML. A missing file is an error, not an empty
+    config: the silent {} fallback once started a server on the repo's
+    ./data database because a scratch config had been cleaned up
+    (2.5.6 "scratch-dir lesson"), and the shipped image always has one."""
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
-        return {}
+        raise FileNotFoundError(
+            f"config file not found: {config_path} (set CONFIG_PATH or --config to the "
+            f"YAML you mean; the app never falls back to defaults silently)") from None
 
 
 def _resolve_db_path(cfg: dict) -> str:
