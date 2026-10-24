@@ -123,3 +123,69 @@ def test_held_back_fetch_clears_validators_and_collapse_is_accepted_on_third(
     assert db.source_state_count("f") == 1
     assert db.get_setting("shrink_guard:f") == "0"
     assert len(calls) == 4
+
+
+# ---- 2. recovery from an accepted collapse is not a mass return ------------
+
+def _advance_clock(monkeypatch):
+    """_after_fetch stamps each refresh with now(), and the churn log keys rows
+    by whole-second tick: back-to-back refreshes in a test would collide and
+    one event would overwrite another. Each now() call advances an hour."""
+    import datetime as _dt
+
+    class _Clock(_dt.datetime):
+        _t = _dt.datetime(2026, 10, 1, tzinfo=_dt.timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            _Clock._t += _dt.timedelta(hours=1)
+            return _Clock._t
+
+    monkeypatch.setattr(pipeline, "datetime", _Clock)
+
+
+def test_refill_after_accepted_collapse_writes_no_arrivals(tmp_path, monkeypatch):
+    _advance_clock(monkeypatch)
+    db = Database(str(tmp_path / "t.db"))
+    feed = _http_feed()
+    db.add_feed(feed)
+    config = _config(tmp_path)
+    full = _body(200)
+    without_two = "\n".join(f"185.7.0.{i}" for i in range(1, 201) if i != 2) + "\n"
+    _stub_get(monkeypatch, [
+        _FakeResponse(200, {}, full),                 # baseline
+        _FakeResponse(200, {}, "1.2.3.4\n"),          # held back
+        _FakeResponse(200, {}, "1.2.3.4\n"),          # held back
+        _FakeResponse(200, {}, "1.2.3.4\n"),          # accepted: real size 1
+        _FakeResponse(200, {}, full),                 # the feed recovers
+        _FakeResponse(200, {}, without_two),          # then a real change
+    ])
+    ing = FeedIngestor(db)
+    for _ in range(4):
+        _refresh(db, ing, feed, config)
+    assert db.get_setting("shrink_accepted:f") == "200"
+    assert db.source_state_count("f") == 1
+    assert _churn_counts(db) == (200, 1)              # accepted leaves + the stub's arrival
+
+    recovered = _refresh(db, ing, feed, config)
+    assert recovered.get("warning") is None
+    assert db.source_state_count("f") == 200
+    assert db.get_setting("shrink_accepted:f") == ""  # consumed
+    # The refill wrote no arrival rows: the only present=1 row is the stub's.
+    # The stub's own departure is a real leave and is recorded.
+    assert _churn_counts(db) == (201, 1)
+    conn = sqlite3.connect(db.db_path)
+    try:
+        conn.execute("ATTACH DATABASE ? AS churn", (db.churn_path,))
+        returns = conn.execute(
+            "SELECT COUNT(*) FROM churn.sightings WHERE present = 1 AND ip != '1.2.3.4'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert returns == 0                               # no leave->return pairs
+
+    # Recording is not switched off by the rebaseline: a genuine later change is
+    # still a churn event.
+    _refresh(db, ing, feed, config)
+    assert _churn_counts(db) == (202, 1)
+    assert db.source_state_count("f") == 199

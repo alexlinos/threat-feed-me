@@ -1347,7 +1347,7 @@ def test_run_refresh_honors_churn_log_exclude(db, monkeypatch):
     monkeypatch.setattr(pipeline, "export_tiers", lambda *a, **k: {})
     monkeypatch.setattr(pipeline, "recalculate", lambda *a, **k: 0)
     monkeypatch.setattr(db, "update_source_sightings",
-                        lambda source, values, tick, record=True:
+                        lambda source, values, tick, record=True, rebaseline=False:
                         calls.append((source, record)) or {"arrived": 0, "left": 0, "baseline": 0})
     pipeline.run_refresh(db, cfg)
     assert ("rotator", False) in calls and ("honest", True) in calls

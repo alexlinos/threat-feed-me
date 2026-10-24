@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from threatfeedme import jobs
-from threatfeedme.database import Database, MEMBERSHIP_STAMP_KEY
+from threatfeedme.database import (Database, MEMBERSHIP_STAMP_KEY,
+                                   SHRINK_ACCEPTED_KEY, SHRINK_STREAK_KEY)
 from threatfeedme.feed_ingestor import FeedIngestor
 from threatfeedme.scorer import ConfidenceScorer, current_votes_enabled, vote_grace_days
 from threatfeedme.safety import SafetyFilter
@@ -367,7 +368,7 @@ _COLLAPSE_ACCEPT_AFTER = 3
 
 
 def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
-    key = f"shrink_guard:{name}"
+    key = SHRINK_STREAK_KEY.format(name)
     prior = db.source_state_count(name)
     if prior >= _COLLAPSE_MIN_PRIOR and n_values < _COLLAPSE_FRACTION * prior:
         streak = int(db.get_setting(key) or 0) + 1
@@ -386,8 +387,30 @@ def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
             return True
         logger.warning(f"[churn] {name}: collapse persisted {streak} fetches; "
                        f"accepting {n_values} as its real size")
+        # Remember the accepted collapse. When the feed relists at the
+        # threshold again, that refill is recovery, not churn, and must not be
+        # recorded as a mass return (see _regrew_after_collapse).
+        db.set_setting(SHRINK_ACCEPTED_KEY.format(name), str(prior))
     if db.get_setting(key) not in (None, "", "0"):
         db.set_setting(key, "0")
+    return False
+
+
+def _regrew_after_collapse(db: Database, name: str, n_values: int) -> bool:
+    """True once a feed whose collapse was ACCEPTED lists at least the collapse
+    threshold again. Consumes the flag. The refill is the feed recovering from
+    a stub the guard already let through; recording it would replay the stub's
+    mass leave as a mass return, and the leave->return pairs are predictor
+    positives that never happened."""
+    key = SHRINK_ACCEPTED_KEY.format(name)
+    pre = db.get_setting(key)
+    if not pre:
+        return False
+    if n_values >= _COLLAPSE_FRACTION * int(pre):
+        db.set_setting(key, "")
+        logger.info(f"[churn] {name}: relisted {n_values} (was {pre} before an "
+                    f"accepted collapse); re-baselined without churn events")
+        return True
     return False
 
 
@@ -422,7 +445,8 @@ def _after_fetch(db: Database, config: Dict, fetched: Dict, fetched_values: Dict
                 "list collapsed to %d entries; churn not recorded" % len(values))
             continue
         stats = db.update_source_sightings(
-            name, values, tick, record=name not in churn_log_exclude(config))
+            name, values, tick, record=name not in churn_log_exclude(config),
+            rebaseline=_regrew_after_collapse(db, name, len(values)))
         if stats["arrived"] or stats["left"]:
             logger.info(f"[churn] {name}: +{stats['arrived']} arrived, "
                         f"-{stats['left']} left")
