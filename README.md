@@ -100,7 +100,7 @@ That's it. On first start it fetches **22 free, keyless threat feeds** (16 IP
 feeds and 6 domain feeds: URLhaus, OpenPhish, Phishing Army, HaGeZi TIF,
 Phishunt, and the DRB-Ra C2 list),
 removes duplicates, sorts them into the three lists, and starts serving them. It
-**auto-refreshes every 60 minutes**, no cron, no maintenance. Everything stays
+**refreshes each feed on its own schedule** (OpenPhish every 15 minutes, DShield every 30, most feeds hourly, Talos daily), no cron, no maintenance. Everything stays
 on-prem; feeds are pulled inbound only.
 
 - **No accounts or keys required** for the default feeds.
@@ -128,6 +128,55 @@ auth on and wins over the page. Locked out? Run
 host check off (both are the defaults), the app logs a warning on every start:
 a malicious web page opened on your network could drive the dashboard through
 DNS rebinding. Turning on either one closes that.
+
+### HTTPS
+
+Setting **both** `TFM_TLS_CERT` and `TFM_TLS_KEY` (paths to PEM files inside
+the container, e.g. mounted from `./certs`) serves the dashboard and the list
+URLs over HTTPS on the same port. Setting only one of them refuses to start,
+with a clear error. The app never generates certificates (no ACME, no
+self-signed), so make one with:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 825 -subj "/CN=your.host.name"
+```
+
+In `docker-compose.yml`, add these to the `threat-feed-me` service:
+
+```yaml
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      - TFM_TLS_CERT=/certs/cert.pem
+      - TFM_TLS_KEY=/certs/key.pem
+```
+
+Rotating a certificate means restarting the container. The "starting" holding
+page shown during a long first start is plain HTTP. For auto-renewed public
+certificates, put a reverse proxy in front instead. Caddy is the simplest. A
+`Caddyfile` with:
+
+```
+feeds.example.org {
+	reverse_proxy threat-feed-me:8080
+}
+```
+
+and a sidecar service in the same compose file:
+
+```yaml
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+```
+
+Caddy passes the Host header through to the container by default, which the
+host check needs (see [SECURITY.md](SECURITY.md)). With Caddy in front, stop
+publishing port 8080 on the host so the dashboard is only reachable through it.
+(`caddy-data` also needs declaring under the compose file's top-level `volumes:`.)
 
 ## Walkthrough
 
@@ -199,7 +248,7 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
 - **Runtime feed management**: Add, remove, enable/disable, and mix-and-match
   feeds from the dashboard, including your own custom URL or local-file feeds
 - **Force refresh, scheduling & retention**: Refresh all feeds (or one) on
-  demand, set the auto-refresh interval (default 60 minutes), and set how long
+  demand, set the default refresh interval for feeds that don't set their own (60 minutes out of the box), and set how long
   an IP is kept after it drops out of every feed (default 14 days; `0` = keep
   forever), all from the dashboard's System view, no restart needed
 - **Deduplication**: Merge duplicate IPs across feeds with source tracking
@@ -396,7 +445,10 @@ python -m threatfeedme.main --serve
 
 For remote access, the container binds 0.0.0.0 via `DASHBOARD_HOST`
 set in the Dockerfile (`ENV DASHBOARD_HOST=0.0.0.0`). Source runs stay
-localhost-only unless `dashboard.host` is set in config.yaml.
+localhost-only unless `dashboard.host` is set in config.yaml. `DASHBOARD_PORT`
+overrides the port the same way (default 8080). The image's `EXPOSE` and the
+healthcheck in `docker-compose.yml` assume 8080, so change those too if you
+change the port inside the container.
 
 > For one-shot pipeline runs (fetch, score, export, stats) use
 > `python -m threatfeedme.main --fetch|--export|--full` instead.
@@ -440,7 +492,11 @@ really pulling it.
   [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP
   and Domain network lists on the gateway after every refresh, managed from
   the dashboard.
-- **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block)
+- **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block). SFOS
+  "doesn't support IP address ranges, IPv6 addresses, network addresses, wildcard domains" (SFOS 21.5 help, *Configure third-party
+  threat feeds*), so CIDR entries in these lists are not usable on it. On small XGS models (87/88/107, which poll only every 24 h,
+  7 d or 30 d), add `?limit=N` to the URL so the list fits what the box can take. If you turn on *Validate server certificate*
+  for an HTTPS URL with a private certificate, upload that CA first under Certificates → Certificate authorities.
 - **SonicWall** (SonicOS 7): Object → Match Objects → Dynamic External Object (HTTPS URL)
 - **Palo Alto:** Objects → External Dynamic Lists → *IP List* (domain URLs as a *Domain List*); the lists are EDL-native, so a MineMeld EDL output maps one-to-one
 - **Cisco Secure Firewall (FMC):** Objects → Object Management → Security Intelligence → Network Lists and Feeds
@@ -576,6 +632,11 @@ accept plain domain-per-line lists, hosts-file format (`0.0.0.0 evil.example`),
 and URL lists (the host is kept); unicode domains are IDNA-normalized so both
 spellings dedupe to one indicator.
 
+A key for your own feed must come from a variable named `TFM_FEED_<NAME>`
+(uppercase letters, digits and underscores, e.g. `TFM_FEED_ACME`), set in the
+environment or the data volume's `.env`. Other names are refused, so a feed can
+never be pointed at a dashboard or UniFi credential (see `credentials.py`).
+
 **Restore defaults:** the dashboard's *Restore default feeds* button re-adds the
 curated feeds from `config.yaml` that are missing, without touching feeds you've
 customized.
@@ -604,16 +665,35 @@ a **Back up now** button. Trigger one on demand with
 `POST /api/backup` or `python -m threatfeedme.main --backup`. Each backup is two
 files: `threat_feeds-<time>.db` (everything that matters for serving) and
 `threat_feeds-<time>.churn.db` (the churn log the optional predictor learns
-from). **Restore:** stop the app, copy the `.db` over `data/threatfeedme.db` and
-the `.churn.db` over `data/threatfeedme-churn.db`. Restoring only the `.db` is
-fine: the churn log simply starts again.
+from).
+
+**Restore:**
+
+1. Stop the container.
+2. In `data/`, delete `threatfeedme.db-wal`, `threatfeedme.db-shm`,
+   `threatfeedme-churn.db-wal` and `threatfeedme-churn.db-shm`, if they exist.
+   The database runs in WAL mode. An old `-wal` file that is left beside a
+   restored file is replayed onto it, which corrupts the restore.
+3. Copy a backup's `threat_feeds-<time>.db` over `data/threatfeedme.db`, and
+   its matching `threat_feeds-<time>.churn.db` over
+   `data/threatfeedme-churn.db`. Use the two files taken at the same time.
+   Restoring only the `.db` is allowed; the current churn file is kept as it is.
+4. Start the container.
+
+Backups do not include `data/uploads/` (uploaded custom lists) or `data/.env`
+(saved API keys and integration logins). Keep your own copy of those.
+
+Rolling back to a 2.4.9 or later image is safe. It ignores the churn file and
+the `source_left` table, and the transitions it records in the database are
+merged back into the churn file when you upgrade again. Do not roll back to a
+2.4.2-2.4.8 image: its presence snapshots cannot be merged that way.
 
 ## Small-box deployments (Synology, QNAP, Raspberry Pi)
 
 The container is built to fit NAS-class hosts with 1-2 GB of RAM:
 
-- The heavy paths, tier-file exports, the dashboard's counts, and the hourly
-  rescore, **stream rows instead of materializing the whole indicator table**,
+- The heavy paths, tier-file exports, the dashboard's counts, and the rescore
+  after each refresh, **stream rows instead of materializing the whole indicator table**,
   so peak memory stays low even at 150k+ indicators (a tier export peaks at a
   few MB instead of hundreds).
 - Whitelist changes rebuild the export files **in the background**; the
@@ -621,7 +701,10 @@ The container is built to fit NAS-class hosts with 1-2 GB of RAM:
   instantly either way.
 - Cap the container so a burst can never starve the NAS; uncomment
   `mem_limit: 1g` in `docker-compose.yml` (or set a memory limit in the
-  Synology Container Manager UI).
+  Synology Container Manager UI). Measured: about 550 MB peak memory during a
+  refresh at about 600k indicators, so `mem_limit: 1g` is comfortable up to
+  roughly that size. The offline predictor job (`scripts/predictor.sh`) runs
+  in its own container and needs a larger cap, set with `TFM_MEM` (default 3g).
 - If you don't consume the CSV/JSON exports, set `output.formats: [text]` in
   `config.yaml`, which cuts export work by two thirds.
 - Retention defaults to 14 days (it gives the optional predictor the history
@@ -761,9 +844,13 @@ only reaches the internet through a proxy, set
 private-address check off, so restrict who can add feeds.
 
 Values in `config.yaml` are the **seed defaults**. Runtime-adjustable settings (
-the auto-refresh interval and the retention window) can be changed live from
+the default refresh interval and the retention window) can be changed live from
 the dashboard's System view (or `POST /api/settings`); the stored value then takes
 precedence over the file, so it survives restarts without editing config.
+
+**`DISABLE_SCHEDULER=1`** turns off the background scheduler. That stops the
+automatic feed refreshes and the automatic backups, which also run from the
+scheduler. Refreshes then happen only when you trigger them.
 
 ## Privacy
 
