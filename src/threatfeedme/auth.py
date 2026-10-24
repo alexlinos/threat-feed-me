@@ -24,6 +24,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 from typing import Optional
 
@@ -149,13 +150,30 @@ def auth_enabled() -> bool:
     return bool(_AUTH_REQUIRED or auth_source())
 
 
+# scrypt is deliberately expensive (~36 ms, ~16 MB each) and releases the GIL,
+# so a flood of wrong passwords used to run one per request thread: 40 at
+# once measured +375 MB and saturated the pool that also serves /feeds/*.txt
+# (review 2026-10-24). Four at a time bounds the cost; a request that can't
+# get a slot within a couple of seconds is turned away with a 503 rather
+# than holding a pool thread. Cached verified logins never take a slot.
+_SCRYPT_SLOTS = threading.BoundedSemaphore(4)
+_SCRYPT_WAIT_S = 2.0
+
+
 def _stored_login_ok(stored: dict, username: str, password: str) -> bool:
     user_ok = hmac.compare_digest(username.encode("utf-8"), stored["user"].encode("utf-8"))
     digest = hmac.new(_process_key, f"{username}\0{password}".encode("utf-8"), "sha256").digest()
     seen = _verified.setdefault(stored["hash"], set())
     if digest in seen:
         return user_ok
-    pass_ok = check_stored_password(stored, password)      # always hashed: no user timing leak
+    if not _SCRYPT_SLOTS.acquire(timeout=_SCRYPT_WAIT_S):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Too many sign-in attempts at once; try again",
+                            headers={"Retry-After": "5"})
+    try:
+        pass_ok = check_stored_password(stored, password)  # always hashed: no user timing leak
+    finally:
+        _SCRYPT_SLOTS.release()
     if user_ok and pass_ok and len(seen) < 16:
         seen.add(digest)
     return user_ok and pass_ok

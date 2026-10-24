@@ -91,6 +91,10 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
     # Remote feeds must be plain http/https URLs (no file://, ftp://, etc.).
     if not request.local_file and not re.match(r"https?://", url, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Feed URL must start with http:// or https://")
+    # The header NAME is sent verbatim with the key as its value: an RFC 7230
+    # token only, so it can't carry a second header or a CRLF.
+    if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", request.auth_header or ""):
+        raise HTTPException(status_code=400, detail="auth_header must be a plain HTTP header name")
     if request.indicator_kind not in ("ip", "domain"):
         raise HTTPException(status_code=400, detail="indicator_kind must be 'ip' or 'domain'")
     scraper = _FORMAT_SCRAPERS.get(request.format, "unknown")

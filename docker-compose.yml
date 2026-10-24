@@ -43,6 +43,12 @@ services:
       # (/feeds/...) are never checked.
       - TFM_ALLOWED_HOSTS
     restart: unless-stopped
+    # A first start after an upgrade can spend minutes migrating the database.
+    # `docker stop` would SIGKILL it after 10 s (the entrypoint's shell is
+    # PID 1 for that step and can't forward the signal), and a kill during
+    # the compaction leaves the file at its old size until the next start
+    # retries it. Give the stop the time the migration needs.
+    stop_grace_period: 10m
     # Small-box hosts (Synology/QNAP NAS, Raspberry Pi): cap the container so
     # a rescore/export burst can never starve the rest of the box. v1.8.3+
     # streams its heavy paths and runs comfortably inside this. See
@@ -54,7 +60,7 @@ services:
       # the Dockerfile. Never probe a feed URL here — /feeds/all.txt grows
       # with the corpus and eventually outlives the probe timeout, marking
       # healthy deployments permanently unhealthy.
-      test: ["CMD", "python", "-c", "import socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); sys.exit(0 if requests.get('http://'+ip+':8080/healthz', timeout=5).ok else 1)"]
+      test: ["CMD", "python", "-c", "import os,socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); p=os.environ.get('DASHBOARD_PORT') or '8080'; s='https' if os.environ.get('TFM_TLS_CERT') else 'http'; sys.exit(0 if requests.get(s+'://'+ip+':'+p+'/healthz', timeout=5, verify=False).ok else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3

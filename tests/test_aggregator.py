@@ -2332,6 +2332,8 @@ def test_talos_full_scrape_flow(monkeypatch, db):
                 text = _MOCK_TALOS_TERMS_HTML
                 status_code = 200
                 def raise_for_status(self): pass
+                encoding = 'utf-8'
+                def iter_content(self, chunk_size=65536, decode_unicode=False): yield self.text.encode()
             return Resp()
 
         def post(self, url, data, **kwargs):
@@ -2343,6 +2345,8 @@ def test_talos_full_scrape_flow(monkeypatch, db):
                 status_code = 200
                 headers = {"content-type": "text/plain"}
                 def raise_for_status(self): pass
+                encoding = 'utf-8'
+                def iter_content(self, chunk_size=65536, decode_unicode=False): yield self.text.encode()
             return Resp()
 
     # Inject the mock session
@@ -2398,6 +2402,8 @@ def test_talos_missing_token_raises(monkeypatch, db):
                 text = "<html><body>no token here</body></html>"
                 status_code = 200
                 def raise_for_status(self): pass
+                encoding = 'utf-8'
+                def iter_content(self, chunk_size=65536, decode_unicode=False): yield self.text.encode()
             return Resp()
         def post(self, *a, **kw):
             raise RuntimeError("should not be called")
@@ -2427,6 +2433,8 @@ def test_talos_accept_post_failure(monkeypatch, db):
                 text = _MOCK_TALOS_TERMS_HTML
                 status_code = 200
                 def raise_for_status(self): pass
+                encoding = 'utf-8'
+                def iter_content(self, chunk_size=65536, decode_unicode=False): yield self.text.encode()
             return Resp()
         def post(self, url, data, **kwargs):
             raise requests.exceptions.Timeout("post timed out")
@@ -2457,6 +2465,8 @@ def test_talos_scrape_returns_raw_body(monkeypatch, db):
                 text = _MOCK_TALOS_TERMS_HTML
                 status_code = 200
                 def raise_for_status(self): pass
+                encoding = 'utf-8'
+                def iter_content(self, chunk_size=65536, decode_unicode=False): yield self.text.encode()
             return Resp()
         def post(self, url, data, **kwargs):
             class Resp:
@@ -2464,6 +2474,8 @@ def test_talos_scrape_returns_raw_body(monkeypatch, db):
                 status_code = 200
                 headers = {"content-type": "text/plain"}
                 def raise_for_status(self): pass
+                encoding = 'utf-8'
+                def iter_content(self, chunk_size=65536, decode_unicode=False): yield self.text.encode()
             return Resp()
 
     monkeypatch.setattr("requests.Session", lambda: MockSession())

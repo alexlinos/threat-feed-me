@@ -23,6 +23,15 @@ import urllib3.util.connection as _u3_connection
 _MAX_FETCH_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
+_QUERY_RE = re.compile(r"\?[^\s'\"<>]*")
+
+
+def _redact(text: str) -> str:
+    """A URL's query string, gone: some providers put the API key there, and
+    requests' exception text carries the full URL (review 2026-10-24)."""
+    return _QUERY_RE.sub("?…", str(text))
+
+
 def _read_capped(response, label: str) -> str:
     """Read a streamed response body with a running byte counter, so a hostile
     or broken feed can't exhaust memory. Every fetch path uses this — reading
@@ -346,7 +355,7 @@ class FeedIngestor:
                 if content is NOT_MODIFIED:
                     return NOT_MODIFIED
         except Exception as e:
-            logger.error(f"Failed to fetch {feed.name}: {e}")
+            logger.error(f"Failed to fetch {feed.name}: {_redact(e)}")
             raise
         finally:
             _ssrf_guard.active = guard_was
@@ -461,7 +470,7 @@ class FeedIngestor:
             delay = retry_after if retry_after is not None else \
                 _BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS)) - 1]
             logger.warning(
-                f"Transient failure fetching {url} "
+                f"Transient failure fetching {_redact(url)} "
                 f"(attempt {attempt}/{_MAX_ATTEMPTS}); retrying in {delay}s"
             )
             _sleep(delay)
@@ -657,29 +666,36 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
     logger.info(f"Talos scraper: fetching terms page for {feed.name}")
 
     # Step 1: GET the terms page with a browser UA to pass Cloudflare.
+    # Same discipline as every other fetch path (review 2026-10-24): no env
+    # proxies (the connect-time SSRF pin would check the proxy's address),
+    # capped reads, and a bounded redirect chain for the GET only.
     session = requests.Session()
     session.headers["User-Agent"] = _TALOS_UA
+    session.trust_env = False
+    session.max_redirects = 3
     try:
-        resp = session.get(_TALOS_TERMS_URL, timeout=_TALOS_TIMEOUT)
+        resp = session.get(_TALOS_TERMS_URL, timeout=_TALOS_TIMEOUT,
+                           proxies=_NO_PROXIES, stream=True)
         resp.raise_for_status()
+        page = _read_capped(resp, feed.name)
     except Exception as e:
         logger.error(f"Talos scraper: terms page GET failed: {e}")
         raise
 
     # Step 2: extract the CSRF authenticity_token.
     token = None
-    m = _TALOS_TOKEN_RE.search(resp.text)
+    m = _TALOS_TOKEN_RE.search(page)
     if m:
         token = m.group(1)
     else:
-        m = _TALOS_TOKEN_RE_FALLBACK.search(resp.text)
+        m = _TALOS_TOKEN_RE_FALLBACK.search(page)
         if m:
             token = m.group(1)
     if not token:
         raise RuntimeError(
             f"Talos scraper: could not find authenticity_token in terms page "
-            f"(content length={len(resp.text)}, "
-            f"'accept-terms' found={'accept-terms' in resp.text})"
+            f"(content length={len(page)}, "
+            f"'accept-terms' found={'accept-terms' in page})"
         )
 
     logger.info(
@@ -692,14 +708,15 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
         post_resp = session.post(
             _TALOS_ACCEPT_URL,
             data={"authenticity_token": token, "commit": "Accept"},
-            timeout=_TALOS_TIMEOUT,
+            timeout=_TALOS_TIMEOUT, proxies=_NO_PROXIES,
+            stream=True, allow_redirects=False,
         )
         post_resp.raise_for_status()
+        body = _read_capped(post_resp, feed.name).strip()
     except Exception as e:
         logger.error(f"Talos scraper: accept-terms POST failed: {e}")
         raise
 
-    body = post_resp.text.strip()
     logger.info(
         f"Talos scraper: got {len(body)} bytes from accept-terms "
         f"(content-type: {post_resp.headers.get('content-type', 'unknown')})"

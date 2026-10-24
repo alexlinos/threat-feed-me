@@ -22,10 +22,15 @@ output
 .env
 *.env
 
-# Dev/docs not needed at runtime
+# Dev/docs not needed at runtime. README.md stays: pyproject.toml names it
+# as the package readme, and the editable install reads it.
 tests
 requirements-dev.txt
-README.md
 LICENSE
 assets
+docs
+scripts
+CLAUDE.md
+ROADMAP.md
+Dockerfile.predictor
 docker-compose.yml
