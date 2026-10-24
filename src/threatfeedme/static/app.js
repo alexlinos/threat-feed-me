@@ -1190,9 +1190,11 @@ async function recalcNow(btn) {
 // dashboard.html already picked the first one before paint.
 const VIEWS = ['guide', 'lists', 'feeds', 'integrations', 'system'];
 function showView(v, focus) {
-    if (VIEWS.indexOf(v) < 0) return;
     const root = document.documentElement;
     if (!root.hasAttribute('data-view')) return;          // not the dashboard page
+    // Empty or unknown hash (Back to the bare URL): show the page's default
+    // view, the same rule the inline picker in dashboard.html applies.
+    if (VIEWS.indexOf(v) < 0) v = typeof window.tfmDefaultView === 'function' ? window.tfmDefaultView() : 'lists';
     if (root.getAttribute('data-view') !== v) window.scrollTo(0, 0);
     root.setAttribute('data-view', v);
     if (v === 'integrations') { loadUnifiOnce(); loadCsOnce(); }

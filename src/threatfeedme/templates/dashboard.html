@@ -23,12 +23,19 @@
 (function () {
     var views = ['guide', 'lists', 'feeds', 'integrations', 'system'];
     var h = (location.hash || '').replace('#', '').split('/')[0];
-    var pref = null, ret = null;
-    try { pref = localStorage.getItem('tfm.guide'); } catch (e) {}
+    var ret = null;
     try { ret = sessionStorage.getItem('tfm.return'); sessionStorage.removeItem('tfm.return'); } catch (e) {}
+    // The page's default view, re-read on every call: app.js uses it when the
+    // Back button lands on the bare URL (hash gone), and the operator may have
+    // dismissed the guide since this page loaded.
+    window.tfmDefaultView = function () {
+        var pref = null;
+        try { pref = localStorage.getItem('tfm.guide'); } catch (e) {}
+        return ({{ 'true' if guide.default else 'false' }} && pref !== 'dismissed') ? 'guide' : 'lists';
+    };
     var v = views.indexOf(h) >= 0 ? h
           : views.indexOf(ret) >= 0 ? ret          /* back from reloadPage() */
-          : ({{ 'true' if guide.default else 'false' }} && pref !== 'dismissed') ? 'guide' : 'lists';
+          : window.tfmDefaultView();
     document.documentElement.setAttribute('data-view', v);
 })();
 </script>
