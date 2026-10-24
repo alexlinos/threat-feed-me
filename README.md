@@ -604,9 +604,28 @@ a **Back up now** button. Trigger one on demand with
 `POST /api/backup` or `python -m threatfeedme.main --backup`. Each backup is two
 files: `threat_feeds-<time>.db` (everything that matters for serving) and
 `threat_feeds-<time>.churn.db` (the churn log the optional predictor learns
-from). **Restore:** stop the app, copy the `.db` over `data/threatfeedme.db` and
-the `.churn.db` over `data/threatfeedme-churn.db`. Restoring only the `.db` is
-fine: the churn log simply starts again.
+from).
+
+**Restore:**
+
+1. Stop the container.
+2. In `data/`, delete `threatfeedme.db-wal`, `threatfeedme.db-shm`,
+   `threatfeedme-churn.db-wal` and `threatfeedme-churn.db-shm`, if they exist.
+   The database runs in WAL mode. An old `-wal` file that is left beside a
+   restored file is replayed onto it, which corrupts the restore.
+3. Copy a backup's `threat_feeds-<time>.db` over `data/threatfeedme.db`, and
+   its matching `threat_feeds-<time>.churn.db` over
+   `data/threatfeedme-churn.db`. Use the two files taken at the same time.
+   Restoring only the `.db` is allowed; the current churn file is kept as it is.
+4. Start the container.
+
+Backups do not include `data/uploads/` (uploaded custom lists) or `data/.env`
+(saved API keys and integration logins). Keep your own copy of those.
+
+Rolling back to a 2.4.9 or later image is safe. It ignores the churn file and
+the `source_left` table, and the transitions it records in the database are
+merged back into the churn file when you upgrade again. Do not roll back to a
+2.4.2-2.4.8 image: its presence snapshots cannot be merged that way.
 
 ## Small-box deployments (Synology, QNAP, Raspberry Pi)
 
