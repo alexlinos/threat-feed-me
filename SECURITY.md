@@ -60,6 +60,19 @@ Rotating a certificate means restarting the container. The "starting" holding
 page shown during a long first start is plain HTTP. For auto-renewed public
 certificates, put a reverse proxy such as Caddy in front instead.
 
+### UniFi gateway certificate
+
+UniFi OS certificates are self-signed, so the push verifies none by default
+(`verify_ssl: false`), and until 2.5.7 the gateway admin password went over
+a TLS session nothing checked. Now the first successful **Test connection**
+pins the certificate the gateway presents (SHA-256 of the leaf), and every
+later login, including the push after each refresh, refuses a different one
+until you press **Trust new certificate** in the UniFi panel. Trust on first
+use: it does not authenticate the gateway the first time, it stops anyone
+silently swapping it in later. Changing the gateway host clears the pin along
+with the saved login. With `verify_ssl: true` the CA check does this job and
+the pin is not used.
+
 What the software stores, sends and logs, and to whom, is documented in
 [PRIVACY.md](PRIVACY.md).
 

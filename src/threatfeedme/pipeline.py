@@ -387,6 +387,12 @@ def churn_log_exclude(config: Dict) -> set:
 _COLLAPSE_FRACTION = 0.05
 _COLLAPSE_MIN_PRIOR = 100
 _COLLAPSE_ACCEPT_AFTER = 3
+# A feed whose collapse was accepted is "back" when it relists at least this
+# share of its pre-collapse size. Higher than the collapse threshold on
+# purpose: a list that genuinely shrank to 3% and then grows to 6% is not
+# recovering, and its arrivals are real churn; a stub giving way to the full
+# list jumps straight to ~100%.
+_RECOVERY_FRACTION = 0.5
 
 
 def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
@@ -428,7 +434,7 @@ def _regrew_after_collapse(db: Database, name: str, n_values: int) -> bool:
     pre = db.get_setting(key)
     if not pre:
         return False
-    if n_values >= _COLLAPSE_FRACTION * int(pre):
+    if n_values >= _RECOVERY_FRACTION * int(pre):
         db.set_setting(key, "")
         logger.info(f"[churn] {name}: relisted {n_values} (was {pre} before an "
                     f"accepted collapse); re-baselined without churn events")

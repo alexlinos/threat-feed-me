@@ -410,7 +410,7 @@
         <summary><b>Firewalls and DNS filters</b>: where each URL goes</summary>
         <ul>
             <li><b>FortiGate:</b> Security Fabric → External Connectors → Create New → <i>IP Address Threat Feed</i> for IP URLs, <i>Domain Name Threat Feed</i> for domain URLs, then paste the URL. IP connectors are used as address objects in firewall policies. Domain connectors are used in <b>DNS Filter profiles</b>: Security Profiles → DNS Filter → the connector appears in the category table under the <i>Threat Feeds</i> group (top or bottom of the list depending on firmware) → set it to <i>Redirect to Block Portal</i>, then apply the profile to the policy carrying client DNS. Bonus: adding the IP connector under the same profile's <i>External IP Block Lists</i> also blocks lookups whose answers resolve to blocked IPs.</li>
-            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL. Small XGS models (87/88/107) poll only every 24 hours or less often: add <code>?limit=N</code> to the URL (see the entry-limit note below). Keep <i>Validate server certificate</i> ticked; if this server uses a private certificate, upload its CA under Certificates → Certificate authorities first.</li>
+            <li><b>Sophos Firewall</b> (SFOS 21.0+): Active threat response → Third-party threat feeds → Add → type <i>IPv4</i> (or <i>Domain</i>), action <i>Block</i>, paste the URL with <code>?hosts=1</code> added: SFOS rejects CIDR and range lines, and that option leaves network entries out. Small XGS models (87/88/107) poll only every 24 hours or less often: add <code>?limit=N</code> to the URL (see the entry-limit note below). Keep <i>Validate server certificate</i> ticked; if this server uses a private certificate, upload its CA under Certificates → Certificate authorities first.</li>
             <li><b>SonicWall</b> (SonicOS 7): Object → Match Objects → Dynamic External Object → protocol <i>HTTPS</i>, paste the URL; use the created address group in a rule.</li>
             <li><b>Palo Alto:</b> Objects → External Dynamic Lists → add as an <i>IP List</i> or <i>Domain List</i>.</li>
             <li><b>Cisco Secure Firewall (FMC):</b> Objects → Object Management → Security Intelligence → <i>Network Lists and Feeds</i> (IPs) / <i>DNS Lists and Feeds</i> (domains).</li>
@@ -545,7 +545,8 @@
             </select>
             <button type="button" onclick="unifiSave()">Save</button>
             <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>
-            <button type="button" class="mini-btn" onclick="unifiTest(this)">Test connection</button>
+            <button type="button" class="mini-btn" onclick="unifiTest(this)" title="Logs in and lists the gateway's firewall groups; nothing is written. The first successful test pins the gateway's certificate.">Test connection</button>
+            <button type="button" class="mini-btn" onclick="unifiTrustCert(this)" title="After you replace the gateway's certificate: forget the pinned one and pin the certificate it presents now">Trust new certificate</button>
             <button type="button" class="mini-btn" onclick="unifiPush(this)" title="Saves the settings above, then pushes">Save &amp; push now</button>
         </div>
         <p class="hint" id="unifi-tier-warning" style="display:none;color:var(--amber)"></p>

@@ -480,7 +480,8 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 
 **List size limits.** Many firewalls limit how many entries one list can hold
 (a mid-range FortiGate takes about 131,000 per connector; PAN-OS limits depend
-on the model). Add `?limit=N` to any URL to get only the N strongest entries,
+on the model). `?hosts=1` serves single addresses only, leaving out network
+entries, for consumers that reject CIDR lines (Sophos). Add `?limit=N` to any URL to get only the N strongest entries,
 e.g. `/feeds/all.txt?limit=100000`, so the list fits instead of being cut off
 wherever the firewall stops reading. Lists carry an ETag, so a firewall re-polling
 an unchanged list gets a cheap `304 Not Modified`. Each URL on the dashboard
@@ -494,7 +495,8 @@ really pulling it.
   the dashboard.
 - **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block). SFOS
   "doesn't support IP address ranges, IPv6 addresses, network addresses, wildcard domains" (SFOS 21.5 help, *Configure third-party
-  threat feeds*), so CIDR entries in these lists are not usable on it. On small XGS models (87/88/107, which poll only every 24 h,
+  threat feeds*), so give it the list URL with `?hosts=1`: that serves single addresses only, with network entries left out
+  (never expanded). On small XGS models (87/88/107, which poll only every 24 h,
   7 d or 30 d), add `?limit=N` to the URL so the list fits what the box can take. If you turn on *Validate server certificate*
   for an HTTPS URL with a private certificate, upload that CA first under Certificates → Certificate authorities.
 - **SonicWall** (SonicOS 7): Object → Match Objects → Dynamic External Object (HTTPS URL)

@@ -1054,6 +1054,19 @@ async function unifiTest(btn) {
         el.textContent = r.ok ? j.message : ('Test failed: ' + (detailText(j.detail) || r.status));
     } finally { btn.disabled = false; }
 }
+// The gateway's certificate is pinned on the first successful test; after
+// the operator replaces the certificate on purpose, this forgets the pin and
+// pins whatever the gateway presents now. Deliberate, never automatic.
+async function unifiTrustCert(btn) {
+    if (!confirm('Forget the pinned gateway certificate and trust the one the gateway presents now?\n\nOnly do this if YOU replaced the gateway’s certificate.')) return;
+    const el = document.getElementById('unifi-status');
+    btn.disabled = true; el.textContent = 'Re-testing and pinning the new certificate…';
+    try {
+        const r = await apiFetch('/api/integrations/unifi/trust-certificate', {method: 'POST'});
+        const j = await r.json().catch(() => ({}));
+        el.textContent = r.ok ? j.message : ('Could not pin: ' + (detailText(j.detail) || r.status));
+    } finally { btn.disabled = false; }
+}
 
 async function unifiPush(btn) {
     const el = document.getElementById('unifi-status');

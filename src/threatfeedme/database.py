@@ -1897,6 +1897,10 @@ class Database:
             cur.execute("DELETE FROM source_state WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (name,))
             cur.execute("DELETE FROM source_left WHERE source_name = ?", (name,))
+            # The shrink guard's streak and accepted-collapse flag too: a feed
+            # re-added under the same name must not inherit them.
+            cur.execute("DELETE FROM settings WHERE key IN (?, ?)",
+                        (SHRINK_STREAK_KEY.format(name), SHRINK_ACCEPTED_KEY.format(name)))
             cur.execute("DELETE FROM feed_feedback WHERE feed_name = ?", (name,))
             cur.execute(
                 "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",

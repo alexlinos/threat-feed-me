@@ -794,6 +794,72 @@ these areas again:
   Recreate a throwaway config before starting a server, and confirm the
   DB file it opened (its mtime moves) is the scratch one.
 
+## v2.5.7 (2026-10-24): full re-review, forty-odd fixes, four features
+
+A six-way review (security, pipeline, ops/docs, frontend, live landing
+site, plus a Sophos requirements check) ~10k lines after the last one.
+No auth/CSRF/injection/SSRF hole; all 2.4.19 open items closed except the
+write_lock waits. Fixed on `release/2.5.7` (coders ran on worktree
+branches, merged without conflict; every branch re-reviewed before merge):
+
+- **Pipeline**: a held-back (collapsed) fetch no longer keeps its ETag (a
+  304 then touched the OLD membership forever: the feed voted for its
+  pre-collapse list and nothing aged out); an accepted collapse followed by
+  a refill re-baselines without events (`_regrew_after_collapse`,
+  `_RECOVERY_FRACTION` 0.5 — deliberately above the 5% collapse threshold
+  so a genuinely smaller list growing isn't mistaken for recovery); a URL
+  change and `remove_feed` clear the membership baseline and the shrink-
+  guard keys (`SHRINK_STREAK_KEY`/`SHRINK_ACCEPTED_KEY`); feed delete holds
+  `jobs.write_lock` across remove+rescore and deletes the upload file;
+  `purge_stale_indicators` uses a temp table (a whitelist past 32,766
+  entries failed every refresh); a malformed `backup:` block no longer
+  kills the scheduler thread; the migration VACUUM is retry-safe via a
+  `vacuum_pending` stamp (only for migrations run from 2.5.7 on).
+  Residual: a collapse's own leave rows stay in the churn log after a
+  refill, so `detect_leaves` lists those IPs as left until their next event.
+- **Security**: scrypt checks capped at 4 concurrent (`_SCRYPT_SLOTS`, 503
+  beyond, never a lockout); Test-connection errors are fixed categories
+  (`_failure_reason`), the raw text was a LAN port oracle; forwarded scheme
+  must be http/https; feed url/auth_env/auth_header bounded, header name an
+  RFC 7230 token; fetch logs drop query strings; the Talos scraper joined
+  the capped-read/no-proxy discipline; the publish workflow takes its
+  dispatch input via env and runs tests on 3.11.
+- **Features (maintainer's four calls)**: `TFM_TLS_CERT`+`TFM_TLS_KEY` →
+  uvicorn TLS (both or neither; no ACME/self-signed generation; health
+  probe follows the scheme and `DASHBOARD_PORT`, identical in Dockerfile
+  and compose); `?hosts=1` on every list URL (Sophos rejects CIDR lines;
+  own cached body + ETag); UniFi trust-on-first-use certificate pin
+  (`cert_fingerprint`, `cert_sha256` in the settings block, cleared with
+  the host; `POST /api/integrations/unifi/trust-certificate` + panel
+  button); `constraints.txt` transitive lock (`pip -c`; starlette pinned
+  directly — a clean resolve gave 1.10.0 where the dev venv had 1.7.0;
+  regenerate from a clean venv, see the file header).
+- **Ops/docs**: `stop_grace_period: 10m`; predictor.sh mounts the app's
+  config; `.dockerignore` drops docs/scripts/CLAUDE/ROADMAP; a missing
+  config file is an error (no `{}` fallback); README restore steps delete
+  `-wal`/`-shm` first and say backups skip `uploads/` and `.env`; rollback
+  is documented as safe to **2.4.9+** only (2.4.2-2.4.8 snapshots would be
+  re-merged as transitions); SECURITY's proxy guidance (pass the original
+  Host or the host check protects nothing); robots.txt; site deploy
+  command carries `--restart`.
+- **Frontend**: `apiFetch` returns a synthetic `{ok:false,status:0}` on
+  network error so every action reports "server isn't answering"; Back to
+  the bare URL shows the default view (`tfmDefaultView`); unsaved-work
+  check covers `[data-unsaved-scope]` rows with `markSaved` baselines;
+  modal focus trap; pulse card and logo consistent after adopted runs.
+
+**Process notes**: Haiku coders on worktrees with narrow briefs + a full
+review of each branch worked; two left features undocumented because the
+code wasn't in their checkout (correct: fill in after merge). Test trap:
+`auth._stored_cache` keeps another module's saved sign-in for a few
+seconds; a fixture that needs auth OFF must `auth._invalidate()` and
+reset the module globals (see tests/test_hardening_2_5_7.py). Sophos facts
+(SFOS 21.5 help): the feed URL is just "URL" (HTTPS not stated as
+required), "Validate server certificate" is an optional checkbox with CA
+upload, no CIDR/ranges/IPv6, small XGS poll 24 h+. **2.6 stays separate**:
+the application lists + the five enhancement issues start on their own
+branch after 2.5.7 ships.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
