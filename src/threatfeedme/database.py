@@ -1846,6 +1846,18 @@ class Database:
                     "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
                     (feed.name,),
                 )
+                # A new URL is a new source. Its membership baseline (and the
+                # shrink guard's streak and accepted-collapse flag) describe the
+                # OLD list: left in place, the first fetch of the new list is
+                # diffed against it, so a legitimate new list reads as a mass
+                # leave or a "collapse". Same reset remove_feed performs.
+                cur.execute("DELETE FROM source_state WHERE source_name = ?", (feed.name,))
+                cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (feed.name,))
+                cur.execute("DELETE FROM source_left WHERE source_name = ?", (feed.name,))
+                cur.execute(
+                    "DELETE FROM settings WHERE key IN (?, ?)",
+                    (SHRINK_STREAK_KEY.format(feed.name), SHRINK_ACCEPTED_KEY.format(feed.name)),
+                )
 
     def remove_feed(self, name: str) -> bool:
         """Remove a configured feed and purge the data it contributed.

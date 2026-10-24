@@ -50,8 +50,8 @@ def _stub_get(monkeypatch, responses):
     return calls
 
 
-def _http_feed(name="f"):
-    return FeedSource(name=name, url="http://feeds.example/list.txt",
+def _http_feed(name="f", url="http://feeds.example/list.txt"):
+    return FeedSource(name=name, url=url,
                       feed_type=FeedType.CUSTOM, weight=0.6, update_interval=3600)
 
 
@@ -189,3 +189,34 @@ def test_refill_after_accepted_collapse_writes_no_arrivals(tmp_path, monkeypatch
     _refresh(db, ing, feed, config)
     assert _churn_counts(db) == (202, 1)
     assert db.source_state_count("f") == 199
+
+
+# ---- 3. a URL change starts a fresh baseline --------------------------------
+
+def test_url_change_starts_a_fresh_baseline(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "t.db"))
+    feed = _http_feed()
+    db.add_feed(feed)
+    old = {f"185.8.0.{i}" for i in range(1, 501)}
+    db.add_indicators_bulk([(v, {}) for v in old], "f")
+    db.update_source_sightings("f", old, "2026-10-20T00:00:00+00:00")
+    assert db.source_state_count("f") == 500
+
+    # The operator re-points the feed at a different list.
+    moved = _http_feed(url="https://b.example/new.txt")
+    db.add_feed(moved)
+    assert db.source_state_count("f") == 0
+    with db._cursor() as cur:
+        for table in ("source_seeded", "source_left"):
+            assert cur.execute(f"SELECT COUNT(*) FROM {table} WHERE source_name = 'f'"
+                               ).fetchone()[0] == 0
+
+    # Its first fetch is a 12-entry list, disjoint from the old one. That is a
+    # new baseline: not a collapse of the old 500, and no churn events.
+    new_list = "\n".join(f"185.9.0.{i}" for i in range(1, 13)) + "\n"
+    _stub_get(monkeypatch, [_FakeResponse(200, {}, new_list)])
+    before = _churn_counts(db)
+    res = _refresh(db, FeedIngestor(db), moved, _config(tmp_path))
+    assert res.get("warning") is None
+    assert db.source_state_count("f") == 12
+    assert _churn_counts(db) == before
