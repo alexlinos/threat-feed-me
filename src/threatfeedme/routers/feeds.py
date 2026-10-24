@@ -1,4 +1,5 @@
 """Feed source management, custom-list uploads, and manual refresh endpoints."""
+import logging
 import math
 import os
 import re
@@ -8,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from threatfeedme import pipeline
+from threatfeedme import jobs, pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
 from threatfeedme.credentials import KeyPolicy, split_vars
@@ -19,6 +20,7 @@ from threatfeedme.schemas import ApiKeyRequest, FeedRequest, WhitelistResponse
 from threatfeedme.scorer import fp_penalty_factor
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Uploaded custom lists are stored here (never a client-supplied path), and all
 # runtime local-file feeds must resolve within this directory.
@@ -277,15 +279,40 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
     )
 
 
+def _delete_upload_file(name: str) -> None:
+    """Remove a deleted local-file feed's stored list. Only ever a path that
+    _safe_upload_path derives from the name and that is contained in
+    UPLOAD_DIR; a missing file is fine (already gone)."""
+    try:
+        path = _safe_upload_path(name)
+    except ValueError:
+        return
+    if not _is_within_uploads(path):
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning(f"could not remove upload for deleted feed '{name}': {e}")
+
+
 @router.delete("/api/feeds/{name}")
 def delete_feed(name: str, _=Depends(require_auth), _csrf=Depends(csrf_check)):
     """Remove a configured feed source (and purge the data it contributed)."""
-    if core.db.remove_feed(name):
+    # Held across the delete AND the rescore. remove_feed is one long
+    # transaction over the whole indicator table; outside the lock it raced the
+    # other heavy writers past the 5 s busy_timeout ("database is locked").
+    with jobs.write_lock:
+        feed = core.db.get_feed_source(name)
+        if not core.db.remove_feed(name):
+            raise HTTPException(status_code=404, detail="Feed not found")
+        if feed is not None and feed.local_file:
+            _delete_upload_file(name)
         # Purging that feed's source attributions changes source counts, so
         # rescore the remaining indicators to update their tiers.
         pipeline.recalculate(core.db, core.config)
-        return {"success": True, "message": f"Feed '{name}' removed"}
-    raise HTTPException(status_code=404, detail="Feed not found")
+    return {"success": True, "message": f"Feed '{name}' removed"}
 
 
 @router.post("/api/feeds/restore-defaults")
