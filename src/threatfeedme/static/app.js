@@ -5,10 +5,19 @@
 // opts defaults: a GET caller has no options to pass, and omitting the
 // argument used to throw synchronously here — before any promise existed, so
 // the caller's .catch() never ran and the UI hung on its loading state.
+// A network failure (server restarting, upgrading, unreachable) RESOLVES to a
+// synthetic response instead of rejecting. Callers already branch on r.ok and
+// show j.detail, so the message lands in their alert or status line; the
+// rejection used to be silent in about twenty callers that had no catch.
+const SERVER_UNREACHABLE = 'The server isn’t answering (restarting or upgrading?)';
 function apiFetch(url, opts = {}) {
     const h = opts.headers || {};
     opts.headers = Object.assign(h, {'X-Requested-With': 'XMLHttpRequest'});
-    return fetch(url, opts);
+    return fetch(url, opts).catch(() => ({
+        ok: false, status: 0,
+        json: async () => ({detail: SERVER_UNREACHABLE}),
+        text: async () => '',
+    }));
 }
 
 // Refresh the page after a mutation. NOT location.reload(): Firefox restores
@@ -140,7 +149,7 @@ async function removeFeed(name, btn) {
     if (r && r.ok) { reloadPage(); return; }
     if (btn) { btn.disabled = false; btn.textContent = label; }
     const j = r ? await r.json().catch(() => ({})) : {};
-    alert('Could not remove feed' + (j.detail ? ': ' + j.detail : r ? '' : ' (server not answering)'));
+    alert('Could not remove feed' + (j.detail ? ': ' + detailText(j.detail) : r ? '' : ' (server not answering)'));
 }
 // Flip a feed on/off. Update the row's dimmed styling immediately so the
 // change is visible without waiting for a full page reload (the row used to
@@ -243,28 +252,49 @@ const _MODAL_CLOSERS = {
     'key-modal': () => closeKeyModal(),
     'unifi-creds-modal': () => closeUnifiCredsModal(),
     'cs-creds-modal': () => closeCsCredsModal(),
-    'fp-modal': () => (typeof closeFpModal === 'function' ? closeFpModal()
-                       : document.getElementById('fp-modal').classList.remove('open')),
+    'fp-modal': () => closeFpModal(),
     'wl-modal': () => closeWlModal(),
 };
+// While a modal is open, Esc closes it and Tab stays inside it. Without the
+// trap, Tab walked off the dialog into the page behind the overlay, where the
+// controls still took focus and the background looked live.
+const _MODAL_FOCUSABLE = 'input, select, textarea, button, a[href]';
 document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
     const open = document.querySelector('.modal-overlay.open');
-    if (open && _MODAL_CLOSERS[open.id]) { e.preventDefault(); _MODAL_CLOSERS[open.id](); }
+    if (!open) return;
+    if (e.key === 'Escape') {
+        if (_MODAL_CLOSERS[open.id]) { e.preventDefault(); _MODAL_CLOSERS[open.id](); }
+        return;
+    }
+    if (e.key !== 'Tab') return;
+    const f = [...open.querySelectorAll(_MODAL_FOCUSABLE)]
+        .filter(el => !el.disabled && el.getClientRects().length > 0);
+    if (!f.length) { e.preventDefault(); return; }
+    const first = f[0], last = f[f.length - 1], a = document.activeElement;
+    const inside = open.contains(a);
+    if (e.shiftKey) {
+        if (!inside || a === first) { e.preventDefault(); last.focus(); }
+    } else if (!inside || a === last) { e.preventDefault(); first.focus(); }
 });
 async function saveInterval() {
-    const v = parseInt(document.getElementById('interval-min').value, 10);
+    const el = document.getElementById('interval-min');
+    const v = parseInt(el.value, 10);
     if (!v || v < 1) { alert('Enter a whole number of minutes (>= 1)'); return; }
     const r = await apiFetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({refresh_interval_minutes: v})});
-    alert(r.ok ? 'Auto-refresh set to every ' + v + ' min' : 'Could not save');
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert('Could not save: ' + (detailText(j.detail) || r.status)); return; }
+    el.defaultValue = el.value;   // saved: no longer an unsaved edit (pageHasUnsavedWork)
+    alert('Auto-refresh set to every ' + v + ' min');
 }
 async function saveRetention() {
-    const v = parseInt(document.getElementById('retention-days').value, 10);
+    const el = document.getElementById('retention-days');
+    const v = parseInt(el.value, 10);
     if (isNaN(v) || v < 0 || v > 3650) { alert('Enter a whole number of days (0-3650; 0 = keep forever)'); return; }
     const r = await apiFetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({retention_max_age_days: v})});
-    alert(r.ok ? (v === 0 ? 'Retention set to keep IPs forever' : 'Retention set to ' + v + ' days') : 'Could not save');
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert('Could not save: ' + (detailText(j.detail) || r.status)); return; }
+    el.defaultValue = el.value;
+    alert(v === 0 ? 'Retention set to keep IPs forever' : 'Retention set to ' + v + ' days');
 }
 function refreshAll(btn) { startRefresh(null, btn); }
 function refreshFeed(name, btn) { startRefresh(name, btn); }
@@ -288,7 +318,11 @@ function setRunningUi(initiator) {
     // The toolbar button always shows the run; a row that started it does too.
     [globalBtn, initiator].forEach(b => {
         if (!b) return;
-        if (!b.dataset.label) b.dataset.label = b.innerHTML;
+        // A button still showing a flashButton message ("Failed") keeps its
+        // real label in dataset.restore: capturing innerHTML here stored
+        // "Failed" as the label for good.
+        if (!b.dataset.label) b.dataset.label = b.dataset.restore || b.innerHTML;
+        delete b.dataset.restore;
         b.innerHTML = FEEDING_HTML;
         b.classList.add('refreshing');
     });
@@ -310,9 +344,13 @@ function endRefreshUi() {
 // page, often a screen away: say it on the button too, briefly.
 function flashButton(btn, text) {
     if (!btn || btn.id === 'refresh-all-btn') return;
-    const label = btn.innerHTML;
+    if (!btn.dataset.restore) btn.dataset.restore = btn.innerHTML;   // the real label, not a flash
+    const label = btn.dataset.restore;
     btn.textContent = text;
-    setTimeout(() => { if (!btn.classList.contains('refreshing')) btn.innerHTML = label; }, 3000);
+    setTimeout(() => {
+        if (btn.classList.contains('refreshing')) return;   // setRunningUi owns it now
+        btn.innerHTML = label; delete btn.dataset.restore;
+    }, 3000);
 }
 async function startRefresh(name, initiator) {
     if (refreshActive) return;          // buttons are disabled; belt and braces
@@ -330,7 +368,7 @@ async function startRefresh(name, initiator) {
         // showing it and reload when it ends; say this click didn't start it.
         status.textContent = 'A refresh was already running (this click did not start another); ' +
                              'this page updates when it finishes.';
-    } else if (!r || r.status === 502 || r.status === 503 || r.status === 504) {
+    } else if (!r || r.status === 0 || r.status === 502 || r.status === 503 || r.status === 504) {
         // Server (or its proxy) not answering: typically a tab left open across
         // an upgrade. The poller waits for it and reloads once it's back.
         status.textContent = 'The server isn’t answering (restarting or upgrading?); still trying…';
@@ -387,7 +425,10 @@ function setBrandState(state) {
 // and an open key dialog would lose the secret being typed).
 function pageHasUnsavedWork() {
     if (document.querySelector('.modal-overlay.open')) return true;
-    return [...document.querySelectorAll('form input, form textarea, form select')].some(el => {
+    // The Schedule rows and the Connect settings are not forms; they carry
+    // data-unsaved-scope (dashboard.html) so an edit there counts too.
+    return [...document.querySelectorAll('form input, form textarea, form select, ' +
+                                         '[data-unsaved-scope] input, [data-unsaved-scope] textarea, [data-unsaved-scope] select')].some(el => {
         // A browser fills these from saved logins on every load (System's
         // sign-in form): that is not typing, and it blocked every auto-reload.
         if (/^(username|current-password)$/.test(el.autocomplete)) return false;
@@ -400,6 +441,18 @@ function pageHasUnsavedWork() {
             return el.multiple ? opts.some(o => o.selected !== o.defaultSelected) : el.selectedIndex !== dflt;
         }
         return el.value !== el.defaultValue;
+    });
+}
+// Make the current values the saved baseline. pageHasUnsavedWork compares
+// against the defaults (defaultValue / defaultChecked / defaultSelected), so a
+// value the server fills in with .value is not an operator edit: call this
+// after loading or saving a settings panel.
+function markSaved(root) {
+    if (!root) return;
+    root.querySelectorAll('input, select, textarea').forEach(el => {
+        if (el.type === 'checkbox' || el.type === 'radio') el.defaultChecked = el.checked;
+        else if (el.tagName === 'SELECT') [...el.options].forEach(o => { o.defaultSelected = o.selected; });
+        else if (el.type !== 'file') el.defaultValue = el.value;
     });
 }
 function reloadWhenIdle(status, delay) {
@@ -438,6 +491,13 @@ async function pollRefresh() {
     }
     pollActive = false;
     endRefreshUi();
+    // The pulse card's "refreshing now…" is only ever cleared by
+    // updateRefreshPulse, which runs every 30 s: an adopted run would show it
+    // for up to that long after the run ended. Flip it here, now.
+    const idleEl = document.getElementById('pulse-refresh-idle');
+    const runEl = document.getElementById('pulse-refresh-run');
+    if (idleEl) idleEl.hidden = false;
+    if (runEl) runEl.hidden = true;
     if (reconnected && !j.last_finished) {
         // a restarted server has no record of the run it was in
         status.textContent = 'The server restarted. Reloading…';
@@ -457,7 +517,7 @@ async function pollRefresh() {
         ? ('Refresh complete — ' + failed.length + ' feed' + (failed.length > 1 ? 's' : '') +
            ' errored: ' + failed.join(', ') + '.')
         : 'Refresh complete.';
-    setBrandState(brandFailing(j, failed) ? 'error' : '');
+    setBrandState((j.last_error || brandFailing(j, failed)) ? 'error' : '');
     // Reload so the table (health badges, "needs attention" flags) reflects
     // the run; linger longer when there's an error to read. A run this page
     // only watched leaves the page where the operator is and offers it.
@@ -469,7 +529,7 @@ async function restoreDefaults() {
     const r = await apiFetch('/api/feeds/restore-defaults', {method:'POST'});
     const j = await r.json().catch(() => ({}));
     if (r.ok) { alert(j.count ? ('Added: ' + j.added.join(', ')) : 'All default feeds already present'); reloadPage(); }
-    else { alert('Could not restore defaults'); }
+    else { alert('Could not restore defaults: ' + (detailText(j.detail) || r.status)); }
 }
 
 // ---- Merged indicators ----
@@ -561,11 +621,6 @@ async function addIndicator(e) {
     else { alert('Could not add: ' + (j.message || detailText(j.detail) || r.status)); }
     return false;
 }
-async function removeIndicator(ip) {
-    if (!confirm('Remove ' + ip + '? It will be globally whitelisted so refreshes won\'t re-add it.')) return;
-    const r = await apiFetch('/api/indicators/' + encodeURIComponent(ip), {method:'DELETE'});
-    if (r.ok) { loadIndicators(); } else { alert('Could not remove'); }
-}
 
 // ---- False-positive modal (opened from a feed row's "N FP" badge) ----
 // Lets an operator review what a feed was penalized for and forgive it,
@@ -594,13 +649,13 @@ async function clearOneFp(ip) {
     if (!fpModalFeed) return;
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) +
         '/false-positives?ip=' + encodeURIComponent(ip), {method: 'DELETE'});
-    if (r.ok) { reloadPage(); } else { alert('Could not clear'); }
+    if (r.ok) { reloadPage(); } else { const j = await r.json().catch(() => ({})); alert('Could not clear: ' + (detailText(j.detail) || r.status)); }
 }
 async function clearAllFp() {
     if (!fpModalFeed) return;
     if (!confirm('Clear all false-positive flags against "' + fpModalFeed + '"?\n\nThe feed\'s reputation penalty is removed. Whitelisted IPs stay whitelisted.')) return;
     const r = await apiFetch('/api/feeds/' + encodeURIComponent(fpModalFeed) + '/false-positives', {method: 'DELETE'});
-    if (r.ok) { reloadPage(); } else { alert('Could not clear'); }
+    if (r.ok) { reloadPage(); } else { const j = await r.json().catch(() => ({})); alert('Could not clear: ' + (detailText(j.detail) || r.status)); }
 }
 
 // ---- Whitelist modal (shows which feed reported the IP) ----
@@ -676,7 +731,7 @@ function updateRefreshPulse() {
         }
         if (refreshActive) return;   // our poller is finishing it off
         // Idle: mascot reflects whether any enabled feed is failing right now.
-        setBrandState(brandFailing(j, failedFeeds(j.last_result)) ? 'error' : '');
+        setBrandState((j.last_error || brandFailing(j, failedFeeds(j.last_result))) ? 'error' : '');
         if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
         const ageMin = Math.max(0, Math.floor((Date.now() - Date.parse(j.last_finished)) / 60000));
         n.innerHTML = ageMin + 'm<small> ago</small>';
@@ -778,8 +833,11 @@ function loadGeoOnce() {
     // Country shapes are a static 64 KB file fetched only on first expand, so
     // a dashboard load that never opens this panel pays nothing for the map.
     // A failed map fetch still renders the ranked list.
+    // apiFetch resolves (not rejects) on a network failure, so a read that
+    // needs data must check ok itself or it would render the error body.
+    const okJson = r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
     Promise.all([
-        apiFetch('/api/geo/countries').then(r => r.json()),
+        apiFetch('/api/geo/countries').then(okJson),
         fetch('/static/world-paths.json').then(r => r.json()).catch(() => null),
     ]).then(([data, world]) => renderGeo(data, world))
         .catch(() => {
@@ -841,7 +899,8 @@ function loadTldsOnce() {
     tldLoaded = true;
     const wrap = document.querySelector('#tld-panel .tld-wrap');
     if (wrap) wrap.innerHTML = '<p class="muted">Loading TLD data…</p>';
-    apiFetch('/api/domains/tlds').then(r => r.json()).then(renderTlds)
+    apiFetch('/api/domains/tlds').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(renderTlds)
         .catch(() => {
             tldLoaded = false;  // allow a retry on the next expand
             const w = document.querySelector('#tld-panel .tld-wrap');
@@ -888,11 +947,14 @@ async function loadUnifiOnce() {
     if (unifiLoaded) return;
     unifiLoaded = true;
     try {
-        const s = await (await apiFetch('/api/integrations/unifi')).json();
+        const r = await apiFetch('/api/integrations/unifi');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const s = await r.json();
         document.getElementById('unifi-enabled').checked = !!s.enabled;
         document.getElementById('unifi-host').value = s.host || '';
         document.getElementById('unifi-tier').value = s.tier || 'high';
         document.getElementById('unifi-domain-tier').value = s.domain_tier || '';
+        markSaved(document.getElementById('unifi-panel'));
         unifiRenderStatus(s);
     } catch (e) {
         unifiLoaded = false;
@@ -940,6 +1002,7 @@ async function unifiSave(quiet) {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
+        markSaved(document.getElementById('unifi-panel'));   // saved: what is shown is the baseline now
         unifiRenderStatus(j);
         // A new gateway host clears the saved login server-side (it was bound
         // to the old gateway) — say so, even on a quiet save, or the next
@@ -965,7 +1028,7 @@ function closeUnifiCredsModal() {
     // Clear the fields on close so the password never lingers in the DOM.
     document.getElementById('unifi-cred-user').value = '';
     document.getElementById('unifi-cred-pass').value = '';
-    document.getElementById('unifi-creds-modal').classList.remove('open');
+    closeModal('unifi-creds-modal');   // returns focus to the opener, like the others
 }
 async function saveUnifiCreds() {
     const body = {
@@ -1042,12 +1105,15 @@ async function loadCsOnce() {
     if (csLoaded) return;
     csLoaded = true;
     try {
-        const s = await (await apiFetch('/api/integrations/crowdsec')).json();
+        const r = await apiFetch('/api/integrations/crowdsec');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const s = await r.json();
         document.getElementById('cs-enabled').checked = !!s.enabled;
         document.getElementById('cs-lapi').value = s.lapi_url || '';
         document.getElementById('cs-tier').value = s.tier || 'medium';
         document.getElementById('cs-duration').value = s.duration_hours || 24;
         document.getElementById('cs-console').value = s.console_integration_id || '';
+        markSaved(document.getElementById('crowdsec-panel'));
         csRenderStatus(s);
     } catch (e) {
         csLoaded = false;
@@ -1072,6 +1138,7 @@ async function csSave(quiet) {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { alert('Could not save: ' + (detailText(j.detail) || r.status)); return false; }
+    markSaved(document.getElementById('crowdsec-panel'));
     csRenderStatus(j);
     if (j.credentials_cleared) {
         alert('The LAPI address changed, so the saved CrowdSec credentials were cleared '
@@ -1090,7 +1157,7 @@ function openCsCredsModal() {
 }
 function closeCsCredsModal() {
     _csCredFields().forEach(f => { f.value = ''; });   // never linger in the DOM
-    document.getElementById('cs-creds-modal').classList.remove('open');
+    closeModal('cs-creds-modal');
 }
 async function _postCsCreds(body) {
     const r = await apiFetch('/api/integrations/crowdsec/credentials', {
@@ -1167,9 +1234,11 @@ async function recalcNow(btn) {
 // dashboard.html already picked the first one before paint.
 const VIEWS = ['guide', 'lists', 'feeds', 'integrations', 'system'];
 function showView(v, focus) {
-    if (VIEWS.indexOf(v) < 0) return;
     const root = document.documentElement;
     if (!root.hasAttribute('data-view')) return;          // not the dashboard page
+    // Empty or unknown hash (Back to the bare URL): show the page's default
+    // view, the same rule the inline picker in dashboard.html applies.
+    if (VIEWS.indexOf(v) < 0) v = typeof window.tfmDefaultView === 'function' ? window.tfmDefaultView() : 'lists';
     if (root.getAttribute('data-view') !== v) window.scrollTo(0, 0);
     root.setAttribute('data-view', v);
     if (v === 'integrations') { loadUnifiOnce(); loadCsOnce(); }
@@ -1220,6 +1289,7 @@ function leaveGuide() {
 // "/" jumps to the lookup box, unless the operator is typing somewhere.
 document.addEventListener('keydown', (e) => {
     if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (document.querySelector('.modal-overlay.open')) return;   // the dialog owns the keyboard
     const t = e.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
     const box = document.getElementById('lookup-ip');
@@ -1357,7 +1427,7 @@ async function saveSignin(e) {
         const r = await apiFetch('/api/dashboard-auth', {method: 'POST',
             headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         const j = await r.json().catch(() => ({}));
-        if (!r.ok) { out.textContent = j.detail || ('Could not save (HTTP ' + r.status + ')'); return false; }
+        if (!r.ok) { out.textContent = detailText(j.detail) || ('Could not save (HTTP ' + r.status + ')'); return false; }
     } catch (err) { out.textContent = 'Could not save the sign-in.'; return false; }
     out.textContent = 'Saved. Your browser will ask you to sign in with it now.';
     setTimeout(reloadPage, 1200);
@@ -1376,7 +1446,7 @@ async function addHostName(e, where) {
         const r = await apiFetch('/api/host-check/resolve', {method: 'POST',
             headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name})});
         res = await r.json().catch(() => ({}));
-        if (!r.ok) { out.innerHTML = '<span class="warn">' + esc(res.detail || ('Error ' + r.status)) + '</span>'; return false; }
+        if (!r.ok) { out.innerHTML = '<span class="warn">' + esc(detailText(res.detail) || ('Error ' + r.status)) + '</span>'; return false; }
     } catch (err) { out.textContent = 'Could not check the name.'; return false; }
     if (!(await saveHostName(res.name))) { out.textContent = ''; return false; }
     input.value = '';
