@@ -621,11 +621,6 @@ async function addIndicator(e) {
     else { alert('Could not add: ' + (j.message || detailText(j.detail) || r.status)); }
     return false;
 }
-async function removeIndicator(ip) {
-    if (!confirm('Remove ' + ip + '? It will be globally whitelisted so refreshes won\'t re-add it.')) return;
-    const r = await apiFetch('/api/indicators/' + encodeURIComponent(ip), {method:'DELETE'});
-    if (r.ok) { loadIndicators(); } else { alert('Could not remove'); }
-}
 
 // ---- False-positive modal (opened from a feed row's "N FP" badge) ----
 // Lets an operator review what a feed was penalized for and forgive it,
