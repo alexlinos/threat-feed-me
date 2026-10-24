@@ -256,7 +256,7 @@
           <div class="step-text"><span class="step-num">02 · LISTS</span>
             <h3>Six lists, each with proof it's being pulled</h3>
             <p>High, Medium and Everything, for IPs and for domains. Every card shows how many entries its URL
-              serves right now and <b>“polled 3m ago by FortiGate”</b>, so a typo'd URL can't fail silently.</p></div>
+              serves right now and <b>“polled 4h ago by FortiGate”</b>, so a typo'd URL can't fail silently.</p></div>
           <div class="shot"><img src="assets/screens/lists.png" width="1440" height="1000" loading="lazy" alt="The Lists view"></div>
         </div>
         <div class="step">
@@ -319,7 +319,7 @@
           <span class="code-title">bash: run the published image</span>
           <button class="copy-btn" data-copy="run">Copy</button>
         </div>
-<pre id="run"><span class="k">docker</span> run -d --name threat-feed-me -p <span class="s">8080:8080</span> \
+<pre id="run"><span class="k">docker</span> run -d --name threat-feed-me --restart unless-stopped -p <span class="s">8080:8080</span> \
   -v threatfeedme-data:/app/data alexlinos/threat-feed-me:latest
 <span class="c"># then open the dashboard at http://&lt;this-server-ip&gt;:8080</span></pre>
       </div>
@@ -328,7 +328,7 @@
         Multi-arch image on Docker Hub: <code>alexlinos/threat-feed-me:latest</code>.
         On first start it fetches the 22 feeds (16 IP feeds plus URLhaus, OpenPhish,
         Phishing Army, HaGeZi TIF, Phishunt, and DRB-Ra C2 domain feeds), removes duplicates, sorts them into the three lists, and starts serving them,
-        then auto-refreshes every 60 minutes. Open the dashboard and the set-up guide takes it from
+        then refreshes each feed on its own schedule. Open the dashboard and the set-up guide takes it from
         there. Opt-in sources: your own
         <a href="https://www.crowdsec.net" target="_blank" rel="noopener">CrowdSec</a> detections and blocklists,
         <a href="https://honeydb.io" target="_blank" rel="noopener">HoneyDB</a> (including sensors <i>you</i>
