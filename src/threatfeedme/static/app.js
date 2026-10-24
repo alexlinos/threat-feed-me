@@ -303,7 +303,11 @@ function setRunningUi(initiator) {
     // The toolbar button always shows the run; a row that started it does too.
     [globalBtn, initiator].forEach(b => {
         if (!b) return;
-        if (!b.dataset.label) b.dataset.label = b.innerHTML;
+        // A button still showing a flashButton message ("Failed") keeps its
+        // real label in dataset.restore: capturing innerHTML here stored
+        // "Failed" as the label for good.
+        if (!b.dataset.label) b.dataset.label = b.dataset.restore || b.innerHTML;
+        delete b.dataset.restore;
         b.innerHTML = FEEDING_HTML;
         b.classList.add('refreshing');
     });
@@ -325,9 +329,13 @@ function endRefreshUi() {
 // page, often a screen away: say it on the button too, briefly.
 function flashButton(btn, text) {
     if (!btn || btn.id === 'refresh-all-btn') return;
-    const label = btn.innerHTML;
+    if (!btn.dataset.restore) btn.dataset.restore = btn.innerHTML;   // the real label, not a flash
+    const label = btn.dataset.restore;
     btn.textContent = text;
-    setTimeout(() => { if (!btn.classList.contains('refreshing')) btn.innerHTML = label; }, 3000);
+    setTimeout(() => {
+        if (btn.classList.contains('refreshing')) return;   // setRunningUi owns it now
+        btn.innerHTML = label; delete btn.dataset.restore;
+    }, 3000);
 }
 async function startRefresh(name, initiator) {
     if (refreshActive) return;          // buttons are disabled; belt and braces
@@ -468,6 +476,13 @@ async function pollRefresh() {
     }
     pollActive = false;
     endRefreshUi();
+    // The pulse card's "refreshing now…" is only ever cleared by
+    // updateRefreshPulse, which runs every 30 s: an adopted run would show it
+    // for up to that long after the run ended. Flip it here, now.
+    const idleEl = document.getElementById('pulse-refresh-idle');
+    const runEl = document.getElementById('pulse-refresh-run');
+    if (idleEl) idleEl.hidden = false;
+    if (runEl) runEl.hidden = true;
     if (reconnected && !j.last_finished) {
         // a restarted server has no record of the run it was in
         status.textContent = 'The server restarted. Reloading…';
@@ -487,7 +502,7 @@ async function pollRefresh() {
         ? ('Refresh complete — ' + failed.length + ' feed' + (failed.length > 1 ? 's' : '') +
            ' errored: ' + failed.join(', ') + '.')
         : 'Refresh complete.';
-    setBrandState(brandFailing(j, failed) ? 'error' : '');
+    setBrandState((j.last_error || brandFailing(j, failed)) ? 'error' : '');
     // Reload so the table (health badges, "needs attention" flags) reflects
     // the run; linger longer when there's an error to read. A run this page
     // only watched leaves the page where the operator is and offers it.
@@ -706,7 +721,7 @@ function updateRefreshPulse() {
         }
         if (refreshActive) return;   // our poller is finishing it off
         // Idle: mascot reflects whether any enabled feed is failing right now.
-        setBrandState(brandFailing(j, failedFeeds(j.last_result)) ? 'error' : '');
+        setBrandState((j.last_error || brandFailing(j, failedFeeds(j.last_result))) ? 'error' : '');
         if (!j.last_finished) return;  // still pre-first-fetch: leave as rendered
         const ageMin = Math.max(0, Math.floor((Date.now() - Date.parse(j.last_finished)) / 60000));
         n.innerHTML = ageMin + 'm<small> ago</small>';
