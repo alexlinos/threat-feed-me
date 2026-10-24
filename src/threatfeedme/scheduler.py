@@ -34,9 +34,29 @@ def _refresh_interval_minutes() -> int:
         return DEFAULT_REFRESH_MINUTES
 
 
+_warned_config: set = set()
+
+
+def _config_mapping(section: str, value) -> dict:
+    """A config mapping, or {} for an absent or null one. Any other shape
+    (`backup: true`, a bare string) is a malformed config: warn once per
+    section and use defaults. Raising here killed the scheduler thread
+    silently, so a bad backup block stopped every scheduled refresh too."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if section not in _warned_config:
+        _warned_config.add(section)
+        logger.warning(f"[config] '{section}' is not a mapping ({type(value).__name__}); "
+                       "using defaults")
+    return {}
+
+
 def _backup_cfg() -> dict:
     """Backup settings with sane defaults; dir defaults next to the database."""
-    cfg = dict(core.config.get('database', {}).get('backup', {}) or {})
+    database = _config_mapping('database', core.config.get('database'))
+    cfg = dict(_config_mapping('database.backup', database.get('backup')))
     cfg.setdefault('dir', os.path.join(os.path.dirname(core.db_path) or '.', 'backups'))
     cfg.setdefault('keep', 7)
     cfg.setdefault('interval_hours', 24)
@@ -148,8 +168,12 @@ def _scheduler_loop():
     short tick keeps shutdown prompt. The refresh lock still serializes against
     manual refreshes."""
     while not _scheduler_stop.wait(60):
-        # Time-based DB backup (independent of feed cadence).
-        _maybe_backup()
+        # Time-based DB backup (independent of feed cadence). Guarded like the
+        # due-check below: an exception here ends this thread for good.
+        try:
+            _maybe_backup()
+        except Exception as e:
+            logger.error(f"Scheduler backup check failed: {e}")
         try:
             due = pipeline.due_feeds(core.db, _refresh_interval_minutes() * 60)
         except Exception as e:  # never let a bad tick kill the scheduler thread

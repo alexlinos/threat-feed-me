@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from threatfeedme import core, jobs, pipeline
+from threatfeedme import core, jobs, pipeline, scheduler
 from threatfeedme.database import Database
 from threatfeedme.models import FeedSource, FeedType
 from threatfeedme.routers import feeds as feeds_router
@@ -192,3 +192,73 @@ def test_purge_survives_a_whitelist_past_the_bound_variable_limit(tmp_path):
     conn.close()
     assert remaining == {"192.0.2.10", "192.0.2.12", "203.0.113.3", "10.0.0.5", "203.0.113.9"}
     assert deleted == 3   # 203.0.113.1, 203.0.113.2 and the expired-whitelist 192.0.2.11
+
+
+# ---- 3. scheduler survives a malformed backup block -------------------------
+
+@pytest.fixture
+def sched_env(core_env, monkeypatch):
+    # Module-level imports only: a suite that purges and re-imports
+    # `threatfeedme` leaves an in-function import holding a different `core`
+    # than the one these tests patch, so the patches silently miss.
+    db, _ = core_env
+    monkeypatch.setitem(core.__dict__, "db_path", db.db_path)
+    monkeypatch.setitem(scheduler.__dict__, "_warned_config", set())
+    backups = []
+    monkeypatch.setitem(scheduler.__dict__, "_run_backup",
+                        lambda: backups.append(1) or "stub.db")
+    return scheduler, backups
+
+
+@pytest.mark.parametrize("database_block", [
+    {"path": "x.db", "backup": True},     # the dict(True) TypeError
+    {"path": "x.db", "backup": "yes"},    # a bare string
+    None,                                 # a null `database:` key
+])
+def test_maybe_backup_does_not_raise_on_a_malformed_block(sched_env, monkeypatch, database_block):
+    scheduler, backups = sched_env
+    monkeypatch.setitem(core.__dict__, "config", {"database": database_block})
+    cfg = scheduler._backup_cfg()          # defaults, not an exception
+    assert cfg["enabled"] is True and cfg["keep"] == 7
+    scheduler._maybe_backup()              # must not raise
+    assert backups == [1]                  # the defaults still back up
+
+
+def test_malformed_backup_block_warns_once(sched_env, monkeypatch):
+    scheduler, _ = sched_env
+    warnings = []
+
+    class StubLogger:
+        def warning(self, msg, *args, **kwargs):
+            warnings.append(msg)
+
+    # Checks the emission directly with a stub logger.
+    monkeypatch.setitem(scheduler.__dict__, "logger", StubLogger())
+    monkeypatch.setitem(core.__dict__, "config", {"database": {"backup": True}})
+    scheduler._backup_cfg()
+    scheduler._backup_cfg()
+    assert sum("'database.backup' is not a mapping" in w for w in warnings) == 1
+
+
+def test_scheduler_loop_keeps_ticking_after_a_backup_check_fails(sched_env, monkeypatch):
+    scheduler, _ = sched_env
+    monkeypatch.setitem(core.__dict__, "config", {"database": None})
+
+    def boom():
+        raise RuntimeError("backup exploded")
+
+    monkeypatch.setitem(scheduler.__dict__, "_maybe_backup", boom)
+    ticks = []
+
+    class OneTick:
+        """First wait() passes a tick; the second stops the loop."""
+        n = 0
+
+        def wait(self, timeout):
+            OneTick.n += 1
+            return OneTick.n > 1
+
+    monkeypatch.setitem(scheduler.__dict__, "_scheduler_stop", OneTick())
+    monkeypatch.setattr(pipeline, "due_feeds", lambda db, secs: ticks.append(1) or [])
+    scheduler._scheduler_loop()           # returns; does not raise out of the loop
+    assert ticks == [1]                   # the due-check still ran after the backup failure
