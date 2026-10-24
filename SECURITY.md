@@ -27,10 +27,38 @@ boundaries are deliberate and worth understanding:
 | Startup holding page | **Unauthenticated, static** | While a first start or an upgrade migrates the database, a stdlib server on the dashboard's port answers every request with one fixed 503 page (`Retry-After: 30`, `no-store`). It echoes nothing from the request, loads nothing external, and closes before the app binds the port. |
 | Liveness probe (`/healthz`) | **Unauthenticated, by design** | The container healthcheck must pass even when Basic auth is enabled (`/api/*` would 401). Returns `{"ok": true}` and nothing else. |
 | Dashboard + mutating API | Optional HTTP Basic auth — a sign-in set under System → Dashboard sign-in, or both `DASHBOARD_USER` and `DASHBOARD_PASSWORD` (the environment wins), turns it on (`dashboard.auth_required: true` also forces it, failing closed without them) | Open by default for trusted-LAN convenience; **enable auth on any network you don't fully trust.** |
-| TLS | **Not built in** | Terminate TLS at a reverse proxy in front of the container; `X-Forwarded-Proto`/`X-Forwarded-Host` are honored. |
+| TLS | **Opt-in**: set both `TFM_TLS_CERT` and `TFM_TLS_KEY` to serve HTTPS (see [TLS](#tls)), or terminate TLS at a reverse proxy in front of the container | A reverse proxy is still the better choice for public or auto-renewed certificates. |
 | Rate limiting | **None** | The service assumes a LAN with well-behaved clients. Do not expose it to the internet. |
 
 **Do not expose the dashboard or API directly to the internet.**
+
+**Behind a reverse proxy.** `X-Forwarded-Proto` and `X-Forwarded-Host` only
+change the feed URLs the dashboard displays (`_feed_base` in
+`feed_helpers.py`), so the links it shows use the scheme and host the proxy
+reports. The security checks do not read them: the host check
+(`HostCheckMiddleware` in `middleware.py`) and the first-password guard use
+the real `Host` header. Pass the original Host through to the container. nginx
+needs `proxy_set_header Host $host;`; Caddy does this by default. If the proxy
+rewrites Host to an IP address, the host check allows it, because IP-literal
+Hosts are always allowed, so the check refuses nothing. If the proxy rewrites
+Host to the container's own name, the host check refuses every request once it
+is switched on, because that name is not on the list.
+
+### TLS
+
+Setting **both** environment variables `TFM_TLS_CERT` and `TFM_TLS_KEY` (paths
+to PEM files inside the container, e.g. mounted from `./certs`) serves the
+dashboard and the list URLs over HTTPS on the same port. Setting only one of
+them refuses to start, with a clear error. The app never generates
+certificates (no ACME, no self-signed), so make one with:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 825 -subj "/CN=your.host.name"
+```
+
+Rotating a certificate means restarting the container. The "starting" holding
+page shown during a long first start is plain HTTP. For auto-renewed public
+certificates, put a reverse proxy such as Caddy in front instead.
 
 What the software stores, sends and logs, and to whom, is documented in
 [PRIVACY.md](PRIVACY.md).
@@ -191,6 +219,12 @@ you believe it is reachable, not just the CVE id.
   so anyone who can use the dashboard can point those integrations (and
   the credentials you saved for them, until the address change clears
   them) at a LAN host. Enable dashboard auth where that matters.
+- The UniFi and CrowdSec **Test connection** buttons report whether the
+  configured host could be reached and logged in to, so anyone who can use the
+  dashboard can probe LAN hosts with them. Enable sign-in where that matters.
+- GitHub Actions in `.github/workflows/` are pinned to major version tags
+  (`actions/checkout@v4`), not to commit SHAs. This is accepted because the
+  publish token is scoped to pushing the image.
 - With dashboard auth AND the host check both off (the defaults), a web
   page opened by anyone on your network can drive the dashboard through DNS
   rebinding: the browser treats the rebound page as same-origin, so the CSRF
