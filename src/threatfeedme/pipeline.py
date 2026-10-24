@@ -373,6 +373,12 @@ def _collapsed_fetch(db: Database, name: str, n_values: int) -> bool:
         streak = int(db.get_setting(key) or 0) + 1
         if streak < _COLLAPSE_ACCEPT_AFTER:
             db.set_setting(key, str(streak))
+            # The held fetch's validators must not survive it. A 304 on the
+            # next refresh touches source_state (the OLD, pre-collapse list),
+            # so the streak never advances and the feed keeps voting for its
+            # old membership forever. Clearing forces an unconditional
+            # re-fetch, which is what the streak is counting.
+            db.set_feed_http_cache(name, None, None)
             logger.warning(
                 f"[churn] {name}: list collapsed {prior} -> {n_values} "
                 f"({streak}/{_COLLAPSE_ACCEPT_AFTER}); treating as a bad fetch, "
