@@ -262,3 +262,97 @@ def test_scheduler_loop_keeps_ticking_after_a_backup_check_fails(sched_env, monk
     monkeypatch.setattr(pipeline, "due_feeds", lambda db, secs: ticks.append(1) or [])
     scheduler._scheduler_loop()           # returns; does not raise out of the loop
     assert ticks == [1]                   # the due-check still ran after the backup failure
+
+
+# ---- 4. the one-time migration VACUUM is retry-safe -------------------------
+
+def _bloat(path):
+    """Leave free pages in the file: a dropped table's pages sit on the
+    freelist until a VACUUM reclaims them."""
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE junk (x TEXT)")
+    conn.executemany("INSERT INTO junk VALUES (?)", [("x" * 512,)] * 4000)
+    conn.commit()
+    conn.execute("DROP TABLE junk")
+    conn.commit()
+    conn.close()
+
+
+def _freelist(path):
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute("PRAGMA freelist_count").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _setting(path, key):
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def test_pending_vacuum_runs_on_the_next_start_and_clears_its_marker(tmp_path):
+    path = str(tmp_path / "t.db")
+    Database(path)
+    _bloat(path)
+    assert _freelist(path) > 0
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('vacuum_pending', '1')")
+    conn.commit()
+    conn.close()
+
+    Database(path)                                  # the next start
+
+    assert _freelist(path) == 0                     # VACUUM ran
+    assert _setting(path, "vacuum_pending") is None  # marker cleared after it
+
+
+def test_without_the_marker_a_start_does_not_vacuum(tmp_path):
+    # Control: the VACUUM is one-time. A normal start leaves free pages alone.
+    path = str(tmp_path / "t.db")
+    Database(path)
+    _bloat(path)
+    Database(path)
+    assert _freelist(path) > 0
+
+
+def test_a_crash_during_the_vacuum_is_retried_on_the_next_start(tmp_path, monkeypatch):
+    path = str(tmp_path / "t.db")
+    Database(path)
+    _bloat(path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('vacuum_pending', '1')")
+    conn.commit()
+    conn.close()
+
+    class CrashOnVacuum:
+        """Connection proxy: the process 'dies' inside VACUUM."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def execute(self, sql, *args):
+            if sql.strip().upper().startswith("VACUUM"):
+                raise RuntimeError("killed during VACUUM")
+            return self._inner.execute(sql, *args)
+
+    real = Database._get_connection
+    monkeypatch.setattr(Database, "_get_connection",
+                        lambda self, any_thread=False: CrashOnVacuum(real(self, any_thread)))
+    with pytest.raises(RuntimeError, match="killed during VACUUM"):
+        Database(path)
+    monkeypatch.setattr(Database, "_get_connection", real)   # restore the real one
+
+    assert _freelist(path) > 0                      # the crash left the file bloated
+    assert _setting(path, "vacuum_pending") == "1"  # ...and the marker for the retry
+
+    Database(path)                                  # the restart
+    assert _freelist(path) == 0
+    assert _setting(path, "vacuum_pending") is None

@@ -525,13 +525,25 @@ class Database:
                     "WHERE metadata LIKE '%fetched_at%'")
                 migrated = migrated or cursor.rowcount > 0
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('metadata_slim', '1')")
-            conn.commit()
+            # The VACUUM is retry-safe. `vacuum_pending` is committed in the
+            # same transaction as the migration flags above, and cleared only
+            # after VACUUM commits. Without it, a kill during VACUUM left the
+            # flags committed and the file at its old size forever: the
+            # migration never ran again to reach the VACUUM.
+            cursor.execute("SELECT 1 FROM settings WHERE key = 'vacuum_pending'")
+            pending = cursor.fetchone() is not None
             if migrated:
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('vacuum_pending', '1')")
+                pending = True
+            conn.commit()
+            if pending:
                 # A DROP only frees pages inside the file; without this the
                 # main file (and every backup) stays at its old size.
                 logger.info("[migration] VACUUM to reclaim the space (one-time, may take minutes)...")
                 conn.execute("VACUUM")
                 logger.info("[migration] VACUUM done")
+                conn.execute("DELETE FROM settings WHERE key = 'vacuum_pending'")
+                conn.commit()
 
             conn.commit()
         finally:
