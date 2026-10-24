@@ -188,6 +188,17 @@ def test_unifi_login_proceeds_on_matching_or_absent_pin_and_reports_the_fingerpr
     assert p.test_connection()["cert_sha256"] == "cc" * 32
 
 
+def test_unifi_login_without_a_pin_never_probes(monkeypatch):
+    # The probe is a real socket: with nothing pinned there is nothing to
+    # compare, and probing anyway reached the real gateway from unit tests
+    # on a dev machine and timed out in CI (v2.5.7's first publish run).
+    from threatfeedme import pusher_unifi as pu
+    p, session = _pusher(monkeypatch, pinned=None, presented="aa" * 32)
+    monkeypatch.setitem(pu.__dict__, "cert_fingerprint",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("probe must not run")))
+    p.login(); assert len(session.posts) == 1 and p.seen_cert is None
+
+
 def test_unifi_pin_is_skipped_when_the_ca_check_is_on(monkeypatch):
     from threatfeedme import pusher_unifi as pu
     p, session = _pusher(monkeypatch, pinned="aa" * 32, presented="bb" * 32, verify=True)

@@ -848,6 +848,17 @@ branches, merged without conflict; every branch re-reviewed before merge):
   check covers `[data-unsaved-scope]` rows with `markSaved` baselines;
   modal focus trap; pulse card and logo consistent after adopted runs.
 
+**The first v2.5.7 tag never published**: CI's test step timed out in
+seven UniFi tests. The certificate probe ran on every `login()`, and the
+tests' fake session with verify off let `cert_fingerprint` open a REAL
+socket to the fake host; on the dev machine that host was the actual
+gateway (instant answer, tests green), on the runner it hung 20 s each.
+Fixed (probe only with a pin, or `learn=True` from Test connection), the
+unpublished tag was deleted and re-created on the fix. Lesson: a unit
+test must never be able to reach the network; anything that opens a
+socket needs an injectable seam, and "passes locally" is not evidence
+when the local network can answer.
+
 **Process notes**: Haiku coders on worktrees with narrow briefs + a full
 review of each branch worked; two left features undocumented because the
 code wasn't in their checkout (correct: fill in after merge). Test trap:

@@ -174,6 +174,7 @@ class UniFiPusher:
         """Login and READ the firewall groups — no writes. The dashboard's
         Test button, so the operator can verify host/credentials before
         enabling the push."""
+        self.check_certificate(learn=True)      # the pin's first look, or its check
         self.login()
         groups = self._api('GET', '/rest/firewallgroup')
         ours = [g.get('name') for g in groups
@@ -181,13 +182,16 @@ class UniFiPusher:
         return {"ok": True, "groups_total": len(groups), "our_groups": sorted(ours),
                 "cert_sha256": self.seen_cert}
 
-    def check_certificate(self) -> Optional[str]:
+    def check_certificate(self, learn: bool = False) -> Optional[str]:
         """The gateway's current certificate fingerprint, after comparing it
         with the pin. Only when verify_ssl is off (with it on, the CA check
-        already authenticates the gateway). A probe connection of its own:
-        requests gives no handle on the peer certificate, and an on-path
-        attacker who can intercept the login can intercept the probe."""
-        if self.session.verify:
+        already authenticates the gateway), and only when there is a pin to
+        compare against or the caller wants to learn one (Test connection):
+        an unpinned login has nothing to check, and probing anyway opened a
+        real socket from unit tests with a fake session. A probe connection
+        of its own: requests gives no handle on the peer certificate, and an
+        on-path attacker who can intercept the login can intercept the probe."""
+        if self.session.verify or not (self.pinned_cert or learn):
             return None
         self.seen_cert = cert_fingerprint(self.host, self.timeout)
         if self.pinned_cert and self.seen_cert != self.pinned_cert:
