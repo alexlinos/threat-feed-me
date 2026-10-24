@@ -127,6 +127,12 @@ _BACKFILL_DAYS = 14
 # refresh's rescore gate sees a leave even when no attribution row moved.
 MEMBERSHIP_STAMP_KEY = "membership_stamp"
 
+# Per-feed shrink-guard settings (pipeline._collapsed_fetch): the streak of
+# held-back fetches, and the size of a collapse accepted as the feed's real
+# list (cleared once the feed relists at the collapse threshold again).
+SHRINK_STREAK_KEY = "shrink_guard:{}"
+SHRINK_ACCEPTED_KEY = "shrink_accepted:{}"
+
 
 class Database:
     def __init__(self, db_path: str = "./data/threatfeedme.db"):
@@ -612,7 +618,8 @@ class Database:
             conn.close()
 
     def update_source_sightings(self, source_name: str, current_values: Set[str],
-                                tick: str, record: bool = True) -> Dict[str, int]:
+                                tick: str, record: bool = True,
+                                rebaseline: bool = False) -> Dict[str, int]:
         """Record a source's churn as TRANSITIONS, not presence snapshots.
 
         `record=False` (churn_log: false on a feed) diffs and syncs
@@ -640,6 +647,12 @@ class Database:
         arrival events: a baseline is a censoring boundary, not churn, and
         recording it would flood the log with one corpus-sized wave per feed
         (and pollute return-detection with meaningless "arrivals").
+
+        `rebaseline=True` is for a feed refilling after an accepted collapse
+        (pipeline._regrew_after_collapse). Its arrivals are the list coming
+        back from a stub the guard already accepted, not new churn: state is
+        synced and no arrival rows are written, so no leave->return pair
+        is manufactured. Leaves still record normally.
 
         Returns {"arrived": n, "left": n, "baseline": n}.
         """
@@ -671,7 +684,7 @@ class Database:
             arrived = current_values - prior
             left = prior - current_values
             if arrived:
-                if record:
+                if record and not rebaseline:
                     cur.executemany(
                         "INSERT OR REPLACE INTO churn.sightings (source_name, ip, tick, present) "
                         "VALUES (?, ?, ?, 1)",
@@ -1832,6 +1845,18 @@ class Database:
                 cur.execute(
                     "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
                     (feed.name,),
+                )
+                # A new URL is a new source. Its membership baseline (and the
+                # shrink guard's streak and accepted-collapse flag) describe the
+                # OLD list: left in place, the first fetch of the new list is
+                # diffed against it, so a legitimate new list reads as a mass
+                # leave or a "collapse". Same reset remove_feed performs.
+                cur.execute("DELETE FROM source_state WHERE source_name = ?", (feed.name,))
+                cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (feed.name,))
+                cur.execute("DELETE FROM source_left WHERE source_name = ?", (feed.name,))
+                cur.execute(
+                    "DELETE FROM settings WHERE key IN (?, ?)",
+                    (SHRINK_STREAK_KEY.format(feed.name), SHRINK_ACCEPTED_KEY.format(feed.name)),
                 )
 
     def remove_feed(self, name: str) -> bool:
