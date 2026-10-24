@@ -6,7 +6,9 @@ source of truth), not directly from config.
 """
 import logging
 import os
+import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -132,6 +134,26 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
     return results
 
 
+# The two small writes in recalculate open their own connections inside
+# database.py at the default 5 s busy_timeout. The write lock covers the
+# in-process writers, but the offline predict pass (another container) can hold
+# the WAL writer lock for a chunk, so these retry on "locked" for a bounded
+# time. Both are idempotent, so a retry is safe. (The 120 s path is set per
+# connection in scorer._write_changes, which these calls don't reach.)
+_LOCKED_RETRIES = 6
+_LOCKED_BACKOFF_S = 2.0
+
+
+def _retry_on_locked(fn, *args):
+    for attempt in range(_LOCKED_RETRIES):
+        try:
+            return fn(*args)
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == _LOCKED_RETRIES - 1:
+                raise
+            time.sleep(_LOCKED_BACKOFF_S * (attempt + 1))
+
+
 def recalculate(db: Database, config: Dict) -> int:
     """Recalculate confidence scores for all indicators. Serialized with every
     other heavy writer (jobs.write_lock): a request-triggered rescore waits
@@ -139,13 +161,13 @@ def recalculate(db: Database, config: Dict) -> int:
     with jobs.write_lock:
         # The grace lives in source_left's contents, so expire it first:
         # otherwise a recalc between refreshes scores last hour's grace.
-        db.prune_left_memberships(vote_grace_days(config))
+        _retry_on_locked(db.prune_left_memberships, vote_grace_days(config))
         scorer = ConfidenceScorer(db, scorer_config(db, config))
         count = scorer.recalculate_all_scores()
         # Tiers and scores changed in place — invisible to row counts — so tell
         # the feed cache its bodies are stale (feed_cache.serve_fingerprint).
         from threatfeedme.feed_cache import mark_scores_changed
-        mark_scores_changed(db)
+        _retry_on_locked(mark_scores_changed, db)
         return count
 
 
