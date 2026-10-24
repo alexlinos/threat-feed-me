@@ -246,3 +246,62 @@ def test_missing_config_file_is_an_error_not_an_empty_config(tmp_path):
     from threatfeedme import core
     with pytest.raises(FileNotFoundError, match="CONFIG_PATH"):
         core.load_config(str(tmp_path / "nope.yaml"))
+
+
+# ---- Talos scraper transport ------------------------------------------------
+
+class _TalosResp:
+    encoding = "utf-8"
+    headers = {"content-type": "text/plain"}
+
+    def __init__(self, text, status=200):
+        self.text, self.status_code = text, status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def iter_content(self, chunk_size=65536, decode_unicode=False):
+        yield self.text.encode()
+
+
+class _TalosSession:
+    def __init__(self, post_status=200):
+        self.headers, self.calls, self.post_status = {}, [], post_status
+
+    def get(self, url, **kw):
+        self.calls.append(("get", kw))
+        return _TalosResp('<input name="authenticity_token" value="tok123">')
+
+    def post(self, url, data=None, **kw):
+        self.calls.append(("post", kw))
+        return _TalosResp("" if self.post_status >= 300 else "203.0.113.9\n", self.post_status)
+
+
+def _talos(monkeypatch, tmp_path, allow_private, post_status=200):
+    from threatfeedme import feed_ingestor as fi
+    from threatfeedme.database import Database
+    from threatfeedme.models import FeedSource, FeedType
+    session = _TalosSession(post_status)
+    monkeypatch.setattr("requests.Session", lambda: session)
+    ing = fi.FeedIngestor(Database(str(tmp_path / "t.db")), allow_private_urls=allow_private)
+    feed = FeedSource(name="talos_snort", url=fi._TALOS_TERMS_URL, feed_type=FeedType.THREAT_INTEL)
+    return fi, ing, feed, session
+
+
+def test_talos_keeps_the_operators_proxy_only_when_private_urls_are_allowed(monkeypatch, tmp_path):
+    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False)
+    assert fi._scrape_talos(ing, feed) == "203.0.113.9"
+    assert session.trust_env is False
+    assert all(kw["proxies"] == fi._NO_PROXIES and kw["stream"] for _, kw in session.calls)
+    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=True)
+    fi._scrape_talos(ing, feed)
+    assert session.trust_env is True
+    assert all(kw["proxies"] is None for _, kw in session.calls)
+    assert session.calls[1][1]["allow_redirects"] is False
+
+
+def test_talos_accept_terms_redirect_is_an_error_not_an_empty_list(monkeypatch, tmp_path):
+    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False, post_status=302)
+    with pytest.raises(RuntimeError, match="redirect"):
+        fi._scrape_talos(ing, feed)

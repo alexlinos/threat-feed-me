@@ -669,13 +669,16 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
     # Same discipline as every other fetch path (review 2026-10-24): no env
     # proxies (the connect-time SSRF pin would check the proxy's address),
     # capped reads, and a bounded redirect chain for the GET only.
+    # allow_private_feed_urls keeps the operator's proxy, as on the generic
+    # path (the guard is off there too).
     session = requests.Session()
     session.headers["User-Agent"] = _TALOS_UA
-    session.trust_env = False
+    session.trust_env = bool(self.allow_private_urls)
     session.max_redirects = 3
+    proxies = None if self.allow_private_urls else _NO_PROXIES
     try:
         resp = session.get(_TALOS_TERMS_URL, timeout=_TALOS_TIMEOUT,
-                           proxies=_NO_PROXIES, stream=True)
+                           proxies=proxies, stream=True)
         resp.raise_for_status()
         page = _read_capped(resp, feed.name)
     except Exception as e:
@@ -708,9 +711,16 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
         post_resp = session.post(
             _TALOS_ACCEPT_URL,
             data={"authenticity_token": token, "commit": "Accept"},
-            timeout=_TALOS_TIMEOUT, proxies=_NO_PROXIES,
+            timeout=_TALOS_TIMEOUT, proxies=proxies,
             stream=True, allow_redirects=False,
         )
+        # raise_for_status passes a 3xx, and the redirect's (empty) body
+        # would read as an empty list that the shrink guard eventually
+        # accepts. A redirect here is a changed site, not a list: fail loud.
+        if 300 <= post_resp.status_code < 400:
+            raise RuntimeError(
+                f"Talos scraper: accept-terms answered HTTP {post_resp.status_code} "
+                "(a redirect); refusing to follow")
         post_resp.raise_for_status()
         body = _read_capped(post_resp, feed.name).strip()
     except Exception as e:

@@ -283,15 +283,12 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
     )
 
 
-def _delete_upload_file(name: str) -> None:
-    """Remove a deleted local-file feed's stored list. Only ever a path that
-    _safe_upload_path derives from the name and that is contained in
-    UPLOAD_DIR; a missing file is fine (already gone)."""
-    try:
-        path = _safe_upload_path(name)
-    except ValueError:
-        return
-    if not _is_within_uploads(path):
+def _delete_upload_file(feed: FeedSource) -> None:
+    """Remove a deleted local-file feed's stored list: the path the feed row
+    points at (what it actually read), never anywhere outside UPLOAD_DIR; a
+    missing file is fine (already gone)."""
+    path = os.path.realpath(feed.url or "")
+    if not feed.url or not _is_within_uploads(path):
         return
     try:
         os.remove(path)
@@ -312,7 +309,7 @@ def delete_feed(name: str, _=Depends(require_auth), _csrf=Depends(csrf_check)):
         if not core.db.remove_feed(name):
             raise HTTPException(status_code=404, detail="Feed not found")
         if feed is not None and feed.local_file:
-            _delete_upload_file(name)
+            _delete_upload_file(feed)
         # Purging that feed's source attributions changes source counts, so
         # rescore the remaining indicators to update their tiers.
         pipeline.recalculate(core.db, core.config)

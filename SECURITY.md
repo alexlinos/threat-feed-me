@@ -236,8 +236,9 @@ you believe it is reachable, not just the CVE id.
   configured host could be reached and logged in to, so anyone who can use the
   dashboard can probe LAN hosts with them. Enable sign-in where that matters.
 - GitHub Actions in `.github/workflows/` are pinned to major version tags
-  (`actions/checkout@v4`), not to commit SHAs. This is accepted because the
-  publish token is scoped to pushing the image.
+  (`actions/checkout@v4`), not to commit SHAs. An accepted risk: the only
+  secret those workflows hold is the Docker Hub token used to push the
+  image. Pin to SHAs in your fork if your threat model needs it.
 - With dashboard auth AND the host check both off (the defaults), a web
   page opened by anyone on your network can drive the dashboard through DNS
   rebinding: the browser treats the rebound page as same-origin, so the CSRF

@@ -24,7 +24,7 @@ published compose file). Nothing is written anywhere else.
 | Feed telemetry | Per-feed fetch times, counts, HTTP status, overlap and reputation metrics | `feeds`, `feed_stats`, `deleted_feeds` | Until the feed is deleted, then a tombstone with the name only |
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
-| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved whether the host check is switched on, the dashboard sign-in set on the System page (the username and a salted scrypt hash of the password, never the password itself), and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
+| Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved whether the host check is switched on, the dashboard sign-in set on the System page (the username and a salted scrypt hash of the password, never the password itself), the SHA-256 fingerprint of your UniFi gateway's TLS certificate once a Test connection has pinned it, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
 | Hostnames seen | The hostnames (from the `Host` header) the dashboard has been reached by, with a count and first/last time, so the System view can offer them for the host check. No client IP address. Capped at 200 names | Memory only, never written to disk | Until the process restarts |
 | Feed polls | Per served feed URL and TAXII collection: when it was last fetched, how many times, and the fetching client's User-Agent (truncated), so the dashboard can show "polled 3m ago by FortiGate". No client IP address | `settings` (`feed_polls`) | Overwritten on every poll; one entry per URL |
 | Uploaded lists | Custom indicator lists you upload through the dashboard, as text files | `uploads/` under the data directory | Deleted together with the feed, when you delete the feed |
@@ -74,7 +74,11 @@ the block lists and your UniFi credentials (from `UNIFI_USER` and
 network. Changing the gateway address clears the saved login, so it is
 never sent to a host other than the one it was entered for. Certificate
 verification is off by default because UDM certificates are self-signed;
-turn it on if your gateway has a real one.
+turn it on if your gateway has a real one. With it off, each login first
+opens a short TLS connection to the gateway only to read the certificate it
+presents, and compares its fingerprint with the one pinned on your first
+successful Test connection (see SECURITY.md); nothing is sent on that
+connection.
 
 **To your CrowdSec Local API, only if you configure it.** Publishing sends
 the chosen block-list tier (IP addresses and CIDR ranges, each as a ban
