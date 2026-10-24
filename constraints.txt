@@ -1,0 +1,31 @@
+# Transitive runtime lock (2.5.7). requirements.txt pins only the direct
+# dependencies; everything they pull in (starlette, anyio, h11, urllib3,
+# certifi, ...) used to float between rebuilds, so two builds of the same tag
+# could differ and the "same versions a year from now" promise did not hold
+# (a clean resolve on 2026-10-24 gave starlette 1.10.0 where the September
+# dev environment had 1.7.0). The Dockerfile and CI install with
+# `-c constraints.txt`; tests/test_dependency_pins.py keeps this file in
+# step with requirements.txt. Regenerate from a clean venv:
+#   python -m venv /tmp/lock && /tmp/lock/bin/pip install -r requirements.txt
+#   /tmp/lock/bin/pip freeze --exclude-editable > constraints.txt
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.10.23
+charset-normalizer==3.5.2
+click==8.5.0
+fastapi==0.133.1
+h11==0.16.0
+idna==3.15
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+pydantic==2.13.4
+pydantic_core==2.46.4
+python-multipart==0.0.32
+PyYAML==6.0.3
+requests==2.33.0
+starlette==1.10.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.8.0
+uvicorn==0.41.0

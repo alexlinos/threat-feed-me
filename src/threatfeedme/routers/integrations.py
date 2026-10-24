@@ -7,6 +7,7 @@ in the data-volume .env, applied to the process environment immediately,
 never echoed back in any response.
 """
 import json
+import logging
 import os
 import re
 from typing import Optional
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from threatfeedme.auth import csrf_check, require_auth
+from threatfeedme.feed_ingestor import _redact
 from threatfeedme import core
 from threatfeedme.pusher_unifi import (ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
                                        LAST_PUSH_KEY, UniFiPusher,
@@ -22,6 +24,7 @@ from threatfeedme.pusher_unifi import (ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
 from threatfeedme.routers.feeds import _write_env_var
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _VALID_TIERS = ("high", "medium", "low")
 # Bare hostname/IP or http(s) URL — enough to catch pastes of whole URLs
@@ -30,6 +33,28 @@ _HOST_RE = re.compile(r'^(https?://)?[A-Za-z0-9.:\[\]-]+/?$')
 # The site id is interpolated into authenticated gateway API paths, so '/',
 # '?', or '..' would retarget those calls; UniFi site ids are short slugs.
 _SITE_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+
+
+def _failure_reason(e: Exception) -> str:
+    """A fixed category, never the exception text. The gateway and LAPI hosts
+    are exempt from the SSRF guard by design, and the raw requests message
+    (refused vs timed out vs TLS vs HTTP status) let anyone who can use the
+    dashboard map LAN ports with the Test button (review 2026-10-24). The
+    detail still goes to the server log for the operator."""
+    import requests
+    logger.info("[integrations] %s: %s", type(e).__name__, _redact(str(e)))
+    if isinstance(e, requests.exceptions.SSLError):
+        return "TLS handshake failed (certificate not trusted, or the gateway's certificate changed)"
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return "could not reach the host"
+    if isinstance(e, requests.exceptions.HTTPError):
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403):
+            return "login refused"
+        return "unexpected response from the host"
+    if isinstance(e, RuntimeError):
+        return str(e)          # our own messages (credentials unset, certificate pin)
+    return "failed"
 
 
 def _host_key(host: str) -> str:
@@ -67,8 +92,20 @@ def _status() -> dict:
         "group_prefix": block.get("group_prefix", "threatfeedme"),
         # Presence only — the values are write-only by design.
         "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD)),
+        # The pinned gateway certificate (trust-on-first-use); "" = none yet.
+        "cert_sha256": block.get("cert_sha256") or "",
+        "verify_ssl": bool(block.get("verify_ssl", False)),
         "last_push": last,
     }
+
+
+def _saved_block() -> dict:
+    try:
+        raw = core.db.get_setting(SETTINGS_KEY)
+        stored = json.loads(raw) if raw else {}
+        return stored if isinstance(stored, dict) else {}
+    except Exception:
+        return {}
 
 
 @router.get("/api/integrations/unifi")
@@ -120,6 +157,7 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
             and _host_key(request.host) != _host_key(previous_host)):
         _clear_credentials()
         credentials_cleared = True
+        stored.pop("cert_sha256", None)     # the pin belongs to the old gateway
     for field in ("enabled", "host", "site", "tier", "domain_tier"):
         value = getattr(request, field)
         if value is not None:
@@ -155,11 +193,7 @@ def unifi_credentials(request: UniFiCredentialsRequest,
             "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD))}
 
 
-@router.post("/api/integrations/unifi/test")
-def unifi_test(_=Depends(require_auth), _csrf=Depends(csrf_check)):
-    """Login + read the gateway's firewall groups. NO writes — safe to run
-    before enabling. Errors come back as ok:false so the panel can show
-    them inline instead of a bare 500."""
+def _unifi_test_and_pin() -> dict:
     block = effective_block(core.db, core.config)
     pusher = UniFiPusher.from_block(block)
     if pusher is None:
@@ -169,13 +203,43 @@ def unifi_test(_=Depends(require_auth), _csrf=Depends(csrf_check)):
     try:
         result = pusher.test_connection()
     except Exception as e:
-        return {"ok": False, "message": f"Connection failed: {e}"}
+        return {"ok": False, "message": f"Connection failed: {_failure_reason(e)}"}
     n = len(result["our_groups"])
-    return {"ok": True,
-            "message": (f"Connected — {result['groups_total']} firewall group(s) on the gateway"
-                        + (f", {n} maintained by threat-feed-me" if n else
-                           "; none pushed yet (Push now, or wait for the next refresh)")),
-            **result}
+    message = (f"Connected — {result['groups_total']} firewall group(s) on the gateway"
+               + (f", {n} maintained by threat-feed-me" if n else
+                  "; none pushed yet (Push now, or wait for the next refresh)"))
+    # First successful test with verification off pins the certificate it
+    # saw; a later test against the same pin just confirms it (a changed one
+    # never gets here: login refuses it).
+    seen = result.get("cert_sha256")
+    if seen and not block.get("verify_ssl"):
+        if not block.get("cert_sha256"):
+            stored = _saved_block()
+            stored["cert_sha256"] = seen
+            core.db.set_setting(SETTINGS_KEY, json.dumps(stored))
+            message += f"; certificate pinned (sha256 {seen[:16]}…)"
+        else:
+            message += "; certificate matches the pin"
+    return {"ok": True, "message": message, **result}
+
+
+@router.post("/api/integrations/unifi/test")
+def unifi_test(_=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Login + read the gateway's firewall groups. NO writes to the gateway —
+    safe to run before enabling. Errors come back as ok:false so the panel
+    can show them inline instead of a bare 500."""
+    return _unifi_test_and_pin()
+
+
+@router.post("/api/integrations/unifi/trust-certificate")
+def unifi_trust_certificate(_=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Forget the pinned gateway certificate and test again, pinning whatever
+    the gateway presents now. For an operator who replaced the gateway's
+    certificate on purpose; a silent re-pin would defeat the pin."""
+    stored = _saved_block()
+    if stored.pop("cert_sha256", None) is not None:
+        core.db.set_setting(SETTINGS_KEY, json.dumps(stored))
+    return _unifi_test_and_pin()
 
 
 @router.post("/api/integrations/unifi/push")
@@ -188,7 +252,7 @@ def unifi_push(_=Depends(require_auth), _csrf=Depends(csrf_check)):
     try:
         summary = push_to_unifi(core.db, core.config)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Push failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Push failed: {_failure_reason(e)}")
     if summary is None:  # enabled flag raced off, or host missing
         raise HTTPException(status_code=400, detail="Integration is not fully configured")
     return {"success": True, "summary": summary}
@@ -338,7 +402,7 @@ def crowdsec_test(_=Depends(require_auth), _csrf=Depends(csrf_check)):
             out["checks"]["push"] = "machine login OK"
         except Exception as e:
             out["ok"] = False
-            out["checks"]["push"] = f"machine login failed: {e}"
+            out["checks"]["push"] = f"machine login failed: {_failure_reason(e)}"
     key = os.environ.get(_cs.ENV_BOUNCER_KEY)
     if key:
         try:
@@ -351,7 +415,7 @@ def crowdsec_test(_=Depends(require_auth), _csrf=Depends(csrf_check)):
             out["checks"]["pull"] = f"bouncer key OK, {n} active ban decision(s) to ingest"
         except Exception as e:
             out["ok"] = False
-            out["checks"]["pull"] = f"bouncer read failed: {e}"
+            out["checks"]["pull"] = f"bouncer read failed: {_failure_reason(e)}"
     if not out["checks"]:
         raise HTTPException(status_code=400, detail="Set the machine login and/or bouncer key first")
     out["message"] = "; ".join(f"{k}: {v}" for k, v in out["checks"].items())
@@ -366,7 +430,7 @@ def crowdsec_push(_=Depends(require_auth), _csrf=Depends(csrf_check)):
     try:
         summary = _cs.push_to_crowdsec(core.db, core.config, force=True)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Push failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Push failed: {_failure_reason(e)}")
     if summary is None:
         raise HTTPException(status_code=400, detail="Set the LAPI URL and machine login first")
     return {"success": True, "summary": summary}

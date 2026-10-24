@@ -24,6 +24,7 @@ dependencies = [
     "uvicorn==0.41.0",
     "python-multipart==0.0.32",  # keep in sync with requirements.txt (tests/test_dependency_pins.py enforces it)
     "pydantic==2.13.4",
+    "starlette==1.10.0",
 ]
 
 [tool.setuptools.packages.find]

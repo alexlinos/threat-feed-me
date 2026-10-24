@@ -89,7 +89,7 @@ def _serve(cfg, config_path=None):
     # where to go immediately (the point of watching the command line).
     print("\n" + "=" * 50)
     print(r"  \/\/\/  THREAT FEED ME!")
-    print(f"  Web UI:  http://{host}:{port}")
+    print(f"  Web UI:  {'https' if tls_files() else 'http'}://{host}:{port}")
     print("  Initial feed fetch is running in the background.")
     print("=" * 50 + "\n")
 
@@ -106,7 +106,39 @@ def _serve(cfg, config_path=None):
 
     # Run the server; this blocks until shutdown (SIGINT/SIGTERM).
     import uvicorn
-    uvicorn.run("threatfeedme.app:app", host=host, port=port)
+    uvicorn.run("threatfeedme.app:app", host=host, port=port, **tls_kwargs())
+
+
+# Bring-your-own certificate (2.5.7): appliances such as SonicWall want an
+# https:// list URL and MineMeld served its feeds over HTTPS, while the
+# one-container deployments this is sold on (NAS, Pi) have no proxy to
+# terminate TLS. uvicorn already speaks it; the app never issues or renews a
+# certificate (no ACME, no self-signed generation: that would add a crypto
+# dependency for what `openssl req` does in one line). Rotation = restart.
+TLS_CERT_ENV = "TFM_TLS_CERT"
+TLS_KEY_ENV = "TFM_TLS_KEY"
+
+
+def tls_files():
+    """(certfile, keyfile) when both variables are set, None when neither is.
+    One without the other, or an unreadable file, is a configuration error
+    and must stop the start: serving plain HTTP on the port the operator
+    expects to be encrypted is the silent failure to avoid."""
+    cert = (os.environ.get(TLS_CERT_ENV) or "").strip()
+    key = (os.environ.get(TLS_KEY_ENV) or "").strip()
+    if not cert and not key:
+        return None
+    if not (cert and key):
+        raise SystemExit(f"Set both {TLS_CERT_ENV} and {TLS_KEY_ENV}, or neither")
+    for label, path in ((TLS_CERT_ENV, cert), (TLS_KEY_ENV, key)):
+        if not os.path.isfile(path) or not os.access(path, os.R_OK):
+            raise SystemExit(f"{label}={path}: file is missing or not readable by the app user")
+    return cert, key
+
+
+def tls_kwargs() -> dict:
+    files = tls_files()
+    return {"ssl_certfile": files[0], "ssl_keyfile": files[1]} if files else {}
 
 
 # Served while --init-db runs: a first start after an upgrade can spend minutes

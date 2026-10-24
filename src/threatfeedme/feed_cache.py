@@ -69,14 +69,23 @@ def _dt_iso(raw):
         return raw
 
 
-def iter_rows(db, name: str, kind: str, limit: Optional[int] = None) -> Iterator[tuple]:
-    """Whitelist-filtered served rows for one feed URL, score order, <= limit."""
+def iter_rows(db, name: str, kind: str, limit: Optional[int] = None,
+              hosts_only: bool = False) -> Iterator[tuple]:
+    """Whitelist-filtered served rows for one feed URL, score order, <= limit.
+
+    hosts_only (?hosts=1) leaves out every network entry: Sophos Firewall's
+    third-party feeds take "one indicator per line" and reject ranges and
+    networks outright, and a CIDR is never expanded (a Spamhaus DROP /16
+    would be 65k lines). The row's own value is unchanged, so an entry with
+    a netblock is omitted, not shown as its anchor address."""
     tiers, scope = _FEEDS[name]
     wl_map = db.get_whitelist_map()
     served = 0
     for row in db.iter_served_rows(kind, tiers):
         if limit is not None and served >= limit:
             return
+        if hosts_only and row[1]:
+            continue
         if row_included(row[0], row[2], wl_map, tier=scope):
             served += 1
             yield row
@@ -105,30 +114,32 @@ def _lock_for(key) -> threading.Lock:
         return _locks.setdefault(key, threading.Lock())
 
 
-def _build_txt(db, name: str, kind: str, version: str) -> _TxtEntry:
+def _build_txt(db, name: str, kind: str, version: str, hosts_only: bool = False) -> _TxtEntry:
     buf = io.BytesIO()
     offsets = array("Q", [0])        # offsets[i] = byte offset after i lines
-    for row in iter_rows(db, name, kind):
+    for row in iter_rows(db, name, kind, hosts_only=hosts_only):
         buf.write(_value(row).encode() + b"\n")
         offsets.append(buf.tell())
     # stable across restarts (hash() is salted per process)
-    digest = hashlib.sha1(f"{kind}:{name}:{version}".encode()).hexdigest()[:16]
+    variant = ":hosts" if hosts_only else ""
+    digest = hashlib.sha1(f"{kind}:{name}:{version}{variant}".encode()).hexdigest()[:16]
     etag = f'"{digest}"'
     return _TxtEntry(version, buf.getvalue(), offsets, etag)
 
 
-def txt(db, name: str, kind: str, limit: Optional[int] = None) -> Tuple[bytes, str]:
+def txt(db, name: str, kind: str, limit: Optional[int] = None,
+        hosts_only: bool = False) -> Tuple[bytes, str]:
     """The .txt body (optionally the top `limit` lines) and its ETag.
     Single-flight per URL: concurrent polls wait for one build, never
-    run their own."""
-    key = (kind, name)
+    run their own. The hosts-only variant is its own cached body."""
+    key = (kind, name, hosts_only)
     version = db.serve_fingerprint()
     entry = _txt.get(key)
     if entry is None or entry.version != version:
         with _lock_for(key):
             entry = _txt.get(key)
             if entry is None or entry.version != version:
-                entry = _build_txt(db, name, kind, version)
+                entry = _build_txt(db, name, kind, version, hosts_only)
                 _txt[key] = entry
     if limit is None or limit >= len(entry.offsets) - 1:
         return entry.body, entry.etag
@@ -147,14 +158,15 @@ def mark_scores_changed(db) -> None:
 
 # ---- .csv / .json: streamed straight from the cursor -------------------------
 
-def stream_csv(db, name: str, kind: str, limit: Optional[int] = None) -> Iterator[bytes]:
+def stream_csv(db, name: str, kind: str, limit: Optional[int] = None,
+               hosts_only: bool = False) -> Iterator[bytes]:
     out = io.StringIO()
     writer = csv.writer(out)
     # The first column is the indicator value; the header keeps the historical
     # name "ip" for both kinds so existing SIEM column mappings don't break.
     writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
     n = 0
-    for row in iter_rows(db, name, kind, limit):
+    for row in iter_rows(db, name, kind, limit, hosts_only):
         writer.writerow([_value(row), row[3], row[4], _dt_str(row[5]), _dt_str(row[6]),
                          ";".join(row[2])])
         n += 1
@@ -164,7 +176,8 @@ def stream_csv(db, name: str, kind: str, limit: Optional[int] = None) -> Iterato
     yield out.getvalue().encode()
 
 
-def stream_json(db, name: str, kind: str, limit: Optional[int] = None) -> Iterator[bytes]:
+def stream_json(db, name: str, kind: str, limit: Optional[int] = None,
+                hosts_only: bool = False) -> Iterator[bytes]:
     # Compact separators + ensure_ascii=False: exactly what Starlette's
     # JSONResponse rendered before, so the values and bytes match.
     def dump(v):
@@ -175,7 +188,7 @@ def stream_json(db, name: str, kind: str, limit: Optional[int] = None) -> Iterat
            dump(datetime.now(timezone.utc).isoformat()) + b',"indicators":[')
     n = 0
     chunk = []
-    for row in iter_rows(db, name, kind, limit):
+    for row in iter_rows(db, name, kind, limit, hosts_only):
         chunk.append((b"," if n else b"") + dump({
             "value": _value(row), "ip": row[0], "confidence_score": row[3],
             "tier": row[4], "sources": row[2], "last_seen": _dt_iso(row[6]),
