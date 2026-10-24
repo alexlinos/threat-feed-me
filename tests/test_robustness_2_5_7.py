@@ -8,6 +8,7 @@ kill could skip for good.
 import os
 import sqlite3
 import threading
+from datetime import datetime, timezone
 
 import pytest
 
@@ -149,3 +150,45 @@ def test_recalculate_does_not_mask_other_operational_errors(core_env, monkeypatc
     monkeypatch.setattr(db, "prune_left_memberships", broken)
     with pytest.raises(sqlite3.OperationalError, match="no such table"):
         pipeline.recalculate(db, {})
+
+
+# ---- 2. purge_stale_indicators past SQLite's bound-variable limit -----------
+
+def test_purge_survives_a_whitelist_past_the_bound_variable_limit(tmp_path):
+    """33,000 global whitelist entries is past SQLite's 32,766 bound-variable
+    limit. The purge used to bind the whole protected set into one IN (...)
+    list and raised "too many SQL variables" on every refresh. It must now
+    keep exactly the protected stale rows and drop the rest."""
+    db = Database(str(tmp_path / "t.db"))
+    conn = sqlite3.connect(db.db_path)
+    conn.executemany(
+        "INSERT INTO whitelist (ip, feed_name, reason, added_by, added_at, reason_code) "
+        "VALUES (?, '*', 'asset', 'import', '2026-01-01T00:00:00+00:00', 'internal_asset')",
+        [(f"10.{(i >> 16) & 255}.{(i >> 8) & 255}.{i & 255}",) for i in range(33_000)])
+    conn.commit()
+    conn.close()
+
+    db.add_to_whitelist("192.0.2.10", "scoped asset", "alex", feed_name="feedA")
+    db.add_to_whitelist("192.0.2.11", "expired entry", "alex",
+                        expires_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    db.add_to_whitelist("192.0.2.12", "global asset", "alex")
+
+    db.add_indicators_bulk([("203.0.113.1", {}), ("203.0.113.2", {}), ("10.0.0.5", {})], "feedA")
+    db.add_indicator("192.0.2.10", "feedA", {})          # feed-scoped whitelist: kept
+    db.add_indicator("192.0.2.11", "feedA", {})          # whitelist expired: purged
+    db.add_indicator("192.0.2.12", "feedA", {})          # global whitelist: kept
+    db.add_indicator("203.0.113.3", "manual", {})        # manual rows are never purged
+    db.add_indicator("203.0.113.9", "feedA", {})         # fresh: kept
+    conn = sqlite3.connect(db.db_path)
+    conn.execute("UPDATE indicators SET last_seen = '2020-01-01T00:00:00+00:00' "
+                 "WHERE ip != '203.0.113.9'")
+    conn.commit()
+    conn.close()
+
+    deleted = db.purge_stale_indicators(14, db.get_whitelist_map())
+
+    conn = sqlite3.connect(db.db_path)
+    remaining = {row[0] for row in conn.execute("SELECT ip FROM indicators")}
+    conn.close()
+    assert remaining == {"192.0.2.10", "192.0.2.12", "203.0.113.3", "10.0.0.5", "203.0.113.9"}
+    assert deleted == 3   # 203.0.113.1, 203.0.113.2 and the expired-whitelist 192.0.2.11

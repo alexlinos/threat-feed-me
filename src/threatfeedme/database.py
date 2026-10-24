@@ -1158,22 +1158,28 @@ class Database:
                 scoped = whitelist_map.scoped_feeds(ip.ip)
                 if scoped:
                     protected.add(ip.ip)
-        base_sql = (
-            "DELETE FROM indicators "
-            "WHERE last_seen < ? "
-            "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
-            "WHERE source_name = 'manual')"
-        )
-        if protected:
-            sql = base_sql + " AND ip NOT IN ({0})".format(
-                ",".join("?" * len(protected)))
-            params = (cutoff,) + tuple(protected)
-        else:
-            sql = base_sql
-            params = (cutoff,)
-        with self._cursor() as cur:
-            cur.execute(sql, params)
-            return cur.rowcount
+        # The protected set goes through a temp table, not an `ip IN (?,?,...)`
+        # list: a whitelist past SQLite's bound-variable limit (32,766 here)
+        # made this DELETE raise "too many SQL variables", and the refresh
+        # that calls it failed on every run. Same set, same expiry and scoping.
+        conn = self._get_connection()
+        try:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS purge_protected (ip TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM temp.purge_protected")
+            conn.executemany("INSERT OR IGNORE INTO temp.purge_protected (ip) VALUES (?)",
+                             ((ip,) for ip in protected))
+            cur = conn.execute(
+                "DELETE FROM indicators "
+                "WHERE last_seen < ? "
+                "AND id NOT IN (SELECT DISTINCT indicator_id FROM indicator_sources "
+                "WHERE source_name = 'manual') "
+                "AND ip NOT IN (SELECT ip FROM temp.purge_protected)",
+                (cutoff,))
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
 
     def source_state_count(self, source_name: str) -> int:
         """Size of a feed's membership as of its last clean fetch."""
