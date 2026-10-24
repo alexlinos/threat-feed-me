@@ -74,6 +74,7 @@ def _serve(cfg, config_path=None):
     configured.
     """
     host, port = _resolve_host_port(cfg)
+    tls = tls_kwargs()          # a half-set TLS config stops here, before any output
 
     # Make the served app and the background refresh use the SAME config and
     # database as this CLI loaded: pin CONFIG_PATH and initialize the core
@@ -89,7 +90,7 @@ def _serve(cfg, config_path=None):
     # where to go immediately (the point of watching the command line).
     print("\n" + "=" * 50)
     print(r"  \/\/\/  THREAT FEED ME!")
-    print(f"  Web UI:  {'https' if tls_files() else 'http'}://{host}:{port}")
+    print(f"  Web UI:  {'https' if tls else 'http'}://{host}:{port}")
     print("  Initial feed fetch is running in the background.")
     print("=" * 50 + "\n")
 
@@ -106,7 +107,7 @@ def _serve(cfg, config_path=None):
 
     # Run the server; this blocks until shutdown (SIGINT/SIGTERM).
     import uvicorn
-    uvicorn.run("threatfeedme.app:app", host=host, port=port, **tls_kwargs())
+    uvicorn.run("threatfeedme.app:app", host=host, port=port, **tls)
 
 
 # Bring-your-own certificate (2.5.7): appliances such as SonicWall want an
