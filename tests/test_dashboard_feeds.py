@@ -1080,15 +1080,15 @@ def test_host_check_api_lock_and_unlock(client):
 
         # saving names alone refuses nothing: the switch is off by default
         s = client.post("/api/host-check", headers=ip,
-                        json={"allowed": ["a.lan", "threatfeedme.tnh.local"]}).json()
+                        json={"allowed": ["a.lan", "threatfeedme.example.net"]}).json()
         assert s["mode"] == "report-only"
         # locking from a saved name keeps that name even if the list drops it
         r = client.post("/api/host-check", headers={"host": "a.lan"},
-                        json={"allowed": ["threatfeedme.tnh.local"], "enforce": True})
+                        json={"allowed": ["threatfeedme.example.net"], "enforce": True})
         assert r.status_code == 200
         s = r.json()
         assert s["mode"] == "enforcing"
-        assert s["configured"] == ["a.lan", "threatfeedme.tnh.local"]
+        assert s["configured"] == ["a.lan", "threatfeedme.example.net"]
 
         assert client.get("/api/stats", headers={"host": "attacker.example"}).status_code == 400
         # feeds stay open to any Host, even while enforcing

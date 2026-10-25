@@ -19,6 +19,43 @@ disagree, the remote wins.
 - Before a large change, re-check `git log origin/main -1`, cheap, and it
   catches a stale base immediately.
 
+## Nothing identifying ever reaches GitHub
+
+Hard rule, applies to every file, commit message, branch name, issue, PR
+and comment pushed to any remote. This repo is public; the deployment it
+runs against is private infrastructure.
+
+Never include, in anything pushed:
+- **Machine names / hostnames** of any box (prod, dev, lab) — use `prod`,
+  `the box`, `a workstation`.
+- **Real IP addresses** — LAN IPs, gateway/resolver addresses, subnet
+  ranges, the dashboard's address. Fixtures use RFC1918/2606 documentation
+  ranges (`10.x`, `192.0.2.x`, `*.example.net`); threat-indicator fixtures
+  use obviously synthetic patterns.
+- **Usernames, account names, email addresses** beyond the repo owner's
+  own public GitHub identity.
+- **Any workplace identifier** — employer names, abbreviations, internal
+  domains, `.local` names derived from them.
+- **Secrets of any kind** (also covered by the secrets rule below — this
+  one is about *identity*, not credentials).
+
+The test suite runs offline against fixtures; a fixture never needs a real
+name to be a valid name.
+
+Scan before pushing (a hit means stop and scrub, including the diff
+message):
+
+```bash
+git grep -n -i -E "<hostname>|<hostname-part>|<user>|<employer-terms>" -- . ; \
+git grep -o -E "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" -- . \
+  | grep -v -E ":(10\.|192\.168\.|127\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)" \
+  | grep -v -E "tests/|\.py:"   # fixture IPs live in tests; docs keep doc ranges
+```
+
+Screenshots and screen recordings in `docs/` count: they can show a
+hostname, IP or username in the browser chrome or dashboard. Inspect
+before committing; regenerate with a neutral hostname if they leak.
+
 ## Security rules for every change
 
 These are standing rules, not suggestions. An adversarial review attacks the
@@ -666,7 +703,7 @@ in app dependencies, the only fixable ones in the 3.11 interpreter
 **Released 2026-09-24** (maintainer's go): `release/2.5.0` merged into main
 (970a14a), tagged `v2.5.0`, published to Docker Hub as 2.5.0 + latest (amd64 +
 arm64); Grype on the final image matched the branch baseline. New 2.5.x work
-goes on main. Prod (soc-grfna01) roll is a separate, explicit step: back up,
+goes on main. The prod roll is a separate, explicit step: back up,
 `git pull` (the compose health-check start period matters for the migration),
 `docker compose pull && up -d`, then `scripts/predictor.sh both` at once.
 
@@ -713,7 +750,7 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod (soc-grfna01) runs 2.5.7 (rolled 2026-10-25; the box had in fact
+- Prod runs 2.5.7 (rolled 2026-10-25; the box had in fact
   never left 2.5.3 — the 2.5.6 roll of 2026-09-30 was recorded here but
   never reached the host). Its dashboard has no sign-in by the
   maintainer's choice: access is segmented at the firewall. Not an open
@@ -905,11 +942,12 @@ in low/medium, below urlhaus commodity malware, until promoted.
 leave the rescore gate unmoved and needed a forced recalc via
 POST /api/recalculate-scores — there is no dashboard button for it.)
 
-## soc-grfna01 prod host: DNS resolver (2026-08-18)
+## Prod host: DNS resolver (2026-08-18)
 
-The prod box has ONE working upstream resolver (`172.31.10.1`);
-`192.0.231.200` is unreachable from the `172.31.10.x` subnet (every query
-times out from the box, though it answers from other vantage points, e.g. a
+The prod box has ONE working upstream resolver (its subnet gateway);
+the second resolver once configured is unreachable from the prod subnet
+(every query times out from the box, though it answers from other vantage
+points, e.g. a
 workstation). With no resolver redundancy, a single dropped UDP:53 query
 surfaced as a hard "could not resolve feed host" and flapped random feeds —
 seen on `alienVault_otx` and `talos_snort` (different hosts, same DNS error,

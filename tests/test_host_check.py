@@ -56,10 +56,10 @@ def _get(c, path, host):
 
 def test_report_only_lets_unknown_names_through_and_records_them():
     c = _client()
-    assert _get(c, "/api/stats", "threatfeedme.tnh.local").status_code == 200
-    assert _get(c, "/api/stats", "threatfeedme.tnh.local").status_code == 200
+    assert _get(c, "/api/stats", "threatfeedme.example.net").status_code == 200
+    assert _get(c, "/api/stats", "threatfeedme.example.net").status_code == 200
     seen = {e["host"]: e["count"] for e in mw.seen_hosts()}
-    assert seen == {"threatfeedme.tnh.local": 2}
+    assert seen == {"threatfeedme.example.net": 2}
 
 
 def test_allowlist_is_read_off_the_event_loop():
@@ -85,20 +85,20 @@ def test_allowlist_is_read_off_the_event_loop():
 
     db = _Spy()
     app.add_middleware(mw.HostCheckMiddleware, db_getter=lambda: db)
-    assert _get(TestClient(app), "/api/stats", "threatfeedme.tnh.local").status_code == 200
+    assert _get(TestClient(app), "/api/stats", "threatfeedme.example.net").status_code == 200
     assert on_loop and not any(on_loop)
 
 
 def test_enforcing_refuses_unknown_names():
-    c = _client(["threatfeedme.tnh.local"], enforce="1")
-    assert _get(c, "/api/stats", "threatfeedme.tnh.local:80").status_code == 200
+    c = _client(["threatfeedme.example.net"], enforce="1")
+    assert _get(c, "/api/stats", "threatfeedme.example.net:80").status_code == 200
     r = _get(c, "/api/stats", "attacker.example")
     assert r.status_code == 400
     assert "attacker.example" in r.text and mw.ALLOWED_HOSTS_ENV in r.text
     assert r.headers["x-content-type-options"] == "nosniff"
 
 
-@pytest.mark.parametrize("host", ["172.31.10.4:8080", "172.31.10.4", "[::1]:8080",
+@pytest.mark.parametrize("host", ["10.0.0.4:8080", "10.0.0.4", "[::1]:8080",
                                   "localhost:8080", "LOCALHOST"])
 def test_ip_literals_and_localhost_always_work(host):
     # nobody can lock themselves out: the server's IP is always a way in
@@ -127,7 +127,7 @@ def test_host_header_parsing(header, host):
 
 
 @pytest.mark.parametrize("value,ok", [
-    ("threatfeedme.tnh.local", True), ("soc-grfna01", True),
+    ("threatfeedme.example.net", True), ("feedbox.example.net", True),
     ("bad_name.example", False), ("-lead.example", False), ("a b", False), ("", False),
 ])
 def test_allowlist_entries_are_validated(value, ok):
