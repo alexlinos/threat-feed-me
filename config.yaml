@@ -59,14 +59,23 @@ feeds:
   # --- Domain feeds (kind='domain'; served under /feeds/domains/*) ------
   # Domains are stored in the existing ip column with kind='domain' (D1);
   # feeds DECLARE indicator_kind='domain' rather than us sniffing domains
-  # out of IP feeds (D8). Defaults per ratification: urlhaus + openphish +
-  # hagezi ON (keyless = the product promise), joewein OFF (spam-centric,
-  # low volume, no embedded freshness header).
+  # out of IP feeds (D8). Defaults per ratification: openphish + hagezi ON
+  # (keyless = the product promise), joewein OFF (spam-centric, low volume,
+  # no embedded freshness header).
+  # urlhaus_hostfile DISABLED 2026-10-25: abuse.ch retired the entire
+  # /downloads/ path — hostfile, text, and CSV dumps all answer 410 Gone.
+  # Exports now require a free Auth-Key from auth.abuse.ch and are fetched
+  # via urlhaus-api.abuse.ch/v2/files/exports/<AUTH-KEY>/... — a keyed URL
+  # breaks the keyless-default promise and would expose the key in the
+  # dashboard feed table. Re-enable only after wiring an env-supplied key
+  # with redaction (see issue #6). The authoritative_domain_feeds entry
+  # below is inert while the feed is disabled.
   - name: urlhaus_hostfile
     url: https://urlhaus.abuse.ch/downloads/hostfile/
     feed_type: "threat_intel"
     indicator_kind: "domain"
     update_interval: 3600
+    enabled: false
 
   - name: openphish_community
     url: https://openphish.com/feed.txt
