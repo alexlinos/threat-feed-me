@@ -622,3 +622,27 @@ dashboard:
   host: 127.0.0.1
   port: 8080
   auth_required: false
+
+# --- Remote feed catalog (issue #9) ------------------------------------
+# The live roster lives in this repo as feed_catalog.yaml; the app polls it
+# daily and merges it with the same add/tombstone rules as the baked
+# baseline above (plumbing follows the ship, preferences are sacred, an
+# operator delete stays deleted). The baked `feeds:` list above remains
+# what a fresh air-gapped install gets — this block never replaces it.
+#
+#   enabled:   the daily poll only (baseline sync is unaffected).
+#   url:       the trust anchor, pinned to this repo on
+#              raw.githubusercontent.com over TLS. Pointing it at a third
+#              party means trusting THEM to define what the firewall
+#              blocks; public HTTPS only, redirects stay on the GitHub
+#              raw CDN, fetch caps and the SSRF guard are the feed path's.
+#   auto_add:  ON (default): new catalog entries ship enabled, same
+#              posture as pre-ratified baked defaults. OFF: new entries
+#              land as *pending* in the feed table for one-click Add, and
+#              Dismiss tombstones them. Entries needing an API key ship
+#              disabled regardless. The dashboard's System toggle wins
+#              once saved; this value is its initial default.
+catalog:
+  enabled: true
+  url: https://raw.githubusercontent.com/alexlinos/threat-feed-me/main/feed_catalog.yaml
+  auto_add: true
