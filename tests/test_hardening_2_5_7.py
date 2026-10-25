@@ -367,9 +367,13 @@ def test_talos_refuses_cross_origin_redirect_location(monkeypatch, tmp_path):
 
 
 def test_talos_follows_a_same_origin_redirect_chain_to_the_list(monkeypatch, tmp_path):
-    # Reality measured 2026-10-25 on prod: POST -> 302 -> 302 -> list.
-    h1 = "https://www.snort.org/downloads/ip-block-list/redirected"
-    h2 = "https://www.snort.org/downloads/ip-block-list/ip-block-list.txt"
+    # Reality measured 2026-10-25 on prod (probe): POST -> 302
+    # /downloads/ip-block-list -> 302 to the site's own S3 storage host ->
+    # 200 list. The S3 handoff is part of the origin's trust boundary.
+    h1 = "https://snort.org/downloads/ip-block-list"
+    h2 = ("https://snort-org-site.s3.amazonaws.com/production/document_files/"
+          "files/000/047/319/original/ip-filter.blf?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+          "&X-Amz-Signature=deadbeef")
     fi, ing, feed, session = _talos(
         monkeypatch, tmp_path, allow_private=False, post_status=302,
         redirect_location=h1,

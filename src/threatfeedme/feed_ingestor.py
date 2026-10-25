@@ -637,9 +637,14 @@ class FeedIngestor:
 
 _TALOS_TERMS_URL = "https://snort.org/downloads/ip-block-list/terms"
 _TALOS_ACCEPT_URL = "https://snort.org/downloads/ip-block-list/accept-terms"
-# Accept-terms redirects (issue #6) are followed exactly once and only
-# while the Location stays on the snort.org origin.
-_TALOS_HOSTS = {"snort.org", "www.snort.org"}
+# Accept-terms redirects (issue #6) are followed through a bounded chain,
+# and every hop must land on this allowlist. Measured 2026-10-25: the
+# success path is POST -> 302 /downloads/ip-block-list -> 302 to the site's
+# OWN S3 storage host (Rails/ActiveStorage hands the list off to
+# snort-org-site.s3.amazonaws.com with a signed URL) -> 200 text/plain.
+# The S3 host is therefore part of the origin's trust boundary; anything
+# off this set still fails loud.
+_TALOS_HOSTS = {"snort.org", "www.snort.org", "snort-org-site.s3.amazonaws.com"}
 _TALOS_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -739,8 +744,8 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
                 if not target or urlsplit(target).hostname not in _TALOS_HOSTS:
                     raise RuntimeError(
                         f"Talos scraper: accept-terms answered HTTP "
-                        f"{post_resp.status_code} with no same-origin redirect "
-                        "Location; refusing to follow")
+                        f"{post_resp.status_code} with a redirect Location "
+                        "missing or off the snort.org allowlist; refusing to follow")
                 current_url = target
                 post_resp = session.get(target, timeout=_TALOS_TIMEOUT,
                                         proxies=proxies,  # type: ignore[reportArgumentType]  # None values disable proxies at runtime
