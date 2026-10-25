@@ -96,8 +96,8 @@ SonicWall, Palo Alto, Cisco, pfSense, ...) and the checklist ticks itself off as
 your firewall starts polling. The [walkthrough](#walkthrough) below shows every
 screen.
 
-That's it. On first start it fetches **22 free, keyless threat feeds** (16 IP
-feeds and 6 domain feeds: URLhaus, OpenPhish, Phishing Army, HaGeZi TIF,
+That's it. On first start it fetches **21 free, keyless threat feeds** (16 IP
+feeds and 5 domain feeds: OpenPhish, Phishing Army, HaGeZi TIF,
 Phishunt, and the DRB-Ra C2 list),
 removes duplicates, sorts them into the three lists, and starts serving them. It
 **refreshes each feed on its own schedule** (OpenPhish every 15 minutes, DShield every 30, most feeds hourly, Talos daily), no cron, no maintenance. Everything stays
@@ -112,7 +112,11 @@ on-prem; feeds are pulled inbound only.
 - A few feeds ship **disabled**, opt-in from the dashboard once configured:
   AlienVault OTX and the two HoneyDB feeds (free API keys required), the
   auth-walled abuse.ch ThreatFox export (the keyless ThreatFox IOC mirror
-  covers it and ships enabled), CERT.PL, HaGeZi fake, ThreatView domains,
+  covers it and ships enabled), the keyed abuse.ch URLhaus export (the
+  keyless /downloads/ path is retired; a free Auth-Key from auth.abuse.ch
+  goes in **Set key** as `URLHAUS_AUTH_KEY` — the key is embedded in the
+  fetch URL server-side and never displayed, logged, or stored), CERT.PL,
+  HaGeZi fake, ThreatView domains,
   joewein, PhishTank online-valid, and a sample custom honeypot list.
   Feeds that need API credentials have a **Set key** button: it prompts for each
   required credential (HoneyDB takes an id and key pair), stores them
@@ -406,7 +410,7 @@ find the natural gaps in the crowd, and draw the cut lines there:
   threat-intel feed (`require_threat_intel`). The cleanest list. For
   **domains**, where blocklists aggregate each other so heavily that
   corroboration collapses toward one witness, a primary curator
-  (`authoritative_domain_feeds`: URLhaus, CERT.PL) also puts a domain in
+  (`authoritative_domain_feeds`: URLhaus (keyed opt-in), CERT.PL) also puts a domain in
   High on its own word, and loses that privilege if its false-positive rate
   degrades.
 

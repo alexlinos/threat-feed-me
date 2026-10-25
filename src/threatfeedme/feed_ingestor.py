@@ -11,7 +11,7 @@ import time
 import ipaddress
 import json
 from typing import List, Dict, Optional, Set, Tuple, Union
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 import logging
 
 import requests
@@ -26,10 +26,46 @@ _MAX_FETCH_BYTES = 50 * 1024 * 1024  # 50 MB
 _QUERY_RE = re.compile(r"\?[^\s'\"<>]*")
 
 
-def _redact(text: str) -> str:
+def _redact(text, secrets=()) -> str:
     """A URL's query string, gone: some providers put the API key there, and
-    requests' exception text carries the full URL (review 2026-10-24)."""
-    return _QUERY_RE.sub("?…", str(text))
+    requests' exception text carries the full URL (review 2026-10-24).
+
+    `secrets` additionally scrubs the literal values of URL-embedded keys
+    (issue #8): the URLhaus Auth-Key lives in the PATH, where the query-strip
+    guard can't reach it and requests' exception text reproduces it verbatim."""
+    out = _QUERY_RE.sub("?…", str(text))
+    for secret in secrets:
+        if secret and secret in out:
+            out = out.replace(secret, "[redacted]")
+    return out
+
+
+# URL-embedded credentials (issue #8). URLhaus keyed exports carry the
+# Auth-Key as a path SEGMENT, not a header, so the shipped config stores the
+# template with {auth_key} and the real value is read from feed.auth_env at
+# fetch time only: it never round-trips through the feed row, the dashboard,
+# the logs, or any exception text.
+AUTH_URL_PLACEHOLDER = "{auth_key}"
+
+
+def url_has_auth_placeholder(url: str) -> bool:
+    return AUTH_URL_PLACEHOLDER in (url or "")
+
+
+def _scrub_exception(exc: Exception, secrets) -> Exception:
+    """The same exception with its message scrubbed of `secrets`. Type is
+    preserved when the message round-trips through its constructor, so
+    callers that branch on exception class keep working; RuntimeError is the
+    fallback. Redaction must happen before an error message can reach a DB
+    row (feed_stats.error_message), the dashboard, or a log line."""
+    text = str(exc)
+    if not any(secret and secret in text for secret in secrets):
+        return exc
+    scrubbed = _redact(text, secrets)
+    try:
+        return type(exc)(scrubbed)
+    except Exception:
+        return RuntimeError(scrubbed)
 
 
 def _read_capped(response, label: str) -> str:
@@ -52,7 +88,7 @@ def _read_capped(response, label: str) -> str:
 
 
 from threatfeedme.credentials import (CROSS_ORIGIN_SAFE_HEADERS, KeyPolicy,
-                                      same_origin)
+                                      host_of, same_origin)
 from threatfeedme.domains import normalize_domain
 from threatfeedme.models import FeedSource
 from threatfeedme.database import Database
@@ -355,7 +391,7 @@ class FeedIngestor:
                 if content is NOT_MODIFIED:
                     return NOT_MODIFIED
         except Exception as e:
-            logger.error(f"Failed to fetch {feed.name}: {_redact(e)}")
+            logger.error(f"Failed to fetch {feed.name}: {_redact(e, self._key_secret(feed))}")
             raise
         finally:
             _ssrf_guard.active = guard_was
@@ -373,6 +409,45 @@ class FeedIngestor:
                 f"indicators ({len(content)} bytes) — treating as a failed fetch"
             )
         return parsed
+
+    def _key_secret(self, feed: FeedSource) -> Tuple[str, ...]:
+        """The live value of a feed's URL-embedded key, for scrubbing error
+        text (issue #8). Empty for header-key and keyless feeds."""
+        if url_has_auth_placeholder(feed.url) and feed.auth_env:
+            key = os.environ.get(feed.auth_env.strip())
+            return (key,) if key else ()
+        return ()
+
+    def _resolved_auth_url(self, feed: FeedSource) -> Tuple[str, Tuple[str, ...]]:
+        """The URL to actually fetch, plus the secrets it now embeds.
+
+        A feed whose url carries {auth_key} (issue #8: the URLhaus keyed
+        export) gets the placeholder substituted from os.environ at fetch
+        time — the resolved URL lives only here, never in the feed row. The
+        key is percent-encoded so its value can never escape its path segment
+        (a key containing '/' or '?' cannot rewrite the request target), and
+        KeyPolicy decides whether this variable may go to this host at all,
+        the same discipline as header keys."""
+        if not url_has_auth_placeholder(feed.url):
+            return feed.url, ()
+        var = (feed.auth_env or "").strip()
+        if not var or "," in var:
+            raise RuntimeError(
+                f"Feed '{feed.name}': url embeds '{AUTH_URL_PLACEHOLDER}' but "
+                f"auth_env must name exactly one env var (got {feed.auth_env!r})")
+        key = os.environ.get(var)
+        if not key:
+            # A saved ETag could answer 304 against the last good fetch even
+            # while the key is invalid, leaving the feed green on stale
+            # membership (a 403 re-validated with old validators is exactly
+            # that). Clear them so the next configured-key fetch re-downloads.
+            self.db.set_feed_http_cache(feed.name, None, None)
+            raise RuntimeError(
+                f"Feed '{feed.name}': no key available — Set {var} to your "
+                f"feed credential first")
+        if not self.key_policy.may_send(var, feed.url):
+            raise RuntimeError(self.key_policy.send_refusal(var, feed.url))
+        return feed.url.replace(AUTH_URL_PLACEHOLDER, quote(key, safe="")), (key,)
 
     def _fetch_url(self, feed: FeedSource, timeout=None) -> Union[str, _NotModified]:
         """Fetch raw feed content from a URL, applying auth if required.
@@ -410,12 +485,29 @@ class FeedIngestor:
         if last_modified:
             headers['If-Modified-Since'] = last_modified
 
-        response = self._get_with_retries(feed.url, headers, timeout=timeout)
-        if response.status_code == 304:
-            return NOT_MODIFIED
-        response.raise_for_status()
+        # Substitute any {auth_key} placeholder (issue #8). From here on the
+        # resolved URL — and the key inside it — must not escape into an
+        # exception message, so every fetch call is wrapped and the result
+        # scrubbed: exception text is what lands in feed_stats.error_message
+        # (rendered by the dashboard feed table) and in log lines.
+        url, secrets = self._resolved_auth_url(feed)
+        # A key-embedded URL must never leave its declared host, not even on
+        # a redirect: pin the hop chain to the template's own host.
+        allowed_host = host_of(feed.url) if secrets else None
+        # Pass the redaction/pinning extras only when set: most callers (and
+        # many test seams) use the plain fetch signature.
+        extra = {"secrets": secrets, "allowed_host": allowed_host} \
+            if secrets else {}
+        try:
+            response = self._get_with_retries(url, headers, timeout=timeout,
+                                              **extra)
+            if response.status_code == 304:
+                return NOT_MODIFIED
+            response.raise_for_status()
 
-        content = _read_capped(response, feed.name)
+            content = _read_capped(response, feed.name)
+        except Exception as e:
+            raise _scrub_exception(e, secrets) from None
 
         # Stash this download's validators; ingest_feed persists them only
         # after the whole ingest succeeds. A 200 without validators stashes
@@ -428,7 +520,7 @@ class FeedIngestor:
         return content
 
     def _get_with_retries(self, url: str, headers: Dict[str, str],
-                          timeout=None) -> requests.Response:
+                          timeout=None, secrets=(), allowed_host=None) -> requests.Response:
         """GET with up to _MAX_ATTEMPTS attempts on transient failures.
 
         5xx responses, timeouts, connection errors, and 429 are retried;
@@ -443,8 +535,11 @@ class FeedIngestor:
         unchanged so callers' error handling stays the same."""
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             retry_after = None
+            extra = {"secrets": secrets, "allowed_host": allowed_host} \
+                if secrets or allowed_host else {}
             try:
-                response = self._get_following_redirects(url, headers, timeout=timeout)
+                response = self._get_following_redirects(url, headers,
+                                                         timeout=timeout, **extra)
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 if attempt == _MAX_ATTEMPTS:
                     raise
@@ -470,19 +565,25 @@ class FeedIngestor:
             delay = retry_after if retry_after is not None else \
                 _BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS)) - 1]
             logger.warning(
-                f"Transient failure fetching {_redact(url)} "
+                f"Transient failure fetching {_redact(url, secrets)} "
                 f"(attempt {attempt}/{_MAX_ATTEMPTS}); retrying in {delay}s"
             )
             _sleep(delay)
 
         # Defensive: every path above returns or raises on the final attempt.
-        raise RuntimeError(f"retry loop exited without a response for {url}")
+        raise RuntimeError(f"retry loop exited without a response for "
+                           f"{_redact(url, secrets)}")
 
     def _get_following_redirects(self, url: str, headers: Dict[str, str],
-                                 timeout=None) -> requests.Response:
+                                 timeout=None, secrets=(),
+                                 allowed_host=None) -> requests.Response:
         """Single GET, following redirects manually so every hop passes the
         SSRF guard (requests' automatic redirects would only let us check the
-        first URL)."""
+        first URL).
+
+        `allowed_host` additionally pins every hop to one host: a URL that
+        embeds a key (issue #8) must never let a redirect carry it off its
+        declared origin — a foreign Location is refused, not followed."""
         origin = url
         for _ in range(_MAX_REDIRECTS + 1):
             if not self.allow_private_urls:
@@ -505,11 +606,16 @@ class FeedIngestor:
                 location = response.headers.get('Location')
                 response.close()
                 if not location:
-                    raise RuntimeError(f"redirect without a Location header fetching {url}")
+                    raise RuntimeError(f"redirect without a Location header fetching "
+                                       f"{_redact(url, secrets)}")
                 url = urljoin(url, location)
+                if allowed_host and host_of(url) != allowed_host:
+                    raise RuntimeError(
+                        f"redirect left {allowed_host} for {host_of(url) or _redact(url, secrets)}; "
+                        "refusing to follow — a URL-embedded key never travels off its host")
                 continue
             return response
-        raise RuntimeError(f"too many redirects fetching {url}")
+        raise RuntimeError(f"too many redirects fetching {_redact(url, secrets)}")
 
     def _read_local_file(self, path: str) -> str:
         """Read raw content from a local file. Explicit UTF-8 (mirroring the
@@ -610,11 +716,13 @@ class FeedIngestor:
             return count
 
         except Exception as e:
+            # error_message is rendered verbatim in the dashboard feed table,
+            # so scrub before it reaches the DB row (issue #8 redaction).
             self.db.update_feed_stats(
                 feed_name=feed.name,
                 total_indicators=0,
                 status='error',
-                error_message=str(e),
+                error_message=_redact(e, self._key_secret(feed)),
             )
             raise
 
@@ -1043,6 +1151,34 @@ def _scrape_phishtank_urls(self: FeedIngestor, feed: FeedSource):
     return _scrape_csv_column(self, feed, 1)
 
 
+def _scrape_urlhaus_keyed(self: FeedIngestor, feed: FeedSource):
+    """URLhaus keyed recent.csv (issue #8). abuse.ch retired every keyless
+    /downloads/ endpoint; exports now need a free Auth-Key from auth.abuse.ch
+    and live at .../exports/<KEY>/recent.csv. The key travels in the URL
+    PATH, so the shipped feed stores a {auth_key} template and _fetch_url
+    substitutes it at fetch time (and scrubs it from every error path).
+
+    recent.csv is quoted CSV with a header row (urlhash,url,url_status,...);
+    the old hostfile's domain material lives in the `url` column — parsed
+    with the csv module, not regex lines (a quoted URL may legally contain
+    commas), then handed to the normal domain pipeline."""
+    content = self._fetch_url(feed)
+    if content is NOT_MODIFIED:
+        return NOT_MODIFIED
+    lines = []
+    for row in csv.DictReader(io.StringIO(content.lstrip('\ufeff'))):
+        value = (row.get('url') or '').strip()
+        if value:
+            lines.append(value)
+    if not lines:
+        # A 200 that isn't a usable export (auth error page, changed schema)
+        # must not ingest zero domains — fail loud so prior membership holds.
+        raise RuntimeError(
+            f"{feed.name}: recent.csv carried no 'url' values — treating as "
+            "a failed fetch")
+    return "\n".join(lines)
+
+
 # =============================================================================
 # TAXII 2.1 collection (v2.5.0): a MISP, OpenCTI or commercial TAXII server
 # as a feed. Parsing lives in stix_ingest.py (indicators only, unconditional
@@ -1163,5 +1299,6 @@ FeedIngestor._SCRAPERS.update({
     "crowdsec_console": _scrape_crowdsec_console,
     "drb_ra_domains": _scrape_drb_ra_domains,
     "phishtank_urls": _scrape_phishtank_urls,
+    "urlhaus_keyed_csv": _scrape_urlhaus_keyed,
     "taxii21": _scrape_taxii21,
 })
