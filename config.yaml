@@ -606,6 +606,22 @@ predictor:
   # effect until the backtest is re-run with it wired.
   feature_window_days: 14
 
+# Update check (notification only — the app NEVER updates itself). One
+# unauthenticated HTTPS GET to api.github.com per day; it leaks essentially
+# nothing beyond the fact an install polled (no identifiers are sent). When
+# a newer release exists the dashboard footer shows a small badge linking
+# the release page; pulling and restarting stays a human act
+# (docker compose pull && up -d). Every failure — offline, air-gapped,
+# GitHub down, rate-limited — is a silent no-op, so air-gapped installs
+# need no special handling. (PRIVACY.md's outbound-call section is updated
+# with this feature in the release merge.)
+updates:
+  enabled: true
+  # Override the check endpoint (e.g. a mirror of the Releases API for
+  # restricted networks). Only "url" and "enabled" are read; the release
+  # LINK shown in the footer always points at the public repo.
+  # url: https://api.github.com/repos/alexlinos/threat-feed-me/releases/latest
+
 database:
   path: ./data/threatfeedme.db
   backup:
