@@ -1488,3 +1488,25 @@ async function addHostName(e, where) {
     return false;
 }
 document.addEventListener('DOMContentLoaded', loadHostCheck);
+
+// Update badge in the footer (issue #10): one small "vA.B.C → vD.E.F
+// available" link when the daily release check has seen a newer version.
+// Read-only fetch of /api/settings; the state was written by the
+// scheduler's silent check. Built with createElement/textContent, not an
+// HTML string — no remote-derived value ever reaches innerHTML. A badge
+// must never break a page: every failure path here is a no-op.
+document.addEventListener('DOMContentLoaded', () => {
+    const foot = document.querySelector('footer.foot');
+    if (!foot) return;
+    apiFetch('/api/settings').then(r => r.ok ? r.json() : null).then(s => {
+        const u = s && s.update;
+        if (!u || !u.available || !u.latest || !u.release_url) return;
+        foot.appendChild(document.createTextNode(' · '));
+        const a = document.createElement('a');
+        a.href = u.release_url;
+        a.rel = 'noopener noreferrer';
+        a.className = 'update-badge';
+        a.textContent = 'v' + u.current + ' \u2192 v' + u.latest + ' available';
+        foot.appendChild(a);
+    }).catch(() => { /* silent by design */ });
+});

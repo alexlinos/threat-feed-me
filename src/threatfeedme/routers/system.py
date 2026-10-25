@@ -121,8 +121,12 @@ def _system_info(request: Request, poll_log: dict) -> dict:
         ((k.split(":", 1)[1], v) for k, v in poll_log.items() if k.startswith("taxii:")),
         key=lambda kv: kv[1].get("at", ""), reverse=True)
     from threatfeedme import polls
+    from threatfeedme import update_checker
     return {
         "version": __version__,
+        # Footer badge / System panel (issue #10): read-only, never fetches
+        # here — the scheduler owns the outbound check.
+        "update": update_checker.update_state(core.db, core.config),
         "db_size": _human_bytes(size),
         "last_backup": _age_text(last_backup) if last_backup else "",
         "predictor": {
@@ -649,9 +653,12 @@ def domain_tlds(_=Depends(require_auth)):
 
 @router.get("/api/settings")
 def get_settings(_=Depends(require_auth)):
+    from threatfeedme import update_checker
     return {
         "refresh_interval_minutes": _refresh_interval_minutes(),
         "retention_max_age_days": retention_max_age_days(core.db, core.config),
+        # Read-only update state (issue #10): the footer badge reads this.
+        "update": update_checker.update_state(core.db, core.config),
     }
 
 

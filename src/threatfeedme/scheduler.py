@@ -92,6 +92,17 @@ def _maybe_backup() -> None:
         logger.error(f"[backup] failed: {e}")
 
 
+def _maybe_check_updates() -> None:
+    """Daily release check (issue #10). Same shape as _maybe_backup: the
+    persisted update_last_check stamp paces it, so the first loop tick
+    (~60 s after start, on this thread) doubles as the delayed startup
+    check and dashboard readiness is never on its path. Silence is the
+    contract: update_checker swallows every failure itself, and the loop's
+    guard logs at DEBUG — a blocked network must not even make noise."""
+    from threatfeedme import update_checker
+    update_checker.run_due_check(core.db, core.config)
+
+
 # ==================== REFRESH STATE & SCHEDULER ====================
 # A single lock ensures only one refresh (manual or scheduled) runs at a time.
 _refresh_lock = threading.Lock()
@@ -174,6 +185,15 @@ def _scheduler_loop():
             _maybe_backup()
         except Exception as e:
             logger.error(f"Scheduler backup check failed: {e}")
+        # Daily release check (issue #10). The first tick doubles as the
+        # delayed startup check; nothing here is on the request path, so
+        # dashboard readiness never waits on it. DEBUG, not ERROR: the
+        # checker already swallows every failure itself, and a blocked
+        # network must produce zero noise (issue #10 acceptance).
+        try:
+            _maybe_check_updates()
+        except Exception as e:
+            logger.debug(f"[updates] check skipped: {e}")
         try:
             due = pipeline.due_feeds(core.db, _refresh_interval_minutes() * 60)
         except Exception as e:  # never let a bad tick kill the scheduler thread
