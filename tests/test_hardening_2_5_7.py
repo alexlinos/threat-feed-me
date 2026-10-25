@@ -263,10 +263,10 @@ def test_missing_config_file_is_an_error_not_an_empty_config(tmp_path):
 
 class _TalosResp:
     encoding = "utf-8"
-    headers = {"content-type": "text/plain"}
 
-    def __init__(self, text, status=200):
+    def __init__(self, text, status=200, headers=None):
         self.text, self.status_code = text, status
+        self.headers = headers or {"content-type": "text/plain"}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -275,25 +275,38 @@ class _TalosResp:
     def iter_content(self, chunk_size=65536, decode_unicode=False):
         yield self.text.encode()
 
+    def close(self):
+        pass
+
 
 class _TalosSession:
-    def __init__(self, post_status=200):
+    def __init__(self, post_status=200, redirect_location=None,
+                 list_status=200):
         self.headers, self.calls, self.post_status = {}, [], post_status
+        self.redirect_location = redirect_location
+        self.list_status = list_status
 
     def get(self, url, **kw):
-        self.calls.append(("get", kw))
-        return _TalosResp('<input name="authenticity_token" value="tok123">')
+        self.calls.append(("get", dict(kw, url=url)))
+        if "terms" in url:
+            return _TalosResp('<input name="authenticity_token" value="tok123">')
+        return _TalosResp("198.51.100.7\n", self.list_status)
 
     def post(self, url, data=None, **kw):
         self.calls.append(("post", kw))
-        return _TalosResp("" if self.post_status >= 300 else "203.0.113.9\n", self.post_status)
+        headers = {"content-type": "text/plain"}
+        if self.redirect_location:
+            headers["location"] = self.redirect_location
+        return _TalosResp("" if self.post_status >= 300 else "203.0.113.9\n",
+                          self.post_status, headers)
 
 
-def _talos(monkeypatch, tmp_path, allow_private, post_status=200):
+def _talos(monkeypatch, tmp_path, allow_private, post_status=200,
+           redirect_location=None, list_status=200):
     from threatfeedme import feed_ingestor as fi
     from threatfeedme.database import Database
     from threatfeedme.models import FeedSource, FeedType
-    session = _TalosSession(post_status)
+    session = _TalosSession(post_status, redirect_location, list_status)
     monkeypatch.setattr("requests.Session", lambda: session)
     ing = fi.FeedIngestor(Database(str(tmp_path / "t.db")), allow_private_urls=allow_private)
     feed = FeedSource(name="talos_snort", url=fi._TALOS_TERMS_URL, feed_type=FeedType.THREAT_INTEL)
@@ -312,7 +325,39 @@ def test_talos_keeps_the_operators_proxy_only_when_private_urls_are_allowed(monk
     assert session.calls[1][1]["allow_redirects"] is False
 
 
-def test_talos_accept_terms_redirect_is_an_error_not_an_empty_list(monkeypatch, tmp_path):
+def test_talos_accept_terms_redirect_without_location_is_an_error(monkeypatch, tmp_path):
+    # Issue #6 replaced the blanket 3xx refusal: a redirect IS the success
+    # path — but only with a same-origin Location. A 3xx that cannot be
+    # resolved to snort.org must still fail loud, never read as a list.
     fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False, post_status=302)
-    with pytest.raises(RuntimeError, match="redirect"):
+    with pytest.raises(RuntimeError, match="refusing to follow"):
+        fi._scrape_talos(ing, feed)
+
+
+def test_talos_follows_one_same_origin_redirect_to_the_list(monkeypatch, tmp_path):
+    url = "https://www.snort.org/downloads/ip-block-list/ip-block-list.txt"
+    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False,
+                                    post_status=302, redirect_location=url)
+    assert fi._scrape_talos(ing, feed) == "198.51.100.7"
+    follow = [kw for verb, kw in session.calls if verb == "get" and kw["url"] == url]
+    assert len(follow) == 1
+    assert follow[0]["allow_redirects"] is False
+    assert follow[0]["proxies"] == fi._NO_PROXIES and follow[0]["stream"]
+
+
+def test_talos_refuses_cross_origin_redirect_location(monkeypatch, tmp_path):
+    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False,
+                                    post_status=302,
+                                    redirect_location="https://evil.example/list")
+    with pytest.raises(RuntimeError, match="refusing to follow"):
+        fi._scrape_talos(ing, feed)
+    # terms GET + the POST only — nothing fetched from the foreign host
+    assert len(session.calls) == 2
+
+
+def test_talos_refuses_a_second_redirect_hop(monkeypatch, tmp_path):
+    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False,
+                                    post_status=302, list_status=302,
+                                    redirect_location="https://snort.org/downloads/ip-block-list/x.txt")
+    with pytest.raises(RuntimeError, match="second redirect"):
         fi._scrape_talos(ing, feed)

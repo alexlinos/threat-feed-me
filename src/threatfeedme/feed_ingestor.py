@@ -637,6 +637,9 @@ class FeedIngestor:
 
 _TALOS_TERMS_URL = "https://snort.org/downloads/ip-block-list/terms"
 _TALOS_ACCEPT_URL = "https://snort.org/downloads/ip-block-list/accept-terms"
+# Accept-terms redirects (issue #6) are followed exactly once and only
+# while the Location stays on the snort.org origin.
+_TALOS_HOSTS = {"snort.org", "www.snort.org"}
 _TALOS_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -714,13 +717,28 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
             timeout=_TALOS_TIMEOUT, proxies=proxies,
             stream=True, allow_redirects=False,
         )
-        # raise_for_status passes a 3xx, and the redirect's (empty) body
-        # would read as an empty list that the shrink guard eventually
-        # accepts. A redirect here is a changed site, not a list: fail loud.
+        # Issue #6: the blanket 3xx refusal added in 7abc9a1 was wrong for
+        # THIS one call — snort.org's accept-terms success path IS a 302 to
+        # the list itself. Follow exactly one hop, and only while Location
+        # stays on the snort.org origin. Everything else keeps failing loud:
+        # no chains, no off-site handoff, no empty 3xx body read.
         if 300 <= post_resp.status_code < 400:
-            raise RuntimeError(
-                f"Talos scraper: accept-terms answered HTTP {post_resp.status_code} "
-                "(a redirect); refusing to follow")
+            post_resp.close()
+            location = post_resp.headers.get("location") or ""
+            target = urljoin(_TALOS_ACCEPT_URL, location) if location else ""
+            if not target or urlsplit(target).hostname not in _TALOS_HOSTS:
+                raise RuntimeError(
+                    f"Talos scraper: accept-terms answered HTTP "
+                    f"{post_resp.status_code} with no same-origin redirect "
+                    "Location; refusing to follow")
+            post_resp = session.get(target, timeout=_TALOS_TIMEOUT,
+                                    proxies=proxies,  # type: ignore[reportArgumentType]  # None values disable proxies at runtime
+                                    stream=True,
+                                    allow_redirects=False)
+            if 300 <= post_resp.status_code < 400:
+                raise RuntimeError(
+                    "Talos scraper: accept-terms list answered a second "
+                    f"redirect (HTTP {post_resp.status_code}); refusing")
         post_resp.raise_for_status()
         body = _read_capped(post_resp, feed.name).strip()
     except Exception as e:
