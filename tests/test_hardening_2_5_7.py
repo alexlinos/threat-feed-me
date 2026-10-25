@@ -281,15 +281,25 @@ class _TalosResp:
 
 class _TalosSession:
     def __init__(self, post_status=200, redirect_location=None,
-                 list_status=200):
+                 list_status=200, get_script=None):
+        # get_script: url -> (status, location_or_None, body) for the
+        # scripted redirect chain; unscripted non-terms GETs serve the list.
         self.headers, self.calls, self.post_status = {}, [], post_status
         self.redirect_location = redirect_location
         self.list_status = list_status
+        self.get_script = get_script or {}
 
     def get(self, url, **kw):
         self.calls.append(("get", dict(kw, url=url)))
         if "terms" in url:
             return _TalosResp('<input name="authenticity_token" value="tok123">')
+        scripted = self.get_script.get(url)
+        if scripted:
+            status, location, body = scripted
+            headers = {"content-type": "text/plain"}
+            if location:
+                headers["location"] = location
+            return _TalosResp(body, status, headers)
         return _TalosResp("198.51.100.7\n", self.list_status)
 
     def post(self, url, data=None, **kw):
@@ -302,11 +312,12 @@ class _TalosSession:
 
 
 def _talos(monkeypatch, tmp_path, allow_private, post_status=200,
-           redirect_location=None, list_status=200):
+           redirect_location=None, list_status=200, get_script=None):
     from threatfeedme import feed_ingestor as fi
     from threatfeedme.database import Database
     from threatfeedme.models import FeedSource, FeedType
-    session = _TalosSession(post_status, redirect_location, list_status)
+    session = _TalosSession(post_status, redirect_location, list_status,
+                            get_script)
     monkeypatch.setattr("requests.Session", lambda: session)
     ing = fi.FeedIngestor(Database(str(tmp_path / "t.db")), allow_private_urls=allow_private)
     feed = FeedSource(name="talos_snort", url=fi._TALOS_TERMS_URL, feed_type=FeedType.THREAT_INTEL)
@@ -355,9 +366,26 @@ def test_talos_refuses_cross_origin_redirect_location(monkeypatch, tmp_path):
     assert len(session.calls) == 2
 
 
-def test_talos_refuses_a_second_redirect_hop(monkeypatch, tmp_path):
-    fi, ing, feed, session = _talos(monkeypatch, tmp_path, allow_private=False,
-                                    post_status=302, list_status=302,
-                                    redirect_location="https://snort.org/downloads/ip-block-list/x.txt")
-    with pytest.raises(RuntimeError, match="second redirect"):
+def test_talos_follows_a_same_origin_redirect_chain_to_the_list(monkeypatch, tmp_path):
+    # Reality measured 2026-10-25 on prod: POST -> 302 -> 302 -> list.
+    h1 = "https://www.snort.org/downloads/ip-block-list/redirected"
+    h2 = "https://www.snort.org/downloads/ip-block-list/ip-block-list.txt"
+    fi, ing, feed, session = _talos(
+        monkeypatch, tmp_path, allow_private=False, post_status=302,
+        redirect_location=h1,
+        get_script={h1: (302, h2, ""), h2: (200, None, "198.51.100.7\n")})
+    assert fi._scrape_talos(ing, feed) == "198.51.100.7"
+    gets = [kw["url"] for verb, kw in session.calls if verb == "get" and "terms" not in kw["url"]]
+    assert gets == [h1, h2]
+
+
+def test_talos_refuses_a_ping_pong_redirect_chain(monkeypatch, tmp_path):
+    h1 = "https://www.snort.org/downloads/ip-block-list/a"
+    h2 = "https://www.snort.org/downloads/ip-block-list/b"
+    h3 = "https://www.snort.org/downloads/ip-block-list/c"
+    fi, ing, feed, session = _talos(
+        monkeypatch, tmp_path, allow_private=False, post_status=302,
+        redirect_location=h1,
+        get_script={h1: (302, h2, ""), h2: (302, h3, ""), h3: (302, h1, "")})
+    with pytest.raises(RuntimeError, match="chain too long"):
         fi._scrape_talos(ing, feed)

@@ -718,27 +718,34 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
             stream=True, allow_redirects=False,
         )
         # Issue #6: the blanket 3xx refusal added in 7abc9a1 was wrong for
-        # THIS one call — snort.org's accept-terms success path IS a 302 to
-        # the list itself. Follow exactly one hop, and only while Location
-        # stays on the snort.org origin. Everything else keeps failing loud:
-        # no chains, no off-site handoff, no empty 3xx body read.
+        # THIS one call — snort.org's accept-terms success path is a 302
+        # CHAIN to the list (measured 2026-10-25: POST 302 -> 302 -> list).
+        # Follow a bounded same-origin chain: every hop must carry a
+        # Location that stays on the snort.org origin, max 3 hops. Everything
+        # else keeps failing loud: off-site handoff, missing Location, and
+        # ping-pong chains all raise; no empty 3xx body is ever read as a list.
         if 300 <= post_resp.status_code < 400:
-            post_resp.close()
-            location = post_resp.headers.get("location") or ""
-            target = urljoin(_TALOS_ACCEPT_URL, location) if location else ""
-            if not target or urlsplit(target).hostname not in _TALOS_HOSTS:
-                raise RuntimeError(
-                    f"Talos scraper: accept-terms answered HTTP "
-                    f"{post_resp.status_code} with no same-origin redirect "
-                    "Location; refusing to follow")
-            post_resp = session.get(target, timeout=_TALOS_TIMEOUT,
-                                    proxies=proxies,  # type: ignore[reportArgumentType]  # None values disable proxies at runtime
-                                    stream=True,
-                                    allow_redirects=False)
-            if 300 <= post_resp.status_code < 400:
-                raise RuntimeError(
-                    "Talos scraper: accept-terms list answered a second "
-                    f"redirect (HTTP {post_resp.status_code}); refusing")
+            current_url = _TALOS_ACCEPT_URL
+            hops = 0
+            while 300 <= post_resp.status_code < 400:
+                post_resp.close()
+                hops += 1
+                if hops > 3:
+                    raise RuntimeError(
+                        "Talos scraper: accept-terms redirect chain too long "
+                        "(possible ping-pong); refusing")
+                location = post_resp.headers.get("location") or ""
+                target = urljoin(current_url, location) if location else ""
+                if not target or urlsplit(target).hostname not in _TALOS_HOSTS:
+                    raise RuntimeError(
+                        f"Talos scraper: accept-terms answered HTTP "
+                        f"{post_resp.status_code} with no same-origin redirect "
+                        "Location; refusing to follow")
+                current_url = target
+                post_resp = session.get(target, timeout=_TALOS_TIMEOUT,
+                                        proxies=proxies,  # type: ignore[reportArgumentType]  # None values disable proxies at runtime
+                                        stream=True,
+                                        allow_redirects=False)
         post_resp.raise_for_status()
         body = _read_capped(post_resp, feed.name).strip()
     except Exception as e:
