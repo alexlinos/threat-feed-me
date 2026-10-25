@@ -296,6 +296,35 @@ async function saveRetention() {
     el.defaultValue = el.value;
     alert(v === 0 ? 'Retention set to keep IPs forever' : 'Retention set to ' + v + ' days');
 }
+// Remote feed catalog (issue #9): the auto-add policy toggle on the System
+// panel. Persisted server-side (survives restarts); OFF sends new catalog
+// entries to the feed table as pending instead of adding them.
+async function saveCatalogAutoAdd(btn) {
+    const el = document.getElementById('catalog-auto-add');
+    if (!el) return;
+    if (btn) btn.disabled = true;
+    const r = await apiFetch('/api/settings/catalog-auto-add', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({auto_add: el.checked})});
+    if (btn) btn.disabled = false;
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert('Could not save: ' + (detailText(j.detail) || r.status)); return; }
+    alert('Catalog auto-add ' + (el.checked ? 'ON: new feeds are added as they ship'
+                                             : 'OFF: new feeds await review under Feeds'));
+}
+// One-click review of a pending catalog entry: Add activates it, Dismiss
+// tombstones it (a dismissed feed stays gone through future catalog bumps).
+async function catalogReview(name, btn, add) {
+    if (!add && !confirm('Dismiss catalog feed "' + name + '"? It stays deleted even when the catalog updates.')) return;
+    const btns = btn ? btn.parentElement.querySelectorAll('button') : [];
+    btns.forEach(b => { b.disabled = true; });
+    if (btn) btn.textContent = add ? 'Adding…' : 'Dismissing…';
+    let r = null;
+    try { r = await apiFetch('/api/catalog/' + encodeURIComponent(name) + (add ? '/add' : '/dismiss'), {method:'POST'}); } catch (e) { /* below */ }
+    if (r && r.ok) { reloadPage(); return; }
+    btns.forEach(b => { b.disabled = false; });
+    if (btn) btn.textContent = add ? 'Add' : 'Dismiss';
+    const j = r ? await r.json().catch(() => ({})) : {};
+    alert('Could not ' + (add ? 'add' : 'dismiss') + ' "' + name + '"' + (j.detail ? ': ' + detailText(j.detail) : r ? '' : ' (server not answering)'));
+}
 function refreshAll(btn) { startRefresh(null, btn); }
 function refreshFeed(name, btn) { startRefresh(name, btn); }
 
