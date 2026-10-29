@@ -822,6 +822,9 @@ these areas again:
   new shipped default (row interval == the interval in its seed
   fingerprint). Changed intervals, enabled and weight stay the operator's.
   Decided before the plumbing update, which rewrites the fingerprint.
+  **After 2.5.10 (issue #7)**: `enabled` follows the same rule, so a shipped
+  deprecation (urlhaus_hostfile, 410 upstream) reaches installs that never
+  touched the switch. Weight is still never synced.
 - **Logo**: `/api/refresh/status` carries `failing` (enabled feeds whose
   latest fetch failed, from any run); the logo reads it. It used to read
   only the last run, which fetches just the due feeds, so a 15-minute
