@@ -17,7 +17,7 @@ Why this fetch is not behind the feed SSRF guard: the URL is the local
 operator's config.yaml (same trust class as ``database.path`` or
 ``integrations.unifi.host``), never a dashboard-supplied value, and the
 default is a fixed constant. The response body is read for exactly one
-field — ``tag_name`` — which is kept only if it survives the strict
+field — each tag's ``name`` (or a Releases mirror's ``tag_name``) — kept only if it survives the strict
 three-segment numeric guard the publish workflow enforces; nothing else
 is parsed or stored, and the release link is built from constant bases
 plus the validated tag, never from response data.
@@ -36,11 +36,15 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-RELEASES_URL = "https://api.github.com/repos/alexlinos/threat-feed-me/releases/latest"
+# Tags, not /releases/latest: releases ship as v*.*.* tags (CI publishes the
+# image from the tag) and a GitHub Release object is only made now and then,
+# so "latest release" lagged six versions behind when this was written. The
+# API lists tags newest first; the highest valid one on the page wins.
+RELEASES_URL = "https://api.github.com/repos/alexlinos/threat-feed-me/tags?per_page=100"
 # Constant bases only: the link shown in the footer is these plus the
 # regex-validated tag, never a URL field from the API response.
 RELEASE_HTML_BASE = "https://github.com/alexlinos/threat-feed-me"
-RELEASE_PAGE_BASE = RELEASE_HTML_BASE + "/releases/tag/"
+RELEASE_PAGE_BASE = RELEASE_HTML_BASE + "/releases/tag/v"   # tags carry the v
 
 # Persisted through the existing settings mechanism (db.get/set_setting),
 # same as last_backup_at: survives restarts, paces the scheduler.
@@ -143,7 +147,12 @@ def check_for_updates(db, config=None, now=None):
             # nothing to tell the operator), 404, 5xx: silent.
             return None
         payload = resp.json()  # raises on garbage; caught below
-        tag = _clean_tag(payload.get("tag_name") if isinstance(payload, dict) else None)
+        if isinstance(payload, list):      # the tags API (default)
+            tags = [t for t in (_clean_tag(e.get("name")) for e in payload
+                                if isinstance(e, dict)) if t]
+            tag = max(tags, key=_as_tuple) if tags else None
+        else:                              # a Releases-API mirror (updates.url)
+            tag = _clean_tag(payload.get("tag_name") if isinstance(payload, dict) else None)
         if tag is None:
             return None  # missing or unparseable tag: silent, stays false
         was = db.get_setting(AVAILABLE_KEY)

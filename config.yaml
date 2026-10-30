@@ -76,6 +76,17 @@ feeds:
     scraper: urlhaus_keyed_csv
     enabled: false
 
+  # Retired: the keyless predecessor of urlhaus_keyed (410 Gone upstream).
+  # Kept, disabled, so the upgrade switches it off on installs that never
+  # touched it (the sync rule only reaches feeds still listed here); a
+  # dropped entry would stay enabled and fail every cycle forever.
+  - name: urlhaus_hostfile
+    url: https://urlhaus.abuse.ch/downloads/hostfile/
+    feed_type: "threat_intel"
+    indicator_kind: "domain"
+    update_interval: 3600
+    enabled: false
+
   - name: openphish_community
     url: https://openphish.com/feed.txt
     feed_type: "threat_intel"
@@ -620,7 +631,8 @@ updates:
   # Override the check endpoint (e.g. a mirror of the Releases API for
   # restricted networks). Only "url" and "enabled" are read; the release
   # LINK shown in the footer always points at the public repo.
-  # url: https://api.github.com/repos/alexlinos/threat-feed-me/releases/latest
+  # url: https://api.github.com/repos/alexlinos/threat-feed-me/tags?per_page=100
+  # (a Releases-API mirror answering {"tag_name": ...} works too)
 
 database:
   path: ./data/threatfeedme.db
@@ -653,13 +665,15 @@ dashboard:
 #              party means trusting THEM to define what the firewall
 #              blocks; public HTTPS only, redirects stay on the GitHub
 #              raw CDN, fetch caps and the SSRF guard are the feed path's.
-#   auto_add:  ON (default): new catalog entries ship enabled, same
-#              posture as pre-ratified baked defaults. OFF: new entries
-#              land as *pending* in the feed table for one-click Add, and
-#              Dismiss tombstones them. Entries needing an API key ship
-#              disabled regardless. The dashboard's System toggle wins
-#              once saved; this value is its initial default.
+#   auto_add:  OFF (default): new catalog entries land as *pending* in the
+#              feed table, the top bar says "new feeds available", and
+#              one click Adds or Dismisses each (a dismissed feed stays
+#              gone). ON: new entries go live as they ship, so a commit
+#              to a public repo changes what your firewall blocks.
+#              Entries needing an API key ship disabled regardless. The
+#              dashboard's System toggle wins once saved; this value is
+#              its initial default.
 catalog:
   enabled: true
   url: https://raw.githubusercontent.com/alexlinos/threat-feed-me/main/feed_catalog.yaml
-  auto_add: true
+  auto_add: false

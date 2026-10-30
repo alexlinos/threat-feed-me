@@ -73,6 +73,26 @@ silently swapping it in later. Changing the gateway host clears the pin along
 with the saved login. With `verify_ssl: true` the CA check does this job and
 the pin is not used.
 
+### Feed catalog (2.6)
+
+The daily catalog poll lets a change to `feed_catalog.yaml` on the
+project's `main` branch reach every install without a new image, so that
+file is part of what decides what your firewall blocks. What limits it:
+new feeds it lists arrive **pending** (not fetched, not scored) until you
+Add them, unless you turn auto-add on; it never changes a feed's on/off
+switch or weight; a feed you edited or deleted from the dashboard is never
+touched; a feed needing a key always arrives disabled, and an entry may only
+name a key variable your config.yaml already declares (a `TFM_FEED_*` key,
+which may go to any host, is refused); a version that isn't
+higher than the last one applied changes nothing; and the fetch is HTTPS
+only, through the SSRF guard, size-capped, with redirects confined to
+GitHub's raw-content hosts. What it can still do: change the URL, scraper
+or format of a shipped feed you never edited (that is how feed fixes ship).
+Built-in API keys stay bound to their shipped hosts, and domain authority
+(force-HIGH) is granted only while a feed's URL matches your config.yaml,
+so a repointed feed gets neither. Set `catalog.enabled: false` to rely on
+the feeds baked into the image alone.
+
 What the software stores, sends and logs, and to whom, is documented in
 [PRIVACY.md](PRIVACY.md).
 

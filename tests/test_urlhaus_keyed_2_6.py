@@ -139,11 +139,13 @@ def _setup(tmp_path, monkeypatch, key=KEY, gateway=None, policy=None):
 # ---------------------------------------------------------------- config ----
 
 def test_shipped_config_declares_the_keyed_feed():
-    """The dead keyless hostfile block is REPLACED, not kept beside a keyed
-    entry, and the keyed entry carries every field issue #8 ratified."""
+    """The keyed entry carries every field issue #8 ratified. The dead
+    keyless hostfile stays listed but DISABLED: dropping it would leave it
+    enabled and failing on every install that was seeded with it (sync only
+    switches off feeds still listed in config)."""
     cfg = _shipped_cfg()
     feeds = {f["name"]: f for f in cfg["feeds"]}
-    assert "urlhaus_hostfile" not in feeds, "dead endpoint must not linger"
+    assert feeds["urlhaus_hostfile"]["enabled"] is False
     entry = feeds[FEED_NAME]
     assert entry["url"] == TEMPLATE
     assert AUTH_URL_PLACEHOLDER in entry["url"], "template, never a real key"

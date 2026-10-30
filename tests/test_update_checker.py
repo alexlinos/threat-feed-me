@@ -89,7 +89,7 @@ def test_request_carries_ua_header_and_default_url(db, M, monkeypatch):
     M.update_checker.check_for_updates(db, {}, now=NOW)
     args, kwargs = get.call_args
     assert args[0] == M.update_checker.RELEASES_URL
-    assert args[0] == "https://api.github.com/repos/alexlinos/threat-feed-me/releases/latest"
+    assert args[0] == "https://api.github.com/repos/alexlinos/threat-feed-me/tags?per_page=100"
     assert kwargs["timeout"] == M.update_checker.FETCH_TIMEOUT_S
     assert kwargs["headers"]["User-Agent"].startswith("ThreatFeedMe/")
 
@@ -230,7 +230,7 @@ def test_api_settings_exposes_update_readonly(db, M, monkeypatch):
     upd = body["update"]
     assert upd["available"] is True
     assert upd["latest"] == "99.0.0"
-    assert upd["release_url"].endswith("/releases/tag/99.0.0")
+    assert upd["release_url"].endswith("/releases/tag/v99.0.0")   # the real tag name
 
 
 # ---- 6. scheduler hook --------------------------------------------------------
@@ -303,3 +303,16 @@ def test_no_identifying_literals_in_the_module(M):
     src = inspect.getsource(M.update_checker)
     assert not re.search(r"\b(192\.168\.\d|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.)", src)
     assert "example.com" not in src
+
+
+def test_tags_api_highest_valid_tag_wins(db, M, monkeypatch):
+    """The default endpoint lists tags. The highest numeric version wins
+    (v99.0.10 beats v99.0.9, which a string sort gets wrong) and tags the
+    guard rejects are skipped, not fatal."""
+    payload = [{"name": "v99.0.9"}, {"name": "v99.0.10"}, {"name": "v100.0.0-rc1"},
+               {"name": "nightly"}, "junk"]
+    monkeypatch.setattr(M.update_checker, "_http_get",
+                        Mock(return_value=Resp(payload=payload)))
+    state = M.update_checker.check_for_updates(db, {})
+    assert state["latest"] == "99.0.10" and state["available"] is True
+    assert state["release_url"].endswith("/releases/tag/v99.0.10")

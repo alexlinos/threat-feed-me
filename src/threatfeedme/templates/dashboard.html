@@ -7,6 +7,19 @@
 {%- endmacro %}
 
 {% block topbar %}
+    {# Things waiting on the operator, in one place: a newer release (the
+       daily check; the app never updates itself) and catalog feeds held
+       for review (auto_add off). #}
+    {# ['update'], not .update: dot lookup finds the dict's update() method #}
+    {% set upd = system['update'] %}
+    {% if upd and upd.available %}
+    <a class="notice" href="{{ upd.release_url }}" rel="noopener noreferrer"
+       title="Threat Feed Me v{{ upd.current }} is running. Pulling and restarting stays your call.">v{{ upd.latest }} available</a>
+    {% endif %}
+    {% if catalog and catalog.pending %}
+    <a class="notice" href="/#feeds" onclick="showPendingFeeds()"
+       title="{{ catalog.pending|join(', ') }}: added to the feed catalog and waiting for you to Add or Dismiss them under Feeds">{{ catalog.pending|length }} new feed{{ 's' if catalog.pending|length != 1 }} available</a>
+    {% endif %}
     <a class="health{% if pulse.first_problem %} warn{% elif pulse.pending_count %} pending{% endif %}" href="/#feeds"
        title="{% if pulse.first_problem %}problem: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }} more{% endif %}{% elif pulse.pending_count %}{{ pulse.pending_count }} awaiting first fetch{% else %}all feeds reporting{% endif %}">
         <i aria-hidden="true"></i>{{ pulse.feeds_healthy }} of {{ pulse.feeds_total }} enabled feeds healthy{% if pulse.first_problem %}<span class="health-name">: {{ pulse.first_problem }}{% if pulse.problem_count > 1 %} +{{ pulse.problem_count - 1 }}{% endif %}</span>{% endif %}
@@ -252,7 +265,7 @@
                 {{ '{:,}'.format(g.entry_count) }} distinct indicators</span>
             </td></tr>
             {% for row in feed_rows if row.kind == g.kind %}
-            <tr class="{% if not row.enabled %}row-off{% endif %}{% if row.problem %} row-problem{% endif %}">
+            <tr class="{% if not row.enabled %}row-off{% endif %}{% if row.problem %} row-problem{% endif %}"{% if row.pending %} data-pending{% endif %}>
                 <td>
                     <b>{{ row.name }}</b>{% if row.pending %} <span class="badge badge-warn" title="added by the remote feed catalog and awaiting your review: not fetched and not scored until you Add it">awaiting review</span>{% elif row.added_by == 'sync-catalog' %} <span class="badge" title="added from the remote feed catalog (feed_catalog.yaml)">catalog</span>{% endif %}{% if row.problem %} <span class="reorder-flag" title="Sorted to the top of its group because this feed needs attention (see the last error)">↑ needs attention</span>{% endif %}
                     <div class="feed-url" title="{{ row.url }}"><bdi>{{ row.url }}</bdi></div>
@@ -598,9 +611,9 @@
                     aria-label="Automatically add new remote catalog feeds"></span>
                 <button class="mini-btn" onclick="saveCatalogAutoAdd(this)">Save</button>
             </div>
-            <p class="hint">New entries in the remote feed catalog{% if catalog and catalog.version %} (version {{ catalog.version }}){% endif %} are added
-               automatically. Off: they appear under <a href="#feeds">Feeds</a> as <i>awaiting review</i> — Add or Dismiss them.
-               Dismissed feeds stay gone.{% if catalog and catalog.last_error %} Last catalog fetch failed: see /api/settings.{% endif %}</p>
+            <p class="hint">Off (the default): new feeds in the project's feed catalog{% if catalog and catalog.version %} (version {{ catalog.version }}){% endif %}
+               appear under <a href="#feeds">Feeds</a> as <i>awaiting review</i> and the top bar says so; Add or Dismiss each one.
+               Dismissed feeds stay gone. On: they are added and fetched as they ship.{% if catalog and catalog.last_error %} Last catalog fetch failed: see /api/settings.{% endif %}</p>
         </div>
 
         <div class="panel card" id="system-panel">

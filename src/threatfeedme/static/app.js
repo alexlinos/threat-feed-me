@@ -1518,24 +1518,11 @@ async function addHostName(e, where) {
 }
 document.addEventListener('DOMContentLoaded', loadHostCheck);
 
-// Update badge in the footer (issue #10): one small "vA.B.C → vD.E.F
-// available" link when the daily release check has seen a newer version.
-// Read-only fetch of /api/settings; the state was written by the
-// scheduler's silent check. Built with createElement/textContent, not an
-// HTML string — no remote-derived value ever reaches innerHTML. A badge
-// must never break a page: every failure path here is a no-op.
-document.addEventListener('DOMContentLoaded', () => {
-    const foot = document.querySelector('footer.foot');
-    if (!foot) return;
-    apiFetch('/api/settings').then(r => r.ok ? r.json() : null).then(s => {
-        const u = s && s.update;
-        if (!u || !u.available || !u.latest || !u.release_url) return;
-        foot.appendChild(document.createTextNode(' · '));
-        const a = document.createElement('a');
-        a.href = u.release_url;
-        a.rel = 'noopener noreferrer';
-        a.className = 'update-badge';
-        a.textContent = 'v' + u.current + ' \u2192 v' + u.latest + ' available';
-        foot.appendChild(a);
-    }).catch(() => { /* silent by design */ });
-});
+// The top bar's "new feeds available" link: open Feeds and bring the first
+// row awaiting review into view (they sort to the top of their group).
+function showPendingFeeds() {
+    setTimeout(() => {
+        const row = document.querySelector('tr[data-pending]');
+        if (row) row.scrollIntoView({block: 'center'});
+    }, 0);
+}

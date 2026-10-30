@@ -25,7 +25,11 @@ from threatfeedme.models import FeedSource
 
 CATALOG_URL = ("https://raw.githubusercontent.com/alexlinos/threat-feed-me"
                "/main/feed_catalog.yaml")
-CONFIG = {"catalog": {"enabled": True, "url": CATALOG_URL, "auto_add": True}}
+CONFIG = {"catalog": {"enabled": True, "url": CATALOG_URL, "auto_add": True},
+          # keys a catalog entry may name must be declared by a shipped feed
+          "feeds": [{"name": n, "url": "https://feeds.example.org/k", "auth_env": v}
+                    for n, v in (("urlhaus_keyed", "URLHAUS_AUTH_KEY"),
+                                 ("keyed_bl", "KEYED_BL_KEY"))]}
 
 ALPHA = {"name": "alpha_bl", "url": "https://feeds.example.org/alpha.txt",
          "feed_type": "threat_intel", "update_interval": 3600}
@@ -66,7 +70,7 @@ def test_default_url_is_this_repo_over_tls():
     assert catalog_sync.DEFAULT_CATALOG_URL.startswith("https://raw.githubusercontent.com/")
     assert catalog_sync.DEFAULT_CATALOG_URL.endswith("/main/feed_catalog.yaml")
     cfg = catalog_sync.catalog_config({})
-    assert cfg["enabled"] is True and cfg["auto_add"] is True
+    assert cfg["enabled"] is True and cfg["auto_add"] is False   # review first
     assert cfg["url"] == catalog_sync.DEFAULT_CATALOG_URL
 
 
@@ -263,7 +267,7 @@ def test_add_keyless_only_keyed_pending_stays_disabled(db):
 
 def test_toggle_persisted_wins_over_config_and_survives_restart(db, tmp_path):
     """The persisted settings toggle is the operator's answer; config.yaml
-    is only the initial default (and default ON)."""
+    is only the initial default."""
     assert catalog_sync.resolve_auto_add(db, CONFIG) is True          # default
     db.set_setting(catalog_sync.CATALOG_AUTO_ADD_KEY, "0")
     assert catalog_sync.resolve_auto_add(db, CONFIG) is False
@@ -418,3 +422,45 @@ def test_fetch_refers_offsite_redirect(monkeypatch):
     with pytest.raises(catalog_sync.CatalogError) as exc:
         catalog_sync.http_get_text(CATALOG_URL)
     assert "githubusercontent" in str(exc.value)
+
+
+# ------------------------------------------------- shipped file + startup ----
+
+def test_shipped_catalog_parses_and_matches_the_baked_roster():
+    """feed_catalog.yaml is what every install polls: it must pass the same
+    validation the app applies, and stay identical to config.yaml's feeds so
+    a fresh image and a catalog-synced install end up with one roster."""
+    import pathlib
+    import yaml
+    root = pathlib.Path(__file__).resolve().parent.parent
+    version, feeds = catalog_sync.parse_catalog((root / "feed_catalog.yaml").read_text())
+    assert version >= 1
+    assert feeds == yaml.safe_load((root / "config.yaml").read_text())["feeds"]
+
+
+def test_catalog_plumbing_survives_a_restart(db):
+    """The baked sync runs on every start and moves a seeded row back to
+    config.yaml's URL; the stored catalog is re-applied after it, so the
+    catalog's fix sticks instead of reverting until the next version bump."""
+    baked = {"feeds": [dict(ALPHA, url="https://old.example.net/alpha.txt")]}
+    db.seed_feeds_from_config(baked)
+    catalog_sync.sync_catalog(db, CONFIG, fetch=fetcher(catalog_text(1, [ALPHA])))
+    assert db.get_feed_source("alpha_bl").url == ALPHA["url"]
+    db.sync_default_feeds(baked)                     # next start: baked pass
+    assert db.get_feed_source("alpha_bl").url == "https://old.example.net/alpha.txt"
+    catalog_sync.reapply_stored(db, CONFIG)          # ...then the stored catalog
+    assert db.get_feed_source("alpha_bl").url == ALPHA["url"]
+
+
+def test_catalog_cannot_route_an_operator_key_to_its_own_host(db):
+    """TFM_FEED_* keys may go to any host, so a catalog entry naming one could
+    exfiltrate it: as a new feed, or by repointing a seeded feed the operator
+    never edited. Such entries are ignored; shipped keys stay usable."""
+    db.seed_feeds_from_config({"feeds": [ALPHA]})
+    evil = dict(ALPHA, url="https://collector.example.net/x", requires_auth=True,
+                auth_env="TFM_FEED_MISP_KEY")
+    new = {"name": "new_keyed", "url": "https://collector.example.net/y",
+           "requires_auth": True, "auth_env": "TFM_FEED_MISP_KEY"}
+    catalog_sync.sync_catalog(db, CONFIG, fetch=fetcher(catalog_text(1, [evil, new])))
+    assert db.get_feed_source("alpha_bl").url == ALPHA["url"]
+    assert db.get_feed_source("new_keyed") is None

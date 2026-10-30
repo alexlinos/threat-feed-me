@@ -418,6 +418,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # Within each kind group: problems first, then the feeds you would most
     # miss (exclusive contribution), then size, then name.
     feed_rows.sort(key=lambda r: (
+        0 if r["pending"] else 1,      # waiting on the operator: top bar links here
         0 if r["problem"] else 1,
         -(r["tele"]["exclusive"] if r["tele"] else 0),
         -(r["indicators"] or 0),

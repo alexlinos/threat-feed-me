@@ -748,8 +748,15 @@ automatically on startup:
   bug fixes reach you. A feed's weight is never touched by an update. Its
   on/off switch and refresh interval follow a new shipped default only if
   you never changed them (so a feed retired upstream switches off by
-  itself); ones you changed stay yours. A feed you re-added or overrode from the dashboard is yours
-  entirely and is never auto-updated.
+  itself); ones you changed stay yours. A feed you re-added or overrode
+  from the dashboard is yours entirely and is never auto-updated.
+- **Between releases (2.6+)**, the same rules apply to the project's
+  [feed catalog](feed_catalog.yaml), which the app checks once a day, so
+  feed fixes don't wait for a new image. New feeds it adds show up in the
+  top bar as *new feeds available* and wait under Feeds for you to Add or
+  Dismiss them; turn on *Auto-add new catalog feeds* (System) to skip the
+  review. The top bar also says when a newer release exists; updating
+  stays your call.
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
@@ -860,8 +867,9 @@ scheduler. Refreshes then happen only when you trigger them.
 
 ## Privacy
 
-Threat Feed Me runs where you install it and phones home to nobody: no
-telemetry, no analytics, no update check. What it stores on your data
+Threat Feed Me runs where you install it: no telemetry, no analytics, no
+account. Its only calls home are two anonymous daily GETs to GitHub (the
+release check and the feed catalog), both switchable off. What it stores on your data
 volume, what it sends to the feed providers you enable and to your UniFi
 gateway or CrowdSec LAPI, and what it exposes on the network (feed URLs and
 TAXII) are spelled out, component by component, in [PRIVACY.md](PRIVACY.md).

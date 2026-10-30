@@ -24,8 +24,10 @@ Safety rails (non-negotiable, all exercised in tests/test_catalog.py):
   ``catalog.url`` to a third party means trusting them to define what the
   firewall blocks.
 * **Auto-add policy.** ``catalog.auto_add`` (settings-page toggle, default
-  ON). OFF: new entries land *pending* (disabled, unfetched, unscored) for
-  one-click Add, and Dismiss tombstones them via ``deleted_feeds``. Entries
+  OFF: a push to a public repo must not decide on its own what a firewall
+  blocks). OFF: new entries land *pending* (disabled, unfetched, unscored)
+  for one-click Add, the dashboard's top bar announces them, and Dismiss
+  tombstones them via ``deleted_feeds``. ON adds them live. Entries
   that need a key ship disabled regardless of the toggle — auto-add never
   enables a feed that cannot work without a key.
 
@@ -40,6 +42,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 import yaml
 
+from threatfeedme.credentials import KeyPolicy, split_vars
 from threatfeedme.feed_ingestor import (_FETCH_TIMEOUT, _NO_PROXIES,
                                         _read_capped, _require_public_url)
 
@@ -57,6 +60,8 @@ CATALOG_VERSION_KEY = "catalog_version"
 CATALOG_FETCHED_KEY = "catalog_last_fetch_at"
 CATALOG_ERROR_KEY = "catalog_last_error"
 CATALOG_AUTO_ADD_KEY = "catalog_auto_add"
+# The last document applied, re-applied at startup (reapply_stored).
+CATALOG_DOC_KEY = "catalog_applied_doc"
 
 # One redirect chain, but only ever inside the CDN that serves GitHub raw
 # content — a catalog fetch must not be walked onto an arbitrary host.
@@ -89,11 +94,11 @@ def _as_mapping(section: str, value) -> dict:
 
 def catalog_config(config: Dict) -> dict:
     """The catalog block with defaults applied: enabled ON, repo-pinned URL,
-    auto_add ON (the DB setting, once saved, wins over the config value)."""
+    auto_add OFF (the DB setting, once saved, wins over the config value)."""
     cfg = dict(_as_mapping('catalog', (config or {}).get('catalog')))
     cfg.setdefault('enabled', True)
     cfg.setdefault('url', DEFAULT_CATALOG_URL)
-    cfg.setdefault('auto_add', True)
+    cfg.setdefault('auto_add', False)
     cfg.setdefault('interval_hours', 24)
     return cfg
 
@@ -108,7 +113,7 @@ def resolve_auto_add(db, config: Dict) -> bool:
     except Exception:
         raw = None
     if raw is None:
-        return bool(catalog_config(config).get('auto_add', True))
+        return bool(catalog_config(config).get('auto_add', False))
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -201,6 +206,24 @@ def parse_catalog(text: str) -> Tuple[int, List[Dict]]:
     return version, valid
 
 
+def _keys_shipped_only(feeds: List[Dict], config: Dict) -> List[Dict]:
+    """Drop entries that name a key outside the shipped set. TFM_FEED_* keys
+    are the operator's own and may go to any host, so a catalog entry naming
+    one (a new feed, or a URL change to a seeded one) could send it to a host
+    of the catalog's choosing. Shipped keys stay bound to their shipped hosts
+    by KeyPolicy, so those are safe to reference."""
+    shipped = KeyPolicy.from_config(config).bound
+    keep = []
+    for f in feeds:
+        bad = [v for v in split_vars(f.get("auth_env")) if v not in shipped]
+        if bad:
+            logger.warning("[catalog] ignoring entry %r: it names key(s) %s, which "
+                           "the catalog may not use", f.get("name"), ", ".join(bad))
+        else:
+            keep.append(f)
+    return keep
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -265,9 +288,10 @@ def sync_catalog(db, config: Dict, fetch: Optional[Callable[[str], str]] = None,
             return result
 
     auto_add = resolve_auto_add(db, config)
-    actions = db.sync_catalog_feeds(feeds, auto_add=auto_add)
+    actions = db.sync_catalog_feeds(_keys_shipped_only(feeds, config), auto_add=auto_add)
 
     db.set_setting(CATALOG_VERSION_KEY, str(version))
+    db.set_setting(CATALOG_DOC_KEY, text)
     db.set_setting(CATALOG_FETCHED_KEY, _utcnow_iso())
     db.delete_setting(CATALOG_ERROR_KEY)
     logger.info("[catalog] applied version %s (auto_add=%s): +%s added, +%s pending, "
@@ -276,3 +300,23 @@ def sync_catalog(db, config: Dict, fetch: Optional[Callable[[str], str]] = None,
                 len(actions["updated"]), len(actions["skipped_deleted"]))
     result.update(status="synced", catalog_version=version, auto_add=auto_add, **actions)
     return result
+
+
+def reapply_stored(db, config: Dict) -> None:
+    """Re-apply the last catalog document after the startup baked sync.
+
+    sync_default_feeds runs on every start and moves a seeded row's plumbing
+    back to config.yaml, so a URL the catalog changed for a baked feed would
+    revert on every restart and stay reverted (the poll skips an unchanged
+    version). Re-applying the stored document, offline and before the first
+    refresh, keeps the catalog's plumbing without a fetch."""
+    if not catalog_config(config).get('enabled', True):
+        return
+    try:
+        text = db.get_setting(CATALOG_DOC_KEY)
+        if text:
+            _version, feeds = parse_catalog(text)
+            db.sync_catalog_feeds(_keys_shipped_only(feeds, config),
+                                  auto_add=resolve_auto_add(db, config))
+    except Exception as e:  # never blocks startup; the next poll re-syncs
+        logger.warning("[catalog] could not re-apply the stored catalog: %s", e)
