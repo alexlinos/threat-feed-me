@@ -745,10 +745,10 @@ automatically on startup:
 - **Feed plumbing follows the ship; your preferences don't move.** When a
   shipped default's mechanics change (upstream URL moved, a scraper was
   added, auth changed), the fix is applied to your row; that's how feed
-  bug fixes reach you. Your *preferences* (enabled/disabled, weight) are
-  never touched by an update. A feed's refresh interval follows a new
-  shipped default only if you never changed it; one you changed stays
-  yours. A feed you re-added or overrode from the dashboard is yours
+  bug fixes reach you. A feed's weight is never touched by an update. Its
+  on/off switch and refresh interval follow a new shipped default only if
+  you never changed them (so a feed retired upstream switches off by
+  itself); ones you changed stay yours. A feed you re-added or overrode from the dashboard is yours
   entirely and is never auto-updated.
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.

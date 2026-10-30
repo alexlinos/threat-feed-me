@@ -6,8 +6,11 @@ and also meant a shipped flip of enabled never reached an existing row, so a
 retired feed (urlhaus's keyless downloads, all 410) kept failing every cycle
 forever on installs that predated the deprecation. The fix is the 2.5.6
 interval rule extended to enabled: a switch the operator never moved was
-never chosen, so it follows the ship; a switch they moved — either switch,
-enabled OR weight — is theirs and the row is left alone.
+never chosen, so it follows the ship; a switch they moved is theirs. The two
+switches are independent. Weight is never synced at all, and tuning a weight
+does not exempt a row from a shipped deprecation, because in the dashboard
+weight and enabled are separate controls and an operator who set one never
+touched the other.
 """
 import json
 import os
@@ -119,16 +122,18 @@ def test_operator_disabled_feed_is_not_re_enabled(db):
     assert db.get_feed_source("a").enabled is False
 
 
-def test_touched_weight_blocks_an_enabled_flip(db):
-    """The row must match its seeded preferences EXACTLY: a pinned weight
-    is operator attention on the feed, so the enabled switch stays theirs
-    too — propagation is all-or-nothing on the untouched test."""
+def test_a_pinned_weight_does_not_block_an_enabled_flip(db):
+    """The two switches are independent. Weight is never synced, so the
+    pinned 0.5 survives; and tuning it is not evidence the operator also
+    chose the enabled switch, so the shipped deprecation still lands. The
+    alternative (gating the flip on weight too) would let a routine weight
+    tune quietly forfeit deprecation protection."""
     db.seed_feeds_from_config(_ship(enabled=True, weight=1.0))
     _set_weight(db, "a", 0.5)                        # operator pins weight
     actions = db.sync_default_feeds(_ship(enabled=False, weight=1.0))
-    assert actions["updated"] == []
+    assert actions["updated"] == ["a"]
     feed = db.get_feed_source("a")
-    assert feed.enabled is True and feed.weight == 0.5
+    assert feed.enabled is False and feed.weight == 0.5
 
 
 def test_dashboard_override_nulls_fingerprint_and_blocks_flip(db):

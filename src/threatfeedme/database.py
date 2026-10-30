@@ -47,28 +47,10 @@ def _plumbing_differs(a: FeedSource, b: FeedSource) -> bool:
     return any(getattr(a, f) != getattr(b, f) for f in _PLUMBING_FIELDS)
 
 
-def _fingerprint_interval(fp: Optional[str]) -> Optional[int]:
-    """The update_interval a seed fingerprint recorded, or None."""
+def _fingerprint_value(fp: Optional[str], key: str):
+    """The value a seed fingerprint recorded for key, or None."""
     try:
-        value = json.loads(fp).get('update_interval') if fp else None
-        return int(value) if value is not None else None
-    except (ValueError, TypeError, AttributeError):
-        return None
-
-
-def _fingerprint_prefs(fp: Optional[str]) -> Optional[Tuple[float, bool]]:
-    """The (weight, enabled) a seed fingerprint recorded, or None.
-
-    None means the fingerprint predates enabled being recorded (or is
-    unreadable): there is then no seeded preference state to compare the
-    row against, so the row keeps the pre-#7 behavior — its interval may
-    still follow the ship (the 2.5.6 rule) but a shipped flip of enabled
-    never propagates to it."""
-    try:
-        data = json.loads(fp) if fp else None
-        if not isinstance(data, dict) or 'enabled' not in data or 'weight' not in data:
-            return None
-        return (float(data['weight']), bool(data['enabled']))
+        return json.loads(fp).get(key) if fp else None
     except (ValueError, TypeError, AttributeError):
         return None
 
@@ -80,14 +62,9 @@ def _feed_fingerprint(feed: FeedSource) -> str:
     row as seed/sync/restore provenance, whose PLUMBING (url/scraper/auth/
     type) follows shipped defaults on upgrade. A dashboard add/override
     stores NULL (see add_feed), freezing the row — that is the operator's
-    way of owning a feed's plumbing. Preferences follow the ship only while
-    the row still equals the values recorded here, because then nobody
-    chose them: an interval follows a new shipped default while it still
-    equals the one recorded here (2.5.6), and enabled follows a shipped
-    flip while enabled AND weight both still equal their recorded values
-    (issue #7 — a shipped deprecation reaches untouched installs). A
-    switch that moved off its recorded value belongs to the operator and
-    nothing on the row is touched."""
+    way of owning a feed's plumbing. Weight is never synced; enabled and the
+    interval are, but only while they still equal the values recorded here
+    (the operator never changed them)."""
     return json.dumps({
         'url': feed.url,
         'feed_type': feed.feed_type.value,
@@ -1715,21 +1692,13 @@ class Database:
           - present with seed provenance and
             shipped PLUMBING changed (url,
             scraper, auth, type)                 -> plumbing updated in place;
-                                                    weight never touched;
-                                                    enabled follows only
-                                                    while the row is
-                                                    untouched (next case)
-          - present with seed provenance and a
-            preference still equal to the value
-            it was seeded with, where shipped
-            has changed that value                -> the preference follows
-                                                    the ship: nobody chose
-              (update_interval since 2.5.6;        the old value, it was
-              enabled since issue #7, gated       just an old default.
-              on weight still equal too, so       Once a switch moves off
-              a touched weight blocks an          its seeded value the row
-              enabled flip)                       is the operator's and
-                                                  nothing is touched.
+                                                    enabled/weight
+                                                    (preferences) untouched
+          - present with seed provenance and an
+            update_interval / enabled still
+            equal to what it was seeded with,
+            where the shipped value has changed -> follows the ship
+                                                    (untouched preference)
           - operator-overridden row (dashboard
             add nulls seed_fingerprint) or
             predating fingerprints               -> left exactly as-is
@@ -1770,45 +1739,38 @@ class Database:
             # merely ENABLED it, which guaranteed opt-in feeds (OTX ships
             # disabled) could never receive their own fixes.
             #
-            # weight is a pure preference — sync never touches it.
-            # update_interval and enabled are preferences too, but a value
-            # the operator never moved was never CHOSEN: it is just an old
-            # default. The fingerprint records the values the row was seeded
-            # or last synced with; while the row still holds them exactly,
-            # the shipped value follows — interval since 2.5.6 (OTX hourly ->
-            # 6 h), enabled since issue #7 (a shipped deprecation like
-            # urlhaus_hostfile's dead keyless downloads reaches existing
-            # installs instead of only fresh ones, no [fail] 410 loop until
-            # an operator notices). A moved value differs from the
-            # fingerprint and stays the operator's: an operator who enabled
-            # an opt-in feed is never silently switched off, one who
-            # disabled a feed is never re-enabled. enabled is gated on
-            # weight as well because "nobody touched the switches" has to
-            # mean BOTH switches — a pinned weight is operator attention.
+            # enabled/weight/interval are PREFERENCES — weight is never
+            # synced on an existing row; enabled and update_interval follow
+            # the ship only while the operator has never changed them (below).
             #
             # A non-NULL seed_fingerprint marks the row as seed/sync/restore
             # provenance; a dashboard add/override nulls it (see add_feed),
             # which is the one way an operator can change plumbing — those
-            # rows stay frozen, protecting deliberate URL overrides. A
-            # fingerprint that predates enabled being recorded has no seeded
-            # enabled to compare against: such a row may still follow the
-            # shipped interval, but a shipped enabled flip never reaches it.
-            #
-            # Both decisions are made BEFORE the plumbing update, which
-            # rewrites the fingerprint and would otherwise make untouched
-            # preferences look customized from then on.
+            # rows stay frozen, protecting deliberate URL overrides.
+            # An interval the operator never changed follows a new shipped
+            # default (2.5.6: OTX hourly -> 6 h). The fingerprint records the
+            # interval the row was seeded or last synced with; if the row still
+            # holds exactly that, nobody chose it, so the old default was just
+            # an old default. A changed interval differs from the fingerprint
+            # and stays the operator's. enabled follows the same rule (issue
+            # #7): a shipped deprecation (urlhaus_hostfile, 410 Gone upstream)
+            # switches the feed off on installs that never touched the switch,
+            # while one the operator re-enabled or disabled stays theirs.
+            # Weight is never touched.
+            # Decided BEFORE the plumbing update, which rewrites the
+            # fingerprint and would otherwise make an untouched value look
+            # customized from then on.
             row = existing[feed.name]
             fp = fingerprints.get(feed.name)
-            seeded = _fingerprint_interval(fp)
+            seeded = _fingerprint_value(fp, 'update_interval')
             interval = (feed.update_interval
                         if seeded is not None and row.update_interval == seeded
                         else row.update_interval)
-            seeded_prefs = _fingerprint_prefs(fp)
+            seeded = _fingerprint_value(fp, 'enabled')
             enabled = (feed.enabled
-                       if seeded_prefs is not None
-                       and (row.weight, bool(row.enabled)) == seeded_prefs
+                       if seeded is not None and row.enabled == bool(seeded)
                        else row.enabled)
-            if fp and _plumbing_differs(row, feed):
+            if fingerprints.get(feed.name) and _plumbing_differs(row, feed):
                 with self._cursor() as cur:
                     cur.execute(
                         "UPDATE feeds SET url = ?, feed_type = ?, requires_auth = ?, "
@@ -1817,15 +1779,15 @@ class Database:
                         "seed_fingerprint = ? WHERE name = ?",
                         (feed.url, feed.feed_type.value, int(feed.requires_auth),
                          feed.auth_env, feed.auth_header, int(feed.local_file),
-                         feed.scraper, feed.indicator_kind or 'ip', interval, enabled,
-                         new_fp, feed.name),
+                         feed.scraper, feed.indicator_kind or 'ip', interval,
+                         int(enabled), new_fp, feed.name),
                     )
                 actions["updated"].append(feed.name)
             elif interval != row.update_interval or enabled != row.enabled:
                 with self._cursor() as cur:
-                    cur.execute("UPDATE feeds SET enabled = ?, update_interval = ?, "
+                    cur.execute("UPDATE feeds SET update_interval = ?, enabled = ?, "
                                 "seed_fingerprint = ? WHERE name = ?",
-                                (enabled, interval, new_fp, feed.name))
+                                (interval, int(enabled), new_fp, feed.name))
                 actions["updated"].append(feed.name)
         return actions
 
@@ -2130,13 +2092,17 @@ class Database:
                     actions["added"].append(feed.name)
                 continue
             # Present already: plumbing follows the ship on sync-provenance
-            # rows, preferences never move — identical rules (and identical
-            # interval logic) to sync_default_feeds, restated so this
-            # function is self-contained. A dashboard-edited row has a NULL
-            # fingerprint and stays frozen, protecting URL overrides through
-            # catalog plumbing updates (acceptance criterion 3).
+            # rows, preferences never move. The interval test is identical to
+            # sync_default_feeds, restated so this function is self-contained.
+            # enabled is deliberately NOT synced here: a shipped deprecation
+            # is a reviewed release change, while a catalog file is a push to
+            # a public repo, and nothing pushed should be able to flip a switch
+            # that decides what the firewall blocks. A dashboard-edited row has
+            # a NULL fingerprint and stays frozen, protecting URL overrides
+            # through catalog plumbing updates (acceptance criterion 3).
             row = existing[feed.name]
-            seeded = _fingerprint_interval(fingerprints.get(feed.name))
+            seeded = _fingerprint_value(fingerprints.get(feed.name),
+                                        'update_interval')
             interval = (feed.update_interval
                         if seeded is not None and row.update_interval == seeded
                         else row.update_interval)

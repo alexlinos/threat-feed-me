@@ -491,6 +491,29 @@ def test_sync_moves_plumbing_and_an_untouched_interval_together(db):
     assert feed.url == "http://a/new.txt" and feed.update_interval == 21600
 
 
+def test_sync_a_shipped_deprecation_disables_an_untouched_feed(db):
+    """Issue #7: urlhaus_hostfile went 410 upstream and shipped disabled, but
+    existing installs kept fetching it forever. An untouched switch follows."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/x.txt"}]})
+    actions = db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                                "enabled": False}]})
+    assert actions["updated"] == ["a"] and db.get_feed_source("a").enabled is False
+    assert db.sync_default_feeds({"feeds": [{"name": "a", "url": "http://a/x.txt",
+                                             "enabled": False}]})["updated"] == []
+
+
+def test_sync_keeps_a_switch_the_operator_flipped(db):
+    """An opt-in feed the operator enabled stays on through a plumbing update
+    that still ships it disabled (the fingerprint rewrite must not launder it)."""
+    db.seed_feeds_from_config({"feeds": [{"name": "a", "url": "http://a/old.txt",
+                                          "enabled": False}]})
+    db.set_feed_enabled("a", True)
+    for url in ("http://a/new.txt", "http://a/newer.txt"):
+        db.sync_default_feeds({"feeds": [{"name": "a", "url": url, "enabled": False}]})
+    feed = db.get_feed_source("a")
+    assert feed.url == "http://a/newer.txt" and feed.enabled is True
+
+
 def test_sync_respects_deletion_tombstones(db):
     """A default the operator deleted stays deleted across updates; only the
     explicit restore-defaults action (or re-adding) brings it back."""

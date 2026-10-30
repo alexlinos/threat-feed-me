@@ -750,11 +750,11 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod runs 2.5.7 (rolled 2026-10-25; the box had in fact
-  never left 2.5.3 — the 2.5.6 roll of 2026-09-30 was recorded here but
-  never reached the host). Its dashboard has no sign-in by the
-  maintainer's choice: access is segmented at the firewall. Not an open
-  item. The 2.5.0 canary was removed 2026-09-26.
+- Prod runs 2.5.10 (rolled 2026-10-29; it reported 2.5.6 right before
+  that roll, so the 2.5.7 line recorded here on 2026-10-25 was not this
+  host). Its dashboard has no sign-in by the maintainer's choice: access
+  is segmented at the firewall. Not an open item. The 2.5.0 canary was
+  removed 2026-09-26.
 
 ## v2.5.3 (2026-09-26): refresh-click lockup
 
@@ -822,6 +822,9 @@ these areas again:
   new shipped default (row interval == the interval in its seed
   fingerprint). Changed intervals, enabled and weight stay the operator's.
   Decided before the plumbing update, which rewrites the fingerprint.
+  **After 2.5.10 (issue #7)**: `enabled` follows the same rule, so a shipped
+  deprecation (urlhaus_hostfile, 410 upstream) reaches installs that never
+  touched the switch. Weight is still never synced.
 - **Logo**: `/api/refresh/status` carries `failing` (enabled feeds whose
   latest fetch failed, from any run); the logo reads it. It used to read
   only the last run, which fetches just the due feeds, so a 15-minute
