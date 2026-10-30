@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from threatfeedme import pipeline
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme import core
+from threatfeedme import catalog_sync
 from threatfeedme.exporter import is_included
 from threatfeedme.feed_helpers import TIER_FEEDS, _feed_base
 from threatfeedme.models import (ALL_FEEDS, ConfidenceTier, CUMULATIVE_TIERS,
@@ -121,8 +122,12 @@ def _system_info(request: Request, poll_log: dict) -> dict:
         ((k.split(":", 1)[1], v) for k, v in poll_log.items() if k.startswith("taxii:")),
         key=lambda kv: kv[1].get("at", ""), reverse=True)
     from threatfeedme import polls
+    from threatfeedme import update_checker
     return {
         "version": __version__,
+        # Footer badge / System panel (issue #10): read-only, never fetches
+        # here — the scheduler owns the outbound check.
+        "update": update_checker.update_state(core.db, core.config),
         "db_size": _human_bytes(size),
         "last_backup": _age_text(last_backup) if last_backup else "",
         "predictor": {
@@ -358,6 +363,10 @@ def dashboard(request: Request, _=Depends(require_auth)):
     telemetry = feed_telemetry(core.db)
     tele_by_name = {r["name"]: r for r in telemetry["rows"]}
     schedule = pipeline.feed_schedule(core.db, _refresh_interval_minutes() * 60)
+    # Catalog provenance + review queue (issue #9): which rows the remote
+    # catalog added, and which of those await operator Add/Dismiss.
+    feed_provenance = core.db.get_feed_provenance()
+    catalog_pending = core.db.catalog_pending_names()
     feed_rows = []
     for fsrc in feed_sources:
         st = feed_stats.get(fsrc.name)
@@ -378,6 +387,10 @@ def dashboard(request: Request, _=Depends(require_auth)):
             "taxii": fsrc.scraper == "taxii21",
             "weight": fsrc.weight,
             "enabled": fsrc.enabled,
+            # Catalog badges: 'sync-catalog' rows get a badge, and pending
+            # rows (auto_add OFF) get the Add/Dismiss affordances.
+            "added_by": feed_provenance.get(fsrc.name),
+            "pending": fsrc.name in catalog_pending,
             # Own clock: cadence and a countdown (None when disabled).
             "every": _every_text(schedule[fsrc.name][0]) if fsrc.name in schedule else None,
             "next_min": (-(-max(0, int(schedule[fsrc.name][1])) // 60)
@@ -405,6 +418,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
     # Within each kind group: problems first, then the feeds you would most
     # miss (exclusive contribution), then size, then name.
     feed_rows.sort(key=lambda r: (
+        0 if r["pending"] else 1,      # waiting on the operator: top bar links here
         0 if r["problem"] else 1,
         -(r["tele"]["exclusive"] if r["tele"] else 0),
         -(r["indicators"] or 0),
@@ -560,6 +574,8 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "feed_types": [t.value for t in FeedType],
         "interval_min": _refresh_interval_minutes(),
         "retention_days": retention_max_age_days(core.db, core.config),
+        "catalog_auto_add": catalog_sync.resolve_auto_add(core.db, core.config),
+        "catalog": _catalog_status_payload(),
         "feed_names": [fsrc.name for fsrc in feed_sources],
         "all_feeds": ALL_FEEDS,
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
@@ -649,10 +665,67 @@ def domain_tlds(_=Depends(require_auth)):
 
 @router.get("/api/settings")
 def get_settings(_=Depends(require_auth)):
+    from threatfeedme import update_checker
     return {
         "refresh_interval_minutes": _refresh_interval_minutes(),
         "retention_max_age_days": retention_max_age_days(core.db, core.config),
+        # Remote catalog (issue #9): the persisted policy toggle plus the
+        # stamps, so the settings panel shows what the app last saw without
+        # a second round trip.
+        "catalog_auto_add": catalog_sync.resolve_auto_add(core.db, core.config),
+        "catalog": _catalog_status_payload(),
+        # Read-only update state (issue #10): the footer badge reads this.
+        "update": update_checker.update_state(core.db, core.config),
     }
+
+
+def _catalog_status_payload() -> dict:
+    cfg = catalog_sync.catalog_config(core.config)
+    return {
+        "enabled": bool(cfg.get("enabled", True)),
+        "url": str(cfg.get("url") or catalog_sync.DEFAULT_CATALOG_URL),
+        "version": core.db.get_setting(catalog_sync.CATALOG_VERSION_KEY),
+        "last_fetch_at": core.db.get_setting(catalog_sync.CATALOG_FETCHED_KEY),
+        "last_error": core.db.get_setting(catalog_sync.CATALOG_ERROR_KEY),
+        "pending": sorted(core.db.catalog_pending_names()),
+    }
+
+
+class CatalogAutoAddRequest(BaseModel):
+    auto_add: bool
+
+
+@router.post("/api/settings/catalog-auto-add")
+def update_catalog_auto_add(request: CatalogAutoAddRequest,
+                            _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Persist the catalog auto-add policy (same settings surface as the
+    other runtime toggles; the value survives restarts)."""
+    core.db.set_setting(catalog_sync.CATALOG_AUTO_ADD_KEY, "1" if request.auto_add else "0")
+    return {"success": True,
+            "catalog_auto_add": catalog_sync.resolve_auto_add(core.db, core.config)}
+
+
+@router.post("/api/catalog/{name}/add")
+def catalog_pending_add(name: str, _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Accept a pending catalog entry: it leaves the review queue and (if
+    keyless) goes live. Unknown/pending-absent names 404 — Add only acts
+    on rows the catalog actually parked for review."""
+    feed = core.db.get_feed_source(name)
+    if feed is None or name not in core.db.catalog_pending_names():
+        raise HTTPException(status_code=404, detail="No pending catalog entry with that name")
+    core.db.catalog_add_pending(name)
+    return {"success": True, "name": name}
+
+
+@router.post("/api/catalog/{name}/dismiss")
+def catalog_pending_dismiss(name: str, _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    """Reject a pending catalog entry: the feed remove stores the
+    deleted_feeds tombstone, so a future catalog bump cannot resurrect it."""
+    feed = core.db.get_feed_source(name)
+    if feed is None:
+        raise HTTPException(status_code=404, detail="No pending catalog entry with that name")
+    core.db.catalog_dismiss_pending(name)
+    return {"success": True, "name": name}
 
 
 @router.post("/api/settings")

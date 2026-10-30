@@ -1,10 +1,13 @@
 # Privacy Statement
 
-*Effective 2026-09-24. Applies to Threat Feed Me v2.5.1 and later.*
+*Effective 2026-10-30. Applies to Threat Feed Me v2.6.0 and later.*
 
 Threat Feed Me runs on infrastructure you control. The project and its
 maintainer collect nothing from you or from your installation: there is no
-telemetry, no analytics, no crash reporting, no update check and no account.
+telemetry, no analytics, no crash reporting and no account. Two daily
+requests to GitHub (a release check and the feed catalog, both described
+below and both switchable off) are the only traffic that reaches the
+project's infrastructure, and neither carries anything about your install.
 This statement describes what the software stores on your host, what it
 sends out and to whom, what it exposes to the network, and what that means
 for you as the operator. It is written to be checked against the code, so
@@ -43,8 +46,9 @@ gateway (see `pusher_unifi.py`).
 
 ## What the software sends, and to whom
 
-All outbound traffic is initiated by the feed ingestor and, if you enable
-them, the UniFi and CrowdSec integrations. All are in `src/threatfeedme/`.
+All outbound traffic is initiated by the feed ingestor, the daily release
+check and feed catalog poll, and, if you enable them, the UniFi and CrowdSec
+integrations. All are in `src/threatfeedme/`.
 
 **To the threat feed providers you enable.** On every refresh the ingestor
 makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent
@@ -99,15 +103,36 @@ at this server. That is a lookup only, no connection is made to the name,
 and the answer is shown to you and not stored. Your resolver (and anything
 upstream of it) sees the name and the time of the query.
 
-**To nobody else.** The software does not contact the project, the
-maintainer, a licensing server, an analytics endpoint or an update service.
+**To GitHub, once a day, for the release check** (`update_checker.py`,
+config `updates.enabled`, on by default). One unauthenticated HTTPS GET to
+`api.github.com/repos/alexlinos/threat-feed-me/tags` (the list of release
+versions) with the
+User-Agent `ThreatFeedMe/update-checker`. No version, install ID, hostname,
+feed list or count is sent; GitHub sees your server's public IP address and
+the request time. The answer is used only to show "vX.Y.Z available" in the
+dashboard's top bar: the software never downloads or installs anything, and
+every failure (offline, blocked, rate-limited) is silent.
+
+**To GitHub, once a day, for the feed catalog** (`catalog_sync.py`, config
+`catalog.enabled`, on by default). One HTTPS GET of `feed_catalog.yaml` from
+`raw.githubusercontent.com`, the project's list of recommended feeds,
+following redirects only within GitHub's raw-content hosts and never through
+a proxy. Nothing is sent but the request itself; GitHub sees your server's
+public IP address and the request time. New feeds it lists wait for you to
+Add them unless you turn on auto-add. If you point `catalog.url` at a mirror,
+that host receives the request instead.
+
+**To nobody else.** The software does not contact the maintainer, a
+licensing server or an analytics endpoint, and it never updates itself.
 Country lookups for the dashboard heatmap use an offline table derived from
 the DB-IP Lite database and shipped inside the image; no geolocation
 service is called at runtime. The map outline is served by the application
 itself, not fetched from a CDN, and the dashboard loads no web fonts,
 scripts or images from anywhere else. You can confirm all of this with an egress
 rule that allows only your enabled feed hosts, your gateway and your
-CrowdSec LAPI: the software works normally behind it.
+CrowdSec LAPI: the software works normally behind it (the release check and
+catalog poll fail silently and the feeds already installed keep working;
+set `updates.enabled` and `catalog.enabled` to false to stop the attempts).
 
 ## What the software exposes to the network
 

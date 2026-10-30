@@ -514,6 +514,21 @@ def test_sync_keeps_a_switch_the_operator_flipped(db):
     assert feed.url == "http://a/newer.txt" and feed.enabled is True
 
 
+def test_the_shipped_config_switches_off_the_retired_urlhaus_feed(db):
+    """urlhaus_hostfile was renamed urlhaus_keyed. Dropping the old name from
+    config.yaml would leave it enabled and 410-ing forever on every install
+    seeded with it; the retired entry stays listed, disabled, so it doesn't."""
+    import pathlib
+    import yaml
+    shipped = yaml.safe_load((pathlib.Path(__file__).resolve().parent.parent
+                              / "config.yaml").read_text())
+    db.seed_feeds_from_config({"feeds": [{
+        "name": "urlhaus_hostfile", "url": "https://urlhaus.abuse.ch/downloads/hostfile/",
+        "feed_type": "threat_intel", "indicator_kind": "domain"}]})
+    db.sync_default_feeds(shipped)
+    assert db.get_feed_source("urlhaus_hostfile").enabled is False
+
+
 def test_sync_respects_deletion_tombstones(db):
     """A default the operator deleted stays deleted across updates; only the
     explicit restore-defaults action (or re-adding) brings it back."""

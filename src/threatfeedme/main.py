@@ -242,6 +242,8 @@ def main():
     # Merge shipped-default changes into an existing DB (app update path);
     # never touches user customizations, deletions, or accumulated data.
     sync = db.sync_default_feeds(cfg)
+    from threatfeedme import catalog_sync
+    catalog_sync.reapply_stored(db, cfg)
     if sync["added"] or sync["updated"]:
         logger.info(f"Default feed sync: added {sync['added']}; updated {sync['updated']}")
 

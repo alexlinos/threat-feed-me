@@ -96,8 +96,8 @@ SonicWall, Palo Alto, Cisco, pfSense, ...) and the checklist ticks itself off as
 your firewall starts polling. The [walkthrough](#walkthrough) below shows every
 screen.
 
-That's it. On first start it fetches **22 free, keyless threat feeds** (16 IP
-feeds and 6 domain feeds: URLhaus, OpenPhish, Phishing Army, HaGeZi TIF,
+That's it. On first start it fetches **21 free, keyless threat feeds** (16 IP
+feeds and 5 domain feeds: OpenPhish, Phishing Army, HaGeZi TIF,
 Phishunt, and the DRB-Ra C2 list),
 removes duplicates, sorts them into the three lists, and starts serving them. It
 **refreshes each feed on its own schedule** (OpenPhish every 15 minutes, DShield every 30, most feeds hourly, Talos daily), no cron, no maintenance. Everything stays
@@ -112,7 +112,11 @@ on-prem; feeds are pulled inbound only.
 - A few feeds ship **disabled**, opt-in from the dashboard once configured:
   AlienVault OTX and the two HoneyDB feeds (free API keys required), the
   auth-walled abuse.ch ThreatFox export (the keyless ThreatFox IOC mirror
-  covers it and ships enabled), CERT.PL, HaGeZi fake, ThreatView domains,
+  covers it and ships enabled), the keyed abuse.ch URLhaus export (the
+  keyless /downloads/ path is retired; a free Auth-Key from auth.abuse.ch
+  goes in **Set key** as `URLHAUS_AUTH_KEY` — the key is embedded in the
+  fetch URL server-side and never displayed, logged, or stored), CERT.PL,
+  HaGeZi fake, ThreatView domains,
   joewein, PhishTank online-valid, and a sample custom honeypot list.
   Feeds that need API credentials have a **Set key** button: it prompts for each
   required credential (HoneyDB takes an id and key pair), stores them
@@ -406,7 +410,7 @@ find the natural gaps in the crowd, and draw the cut lines there:
   threat-intel feed (`require_threat_intel`). The cleanest list. For
   **domains**, where blocklists aggregate each other so heavily that
   corroboration collapses toward one witness, a primary curator
-  (`authoritative_domain_feeds`: URLhaus, CERT.PL) also puts a domain in
+  (`authoritative_domain_feeds`: URLhaus (keyed opt-in), CERT.PL) also puts a domain in
   High on its own word, and loses that privilege if its false-positive rate
   degrades.
 
@@ -744,8 +748,15 @@ automatically on startup:
   bug fixes reach you. A feed's weight is never touched by an update. Its
   on/off switch and refresh interval follow a new shipped default only if
   you never changed them (so a feed retired upstream switches off by
-  itself); ones you changed stay yours. A feed you re-added or overrode from the dashboard is yours
-  entirely and is never auto-updated.
+  itself); ones you changed stay yours. A feed you re-added or overrode
+  from the dashboard is yours entirely and is never auto-updated.
+- **Between releases (2.6+)**, the same rules apply to the project's
+  [feed catalog](feed_catalog.yaml), which the app checks once a day, so
+  feed fixes don't wait for a new image. New feeds it adds show up in the
+  top bar as *new feeds available* and wait under Feeds for you to Add or
+  Dismiss them; turn on *Auto-add new catalog feeds* (System) to skip the
+  review. The top bar also says when a newer release exists; updating
+  stays your call.
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
@@ -856,8 +867,9 @@ scheduler. Refreshes then happen only when you trigger them.
 
 ## Privacy
 
-Threat Feed Me runs where you install it and phones home to nobody: no
-telemetry, no analytics, no update check. What it stores on your data
+Threat Feed Me runs where you install it: no telemetry, no analytics, no
+account. Its only calls home are two anonymous daily GETs to GitHub (the
+release check and the feed catalog), both switchable off. What it stores on your data
 volume, what it sends to the feed providers you enable and to your UniFi
 gateway or CrowdSec LAPI, and what it exposes on the network (feed URLs and
 TAXII) are spelled out, component by component, in [PRIVACY.md](PRIVACY.md).

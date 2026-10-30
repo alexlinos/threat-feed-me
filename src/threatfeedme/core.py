@@ -129,6 +129,8 @@ def init(config_path: str = None):
     # never requires wiping the database.
     _db.seed_feeds_from_config(_config)
     sync = _db.sync_default_feeds(_config)
+    from threatfeedme import catalog_sync
+    catalog_sync.reapply_stored(_db, _config)
     if sync["added"] or sync["updated"]:
         logger.info(
             "Default feed sync: added %s; updated %s",

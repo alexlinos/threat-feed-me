@@ -92,6 +92,57 @@ def _maybe_backup() -> None:
         logger.error(f"[backup] failed: {e}")
 
 
+# The remote feed catalog (issue #9) polls daily, not hourly: roster changes
+# are human-ritualized (a commit to feed_catalog.yaml), and a tighter clock
+# buys nothing while spending goodwill with GitHub's per-IP rate limit. The
+# first scheduler tick (~60 s after start) acts as the at-startup poll; the
+# stamp makes the loop wait 24 h from there. db/config are injectable so
+# tests drive this without touching the core singletons.
+CATALOG_LAST_POLL_KEY = "catalog_last_poll_at"
+CATALOG_POLL_INTERVAL_HOURS_DEFAULT = 24
+
+
+def _maybe_catalog_poll(db=None, config=None) -> None:
+    from threatfeedme import catalog_sync
+    db = core.db if db is None else db
+    config = core.config if config is None else config
+    cfg = catalog_sync.catalog_config(config)
+    if not cfg.get('enabled', True):
+        return
+    try:
+        interval_h = float(cfg.get('interval_hours', CATALOG_POLL_INTERVAL_HOURS_DEFAULT))
+    except (ValueError, TypeError):
+        interval_h = float(CATALOG_POLL_INTERVAL_HOURS_DEFAULT)
+    last = db.get_setting(CATALOG_LAST_POLL_KEY)
+    if last:
+        try:
+            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
+            if elapsed < interval_h * 3600:
+                return
+        except (ValueError, TypeError):
+            pass  # unparseable -> poll now
+    # Stamp BEFORE the fetch: a GitHub-down start must not retry every 60 s
+    # tick for a day (sync_catalog already logs the one warning line and
+    # keeps the last state; a genuine next-day poll follows the stamp).
+    db.set_setting(CATALOG_LAST_POLL_KEY, datetime.now(timezone.utc).isoformat())
+    try:
+        result = catalog_sync.sync_catalog(db, config)
+        if result.get("status") == "synced":
+            logger.info(f"[catalog] poll applied version {result.get('catalog_version')}")
+    except Exception as e:  # sync_catalog shouldn't raise; the thread must live
+        logger.error(f"[catalog] poll failed: {e}")
+
+def _maybe_check_updates() -> None:
+    """Daily release check (issue #10). Same shape as _maybe_backup: the
+    persisted update_last_check stamp paces it, so the first loop tick
+    (~60 s after start, on this thread) doubles as the delayed startup
+    check and dashboard readiness is never on its path. Silence is the
+    contract: update_checker swallows every failure itself, and the loop's
+    guard logs at DEBUG — a blocked network must not even make noise."""
+    from threatfeedme import update_checker
+    update_checker.run_due_check(core.db, core.config)
+
+
 # ==================== REFRESH STATE & SCHEDULER ====================
 # A single lock ensures only one refresh (manual or scheduled) runs at a time.
 _refresh_lock = threading.Lock()
@@ -174,6 +225,22 @@ def _scheduler_loop():
             _maybe_backup()
         except Exception as e:
             logger.error(f"Scheduler backup check failed: {e}")
+        # Remote feed catalog (issue #9): config-gated, daily, and off the
+        # refresh critical path — it only merges feed rows, holds no locks.
+        try:
+            _maybe_catalog_poll()
+        except Exception as e:
+            logger.error(f"Scheduler catalog check failed: {e}")
+
+        # Daily release check (issue #10). The first tick doubles as the
+        # delayed startup check; nothing here is on the request path, so
+        # dashboard readiness never waits on it. DEBUG, not ERROR: the
+        # checker already swallows every failure itself, and a blocked
+        # network must produce zero noise (issue #10 acceptance).
+        try:
+            _maybe_check_updates()
+        except Exception as e:
+            logger.debug(f"[updates] check skipped: {e}")
         try:
             due = pipeline.due_feeds(core.db, _refresh_interval_minutes() * 60)
         except Exception as e:  # never let a bad tick kill the scheduler thread

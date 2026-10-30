@@ -1729,7 +1729,8 @@ class Database:
                 self.add_feed(feed, added_by='sync-defaults', seed_fingerprint=new_fp)
                 actions["added"].append(feed.name)
                 continue
-            # Plumbing follows the ship; preferences belong to the operator.
+            # Plumbing follows the ship; preferences belong to the operator
+            # — unless the operator never set them.
             #
             # url/scraper/auth/type are MECHANICS — when a shipped default's
             # mechanics change it is a bug fix (an upstream endpoint died),
@@ -2018,3 +2019,153 @@ class Database:
             cur.execute("SELECT COUNT(*) FROM whitelist")
             stats["whitelisted"] = cur.fetchone()[0]
             return stats
+
+    # ==================== REMOTE FEED CATALOG (issue #9) ====================
+    # The catalog rows are the same ship-shaped data as the baked defaults,
+    # so they keep the SAME provenance machinery: added_by provenance +
+    # seed_fingerprint gate plumbing-follows-the-ship (url/scraper/auth/type
+    # are bug-fixable mechanics on sync-provenance rows), enabled/weight are
+    # operator preferences and are NEVER touched here, and deleted_feeds
+    # tombstones make an operator delete (or a review-queue Dismiss)
+    # permanent across catalog bumps. sync_default_feeds above stays the
+    # single owner of the baked-config pass; this is the remote-file pass.
+    # (Deliberately a sibling function, not a refactor of the one above: the
+    # two sources differ only in where the list comes from and in the
+    # pending queue, and a release window has concurrent edits nearby.)
+
+    CATALOG_ADDED_BY = "sync-catalog"
+    CATALOG_PENDING_PREFIX = "catalog_pending:"
+
+    def sync_catalog_feeds(self, feed_cfgs: List[Dict],
+                           auto_add: bool = True) -> Dict[str, List[str]]:
+        """Merge the remote catalog's feed list into the feeds table.
+
+        Same semantics as sync_default_feeds (see its docstring for the
+        full rules), with two catalog-specific additions:
+          * new rows are provenanced ``added_by='sync-catalog'`` so the
+            dashboard can badge them and an operator can tell a remote
+            roster entry from a dashboard add;
+          * with ``auto_add`` OFF a NEW entry lands *pending*: stored
+            disabled (never fetched, never scored — the pipeline fetches
+            and the scorer counts only enabled feeds) and marked with a
+            ``catalog_pending:<name>`` settings key, which is what the
+            dashboard's Add/Dismiss affordances act on. Dismiss = a feed
+            remove, i.e. a tombstone, so it stays gone through future
+            bumps. Existing rows are never flipped between pending and
+            live by a sync — Add/Dismiss are operator actions only.
+        An entry that needs a key (``requires_auth``) is stored disabled
+        regardless of the toggle: auto-add never enables a feed that
+        cannot work without a key (the OTX ships-disabled pattern).
+        """
+        actions = {"added": [], "pending": [], "updated": [], "skipped_deleted": []}
+        existing = {f.name: f for f in self.get_feed_sources()}
+        with self._cursor() as cur:
+            cur.execute("SELECT name FROM deleted_feeds")
+            tombstoned = {r['name'] for r in cur.fetchall()}
+            fingerprints = {
+                r['name']: r['seed_fingerprint']
+                for r in cur.execute("SELECT name, seed_fingerprint FROM feeds").fetchall()
+            }
+        for feed_cfg in feed_cfgs:
+            if not isinstance(feed_cfg, dict):
+                continue
+            try:
+                feed = FeedSource(**feed_cfg)
+            except Exception:
+                continue
+            if feed.name in tombstoned:
+                actions["skipped_deleted"].append(feed.name)
+                continue
+            new_fp = _feed_fingerprint(feed)
+            if feed.name not in existing:
+                enabled = feed.enabled
+                if not auto_add:
+                    enabled = False     # pending: invisible to fetch/score
+                elif feed.requires_auth:
+                    enabled = False     # keyless-impossible never auto-live
+                self.add_feed(feed.model_copy(update={"enabled": enabled}),
+                              added_by=self.CATALOG_ADDED_BY, seed_fingerprint=new_fp)
+                if not auto_add:
+                    self.set_setting(self.CATALOG_PENDING_PREFIX + feed.name, "1")
+                    actions["pending"].append(feed.name)
+                else:
+                    actions["added"].append(feed.name)
+                continue
+            # Present already: plumbing follows the ship on sync-provenance
+            # rows, preferences never move. The interval test is identical to
+            # sync_default_feeds, restated so this function is self-contained.
+            # enabled is deliberately NOT synced here: a shipped deprecation
+            # is a reviewed release change, while a catalog file is a push to
+            # a public repo, and nothing pushed should be able to flip a switch
+            # that decides what the firewall blocks. A dashboard-edited row has
+            # a NULL fingerprint and stays frozen, protecting URL overrides
+            # through catalog plumbing updates (acceptance criterion 3).
+            row = existing[feed.name]
+            seeded = _fingerprint_value(fingerprints.get(feed.name),
+                                        'update_interval')
+            interval = (feed.update_interval
+                        if seeded is not None and row.update_interval == seeded
+                        else row.update_interval)
+            if fingerprints.get(feed.name) and _plumbing_differs(row, feed):
+                with self._cursor() as cur:
+                    cur.execute(
+                        "UPDATE feeds SET url = ?, feed_type = ?, requires_auth = ?, "
+                        "auth_env = ?, auth_header = ?, local_file = ?, scraper = ?, "
+                        "indicator_kind = ?, update_interval = ?, seed_fingerprint = ? "
+                        "WHERE name = ?",
+                        (feed.url, feed.feed_type.value, int(feed.requires_auth),
+                         feed.auth_env, feed.auth_header, int(feed.local_file),
+                         feed.scraper, feed.indicator_kind or 'ip', interval, new_fp,
+                         feed.name),
+                    )
+                actions["updated"].append(feed.name)
+            elif interval != row.update_interval:
+                with self._cursor() as cur:
+                    cur.execute("UPDATE feeds SET update_interval = ?, seed_fingerprint = ? "
+                                "WHERE name = ?", (interval, new_fp, feed.name))
+                actions["updated"].append(feed.name)
+        return actions
+
+    def catalog_pending_names(self) -> set:
+        """Names sitting in the catalog review queue (auto_add OFF)."""
+        with self._cursor() as cur:
+            cur.execute("SELECT key FROM settings WHERE key LIKE ?",
+                        (self.CATALOG_PENDING_PREFIX + "%",))
+            return {r['key'][len(self.CATALOG_PENDING_PREFIX):] for r in cur.fetchall()}
+
+    def catalog_add_pending(self, name: str) -> bool:
+        """Operator clicked Add: the pending row goes live and leaves the
+        queue. A keyed feed stays disabled until its key is set — Add
+        accepts the entry, it does not conjure a credential."""
+        feed = self.get_feed_source(name)
+        if feed is None:
+            return False
+        self.delete_setting(self.CATALOG_PENDING_PREFIX + name)
+        if not feed.requires_auth:
+            self.set_feed_enabled(name, True)
+        return True
+
+    def catalog_dismiss_pending(self, name: str) -> bool:
+        """Operator clicked Dismiss: remove_feed stores the deleted_feeds
+        tombstone, so the same entry cannot reappear on a future catalog
+        bump — dismissed-by-review survives version changes."""
+        if not self.get_feed_source(name):
+            return False
+        self.delete_setting(self.CATALOG_PENDING_PREFIX + name)
+        return self.remove_feed(name)
+
+    def get_feed_provenance(self) -> Dict[str, str]:
+        """{feed_name: added_by} — how each row arrived ('seed',
+        'sync-defaults', 'sync-catalog', 'dashboard', ...). The feed table
+        badges catalog rows from this; FeedSource deliberately carries no
+        provenance, so it lives here next to the column."""
+        with self._cursor() as cur:
+            cur.execute("SELECT name, added_by FROM feeds")
+            return {r['name']: (r['added_by'] or 'unknown') for r in cur.fetchall()}
+
+    def delete_setting(self, key: str) -> None:
+        """Remove a settings row (no-op when absent). Settings are written
+        with set_setting; until now nothing needed to un-write one — the
+        catalog stamps (last error) do."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE key = ?", (key,))
