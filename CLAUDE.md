@@ -913,6 +913,38 @@ upload, no CIDR/ranges/IPv6, small XGS poll 24 h+. **2.6 stays separate**:
 the application lists + the five enhancement issues start on their own
 branch after 2.5.7 ships.
 
+## v2.6.0 (2026-10-30): feed catalog, keyed URLhaus, release check
+
+PR #14 (issues #7-#10), reviewed and fixed before merge (3b3a6de). Decisions
+and traps that aren't obvious from the code:
+
+- **Remote feed catalog** (`catalog_sync.py`, `feed_catalog.yaml` on main):
+  polled daily, merged with the baked-sync rules. **auto_add defaults OFF**
+  (maintainer, 2026-10-30): new entries arrive pending and the top bar shows
+  "N new feeds available" beside the release notice (ONE place for things
+  waiting on the operator; no toast, no footer badge). The catalog never
+  syncs `enabled` or weight on existing rows; it can repoint plumbing of a
+  seeded feed the operator never edited (that is how fixes ship). Entries may
+  only name key vars config.yaml declares (`_keys_shipped_only`): TFM_FEED_*
+  keys may go to any host, so a catalog naming one could exfiltrate it.
+- **Editing the catalog**: change entries AND bump `catalog_version` (an
+  unchanged version is a silent no-op), and mirror into config.yaml's
+  `feeds:` (a test requires the two identical).
+- **Startup order**: the baked sync resets seeded plumbing to config.yaml on
+  every start, so `reapply_stored` re-applies the last catalog document
+  (settings `catalog_applied_doc`) right after it; without that a catalog URL
+  fix reverted on every restart.
+- **Release check reads the TAGS API**, not /releases/latest: releases ship
+  as tags and GitHub Release objects are rare (latest was v2.5.4 while v2.5.10
+  was out). Link = `/releases/tag/v<ver>`. Jinja trap: `system.update` is the
+  dict's update() method; use `system['update']`.
+- **urlhaus_keyed** replaces urlhaus_hostfile (needs URLHAUS_AUTH_KEY, off by
+  default, now the authoritative domain source when on). urlhaus_hostfile
+  stays in config.yaml DISABLED: sync only switches off feeds still listed,
+  so dropping the entry would leave it 410-ing on old installs forever.
+- PRIVACY.md now lists both daily GitHub GETs (tags API, raw catalog); both
+  switch off with `updates.enabled` / `catalog.enabled`.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
