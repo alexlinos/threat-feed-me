@@ -750,9 +750,9 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod runs 2.5.10 (rolled 2026-10-29; it reported 2.5.6 right before
-  that roll, so the 2.5.7 line recorded here on 2026-10-25 was not this
-  host). Its dashboard has no sign-in by the maintainer's choice: access
+- Prod runs 2.6.0 (rolled 2026-10-30, from 2.5.10; the upgrade switched off
+  urlhaus_hostfile by itself, and the first catalog poll applied version 1
+  with nothing pending). Its dashboard has no sign-in by the maintainer's choice: access
   is segmented at the firewall. Not an open item. The 2.5.0 canary was
   removed 2026-09-26.
 
