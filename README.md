@@ -96,9 +96,9 @@ SonicWall, Palo Alto, Cisco, pfSense, ...) and the checklist ticks itself off as
 your firewall starts polling. The [walkthrough](#walkthrough) below shows every
 screen.
 
-That's it. On first start it fetches **21 free, keyless threat feeds** (16 IP
-feeds and 5 domain feeds: OpenPhish, Phishing Army, HaGeZi TIF,
-Phishunt, and the DRB-Ra C2 list),
+That's it. On first start it fetches **22 free, keyless threat feeds** (16 IP
+feeds and 6 domain feeds: OpenPhish, Phishing Army, HaGeZi TIF,
+Phishunt, the DRB-Ra C2 list, and CyberHost),
 removes duplicates, sorts them into the three lists, and starts serving them. It
 **refreshes each feed on its own schedule** (OpenPhish every 15 minutes, DShield every 30, most feeds hourly, Talos daily), no cron, no maintenance. Everything stays
 on-prem; feeds are pulled inbound only.
@@ -881,6 +881,16 @@ MIT
 MineMeld, PAN-OS, AutoFocus and Cortex XSOAR are trademarks of Palo Alto Networks,
 Inc. Threat Feed Me is an independent open-source project, not affiliated with or
 endorsed by Palo Alto Networks; product names are used only to describe compatibility.
+
+## Feed attribution
+
+**Malware and phishing domains in the default roster include data from
+[CyberHost.uk](https://cyberhost.uk/malware-blocklist), licensed under
+CC BY-SA 4.0.** The list is polled at runtime from
+`https://lists.cyberhost.uk/malware_domains_only.txt`; no copy of it is
+bundled into the image, the repository, or the test fixtures, so nothing
+licensed is redistributed here. Attribution applies to any redistribution
+of the list itself or of a compilation derived from it.
 
 ## Geo attribution
 

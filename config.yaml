@@ -119,6 +119,25 @@ feeds:
     indicator_kind: "domain"
     update_interval: 21600  # regenerated every ~6 hours
 
+  # CyberHost Malware & Phishing blocklist (ratified 2026-10-30). Hand-curated
+  # single-maintainer list, NOT an aggregator: 48,769 of its 98,176 entries
+  # carry their own citation URL plus added-on date, drawn from public TI
+  # reporting, infosec posts and vetted submissions, with new submissions
+  # screened against Cloudflare Radar top domains. Measured overlap against the
+  # enabled domain roster is 0.027 to 0.057 (PhishTank sits at 0.876 against
+  # Phishing Army by comparison), so this is the corroborating second witness
+  # the tiering was missing: enabling it took High-domain content from 1 to
+  # 1,240 with IP tiers untouched. It adds ~90k rows expressing ~51k new
+  # registrable domains; the rest are host-level entries, and the single-source
+  # majority sits at Low and is never blocked on its own word. Publisher asks
+  # for a re-pull every 1 to 6 hours, so 3600 with conditional GET (ETag).
+  # CC BY-SA 4.0: attribution under "Feed attribution" in README.md.
+  - name: cyberhost
+    url: https://lists.cyberhost.uk/malware_domains_only.txt
+    feed_type: "malware"
+    indicator_kind: "domain"
+    update_interval: 3600  # publisher asks for 1-6h; ETag makes idle polls free
+
   # HaGeZi Fake list: fake shops / scam traps. Ratified ON 2026-08-15, then
   # live-measured 100% CONTAINED in hagezi_threat_intel (TIF aggregates
   # hagezi's own Fake list) — 16,626 entries, 0% unique, twin-flagged. Same
