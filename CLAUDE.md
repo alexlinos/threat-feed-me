@@ -267,10 +267,41 @@ Community-grounded (Firebog ticked tier, live-probed keyless):
 
 Probed and rejected: red.flag.domains (French-only relevance), DigitalSide
 (host down), botvrij (dead file), urlhaus-filter (repackaged urlhaus),
-Spam404/quidsup/DandelionSprout/CyberHost (small hobbyist lists largely
-inside hagezi TIF + phishing_army). FortiGate operators: external-resource
+Spam404/quidsup/DandelionSprout (small hobbyist lists largely inside
+hagezi TIF + phishing_army; CyberHost was rejected here too, then
+reversed by measurement, see below). FortiGate operators: external-resource
 caps (~131k entries on mid-range) mean the DNS filter should point at
 domains/medium or high, not Everything — noted in the dashboard how-to.
+
+### Ratified (maintainer, 2026-10-30) — `cyberhost` ON (PR #15)
+
+The 2026-08-15 rejection ("largely inside hagezi TIF + phishing_army") did
+not survive a live measurement on a copy of the prod corpus: overlap
+against the enabled domain roster is 0.027-0.057 at registrable level
+(phishtank vs phishing_army, for scale, is 0.876). It is the first
+genuinely independent domain witness the roster has had, and enabling it
+took domain HIGH from 1 entry to 1,240 by corroboration alone; IP tiers
+were byte-identical. Not listed in `authoritative_domain_feeds`: its
+single-source entries (~90k) sit at Low and nothing is blocked on its
+word alone. Don't promote it without the drb_ra_c2-style evidence bar.
+
+- https://lists.cyberhost.uk/malware_domains_only.txt, ~94k domains per
+  pull (~51k new registrable domains; 52% of entries are host-level),
+  hourly with ETag (publisher asks for a 1-6 h re-pull). Hand-curated,
+  single maintainer, about half the entries carry a citation URL.
+- CC BY-SA 4.0: attribution lives under "Feed attribution" in README.md.
+  Polled at runtime only; never vendor a copy into the repo, image or
+  fixtures.
+- `catalog_version` 2: catalog installs receive it as pending review
+  unless the operator turned auto-add on.
+- Everything/Low domain lists grow by ~90k, which pushes harder against
+  the FortiGate ~131k cap above and the UniFi 50k `max_entries` cap
+  (truncates strongest-first with a warning).
+- Open follow-up (scoring layer, not a feed change): no public-suffix
+  logic, so `login.foo.com` and `foo.com` are separate rows (only `www.`
+  is folded). Scored at registrable level the feed would promote ~10.9k
+  instead of 1,240; collapsing rows also moves whitelist matching and the
+  FortiGate export semantics, which is why it was kept out of PR #15.
 
 ### UniFi push integration (v2.1.0, LIVE-VERIFIED on a real UDM SE 2026-08-15)
 
