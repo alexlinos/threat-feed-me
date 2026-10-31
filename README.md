@@ -318,7 +318,8 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
 │  ├── DataPlane, BruteForceBlocker, Turris, BinaryDefense   │
 │  ├── abuse.ch ThreatFox mirror (botnet C2 IOCs)            │
 │  ├── AbuseIPDB top-reported (community abuse reports)      │
-│  ├── Domains: URLhaus, OpenPhish, PhishingArmy, HaGeZi, Phishunt, DRB-Ra C2 │
+│  ├── Domains: OpenPhish, PhishingArmy, HaGeZi,             │
+│  │            Phishunt, DRB-Ra C2, CyberHost               │
 │  ├── Optional: OTX, HoneyDB, CERT.PL, ThreatView, joewein  │
 │  └── Custom Feeds (user-defined, e.g. local honeypot)      │
 ├─────────────────────────────────────────────────────────────┤
