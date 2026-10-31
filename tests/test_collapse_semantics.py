@@ -130,7 +130,15 @@ def test_held_back_fetch_clears_validators_and_collapse_is_accepted_on_third(
 def _advance_clock(monkeypatch):
     """_after_fetch stamps each refresh with now(), and the churn log keys rows
     by whole-second tick: back-to-back refreshes in a test would collide and
-    one event would overwrite another. Each now() call advances an hour."""
+    one event would overwrite another. Each now() call advances an hour.
+
+    BOTH clock users must be patched. Database.prune_sightings computes its
+    cutoff from datetime.now() in the database module, so leaving that on real
+    time while rows are stamped at the fake 2026-10-01 puts every row outside
+    the retention window as soon as the real date drifts past keep_days, and the
+    prune deletes them mid-test. That made this test date-dependent: it passed
+    in October and started failing once 2026-10-01 fell out of the window.
+    """
     import datetime as _dt
 
     class _Clock(_dt.datetime):
@@ -142,6 +150,9 @@ def _advance_clock(monkeypatch):
             return _Clock._t
 
     monkeypatch.setattr(pipeline, "datetime", _Clock)
+    from threatfeedme import database as _database
+    monkeypatch.setattr(_database, "datetime", _Clock)
+    return _Clock
 
 
 def test_refill_after_accepted_collapse_writes_no_arrivals(tmp_path, monkeypatch):
