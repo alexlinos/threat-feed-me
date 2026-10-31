@@ -35,9 +35,10 @@ TEMPLATE = ("https://urlhaus-api.abuse.ch/v2/files/exports/"
 KEY = "synthetic-test-key-7f3c1d"          # obviously synthetic fixture
 RESOLVED = TEMPLATE.replace(AUTH_URL_PLACEHOLDER, KEY)
 
-# recent.csv's real shape: quoted CSV, header row, and one URL that legally
+# Plain-header variant: quoted CSV, header row, and one URL that legally
 # contains a comma INSIDE its quotes — the reason parsing must use the csv
-# module rather than line/regex splitting.
+# module rather than line/regex splitting. (The LIVE export's layout is
+# LIVE_CSV_BODY below.)
 CSV_BODY = (
     "urlhash,url,url_status,last_online,event\r\n"
     "d41d8cd98f00b204e9800998ecf8427e,"
@@ -46,6 +47,27 @@ CSV_BODY = (
     '"http://evil-c2.example:8080/get,payload?x=1",online,'
     "2026-10-25 00:00:01,drop\r\n"
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,,offline,2026-10-25 00:00:02,drop\r\n"
+)
+
+# The live export's layout (checked against the real recent.csv, 2026-10-31):
+# a '#' banner, then the header as a COMMENTED line, then fully quoted rows.
+# csv.DictReader on the raw body took the banner as its header and the feed
+# failed with "no 'url' values" on a valid 32 MB download.
+LIVE_CSV_BODY = (
+    "################################################################\r\n"
+    "# abuse.ch URLhaus Database Dump (CSV - recent URLs only)      #\r\n"
+    "# Last updated: 2026-10-31 19:20:17 (UTC)                      #\r\n"
+    "#                                                              #\r\n"
+    "# Terms Of Use: https://urlhaus.abuse.ch/api/                  #\r\n"
+    "################################################################\r\n"
+    "#\r\n"
+    "# id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter\r\n"
+    '"4049094","2026-10-31 19:20:17","http://malware-drop.example/payload",'
+    '"online","2026-10-31 19:20:17","malware_download","exe",'
+    '"https://urlhaus.abuse.ch/url/4049094/","reporter1"\r\n'
+    '"4049093","2026-10-31 19:20:13","http://evil-c2.example:8080/get,payload?x=1",'
+    '"online","2026-10-31 19:20:13","malware_download","elf,mirai",'
+    '"https://urlhaus.abuse.ch/url/4049093/","reporter2"\r\n'
 )
 
 
@@ -236,6 +258,17 @@ def test_enabled_feed_with_key_ingests_domains(tmp_path, monkeypatch):
     call = gw.calls[0]
     assert call["url"] == RESOLVED
     assert "Authorization" not in call["headers"]
+
+
+def test_live_export_layout_with_commented_header_ingests(tmp_path, monkeypatch):
+    """The real export: '#' banner and a commented header line. Both rows
+    must ingest (the banner is not the header; the commented field list is),
+    including the quoted URL that contains a comma."""
+    fi, db, ing, gw = _setup(tmp_path, monkeypatch)
+    gw.script[RESOLVED] = (200, {}, LIVE_CSV_BODY)
+    entries = ing.fetch_feed(_feed())
+    assert {e["ip"] for e in entries} == {"malware-drop.example", "evil-c2.example"}
+    assert all(e["kind"] == "domain" for e in entries)
 
 
 def test_not_modified_is_passed_through(tmp_path, monkeypatch):

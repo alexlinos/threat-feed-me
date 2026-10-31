@@ -1151,6 +1151,29 @@ def _scrape_phishtank_urls(self: FeedIngestor, feed: FeedSource):
     return _scrape_csv_column(self, feed, 1)
 
 
+def _urlhaus_csv_rows(content: str):
+    """Rows of a URLhaus CSV export as dicts.
+
+    csv.DictReader alone takes the FIRST line as the header, which for the
+    live export is the '####' banner, so every row lacked a 'url' key and the
+    feed failed on a valid download. Comment lines are skipped; a comment that
+    parses as a field list containing 'url' becomes the header. With no such
+    comment, the first data line is the header (the plain-header format)."""
+    header = None
+    data = []
+    for raw in content.lstrip('﻿').splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.startswith('#'):
+            fields = [f.strip() for f in next(csv.reader([stripped.lstrip('#').strip()]), [])]
+            if 'url' in fields:
+                header = fields
+            continue
+        data.append(raw)
+    return csv.DictReader(io.StringIO("\n".join(data)), fieldnames=header)
+
+
 def _scrape_urlhaus_keyed(self: FeedIngestor, feed: FeedSource):
     """URLhaus keyed recent.csv (issue #8). abuse.ch retired every keyless
     /downloads/ endpoint; exports now need a free Auth-Key from auth.abuse.ch
@@ -1158,15 +1181,17 @@ def _scrape_urlhaus_keyed(self: FeedIngestor, feed: FeedSource):
     PATH, so the shipped feed stores a {auth_key} template and _fetch_url
     substitutes it at fetch time (and scrubs it from every error path).
 
-    recent.csv is quoted CSV with a header row (urlhash,url,url_status,...);
-    the old hostfile's domain material lives in the `url` column — parsed
+    recent.csv is quoted CSV. The live export opens with a '#' banner and its
+    header is a COMMENTED line ("# id,dateadded,url,url_status,..."); a plain
+    header row is also accepted (see _urlhaus_csv_rows). The domain material
+    lives in the `url` column — parsed
     with the csv module, not regex lines (a quoted URL may legally contain
     commas), then handed to the normal domain pipeline."""
     content = self._fetch_url(feed)
     if content is NOT_MODIFIED:
         return NOT_MODIFIED
     lines = []
-    for row in csv.DictReader(io.StringIO(content.lstrip('\ufeff'))):
+    for row in _urlhaus_csv_rows(content):
         value = (row.get('url') or '').strip()
         if value:
             lines.append(value)
