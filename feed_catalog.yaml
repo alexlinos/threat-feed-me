@@ -15,7 +15,7 @@
 # declares (a new key's allowed host is a release decision). Mirror changes into config.yaml's feeds: so fresh air-gapped
 # installs get them too (tests/test_catalog.py checks the two agree).
 
-catalog_version: 1
+catalog_version: 2
 feeds:
 - name: talos_snort
   url: https://snort.org/downloads/ip-block-list/terms
@@ -71,6 +71,11 @@ feeds:
   feed_type: phishing
   indicator_kind: domain
   update_interval: 21600
+- name: cyberhost
+  url: https://lists.cyberhost.uk/malware_domains_only.txt
+  feed_type: malware
+  indicator_kind: domain
+  update_interval: 3600
 - name: hagezi_fake
   url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt
   feed_type: threat_intel
