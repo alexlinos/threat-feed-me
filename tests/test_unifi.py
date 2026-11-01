@@ -4,6 +4,7 @@ whitelist/truncation), and group reconciliation against a fake UniFi API.
 No live gateway in CI — the API surface (login CSRF dance, /rest/firewallgroup
 shapes) is faked at the session level, matching what UniFi OS returns.
 """
+import json
 import os
 import sys
 
@@ -181,8 +182,115 @@ def test_collect_truncates_keeping_strongest(tmp_path):
         db.add_indicator(ip, "f1", {})
         db.set_indicator_score(ip, score, "medium")
     values = _pusher(FakeSession(), max_entries=2).collect(db)
-    # iter_indicators_by_tiers streams in confidence order.
+    # iter_indicators_by_tiers streams in deterministic score order.
     assert values == ["203.0.113.1", "203.0.113.2"]
+
+
+# ---------------- deterministic selection & truncation coverage (#20) ----------------
+
+def test_select_is_deterministic_regardless_of_insertion_order(tmp_path):
+    """The bug (#20): with ties at the cap and only `score DESC`, the pushed
+    subset was whatever order the b-tree happened to hold, so it rotated
+    between refreshes. Now the selection is a total order (score, votes,
+    value), so two DBs holding the SAME indicators — inserted in different
+    physical orders — select the identical members, in identical order."""
+    from threatfeedme.database import Database
+    vals = [f"203.0.113.{i}" for i in range(1, 31)]     # 30, all identical score+votes
+    dbA = Database(str(tmp_path / "a.db"))
+    dbB = Database(str(tmp_path / "b.db"))
+    for db, order in ((dbA, vals), (dbB, list(reversed(vals)))):
+        for v in order:
+            db.add_indicator(v, "f1", {})
+            db.set_indicator_score(v, 0.5, "high")      # votes None: value breaks the tie
+    pA = _pusher(FakeSession(), tier="high", max_per_group=10)
+    pB = _pusher(FakeSession(), tier="high", max_per_group=10)
+    sa, sb = pA.select(dbA, "ip", "high"), pB.select(dbB, "ip", "high")
+    assert sa.cap == 10 and sb.cap == 10                # high = 1 fixed list x 10
+    assert sa.values == sb.values                       # identical set AND order
+    assert sa.values == sorted(vals)[:10]               # value order, not insertion order
+    assert sa.total == 30 and len(sa.withheld) == 20 and sa.values[:1] != sa.withheld[:1]
+    # same DB, twice: two consecutive pushes select the identical member set
+    assert pA.select(dbA, "ip", "high").values == sa.values
+
+
+def test_select_orders_by_score_then_votes_then_value(tmp_path):
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    for i in range(1, 11):                              # higher octet -> higher score+votes
+        v = f"10.0.0.{i}"
+        db.add_indicator(v, "f1", {})
+        db.set_indicator_score(v, i / 10.0, "high", votes=i)
+    sel = _pusher(FakeSession(), tier="high", max_per_group=10).select(db, "ip", "high")
+    assert sel.values == [f"10.0.0.{i}" for i in range(10, 0, -1)]   # strongest first
+    assert sel.total == 10 and sel.withheld == []
+
+
+def test_select_breaks_score_ties_by_effective_votes_then_value(tmp_path):
+    from threatfeedme.database import Database
+    db = Database(str(tmp_path / "t.db"))
+    for value, votes in (("203.0.113.10", 1), ("203.0.113.2", 5), ("203.0.113.3", 5)):
+        db.add_indicator(value, "f1", {})
+        db.set_indicator_score(value, 0.5, "high", votes=votes)   # all same score
+    sel = _pusher(FakeSession(), tier="high", max_per_group=2).select(db, "ip", "high")
+    # the two votes=5 rows win (value tie-break: .2 before .3); the lone-vote row misses
+    assert sel.values == ["203.0.113.2", "203.0.113.3"]
+    assert sel.withheld == ["203.0.113.10"]
+    assert sel.kept_floor == 0.5 and sel.score_cutoff == 0.5   # tied, still the miss
+
+
+def test_push_summary_reports_withheld_and_cutoff(tmp_path, monkeypatch):
+    """Acceptance: the push summary states how many were withheld and the score
+    boundary, not just a truncation warning."""
+    from threatfeedme.database import Database
+    from threatfeedme import pusher_unifi as pu
+    db = Database(str(tmp_path / "t.db"))
+    for i in range(1, 26):                              # 25 high IPs, distinct scores
+        v = f"203.0.113.{i}"
+        db.add_indicator(v, "f1", {})
+        db.set_indicator_score(v, i / 100.0, "high", votes=i)
+    monkeypatch.setenv(ENV_USER, "svc")
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    session = FakeSession()
+    monkeypatch.setattr(pu.UniFiPusher, "from_config",
+                        classmethod(lambda cls, config, db=None: _pusher(
+                            session, tier="high", max_per_group=10)))
+    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
+        "enabled": True, "host": "192.168.1.1"}}})
+    assert summary["entries"] == 10 and summary["cap"] == 10     # strongest 10 enforced
+    assert summary["tier_total"] == 25 and summary["withheld"] == 15
+    assert summary["kept_score_floor"] == 0.16                   # 16th-strongest still in
+    assert summary["withheld_score_cutoff"] == 0.15              # next-strongest missed
+
+
+def test_api_unifi_withheld_endpoint(api_client):
+    """Coverage is inspectable from the dashboard side, without an API call to
+    the gateway: read-only over the live corpus, no gateway contact."""
+    from threatfeedme import core
+    from threatfeedme.pusher_unifi import SETTINGS_KEY
+    for i in range(1, 13):                              # 12 high IPs, distinct scores
+        v = f"203.0.113.{i}"
+        core.db.add_indicator(v, "f1", {})
+        core.db.set_indicator_score(v, i / 100.0, "high", votes=i)
+    core.db.set_setting(SETTINGS_KEY, json.dumps({"tier": "high", "max_per_group": 5}))
+    try:
+        j = api_client.get("/api/integrations/unifi/withheld").json()
+    finally:
+        core.db.set_setting(SETTINGS_KEY, json.dumps({}))
+    assert j["kind"] == "ip" and j["tier"] == "high"
+    assert j["cap"] == 5 and j["tier_total"] == 12 and j["withheld_count"] == 7
+    assert len(j["withheld"]) == 7
+    assert j["kept_score_floor"] == 0.08 and j["withheld_score_cutoff"] == 0.07
+
+
+def test_api_unifi_withheld_domain_off_is_empty(api_client):
+    from threatfeedme import core
+    from threatfeedme.pusher_unifi import SETTINGS_KEY
+    core.db.set_setting(SETTINGS_KEY, json.dumps({"domain_tier": ""}))
+    try:
+        j = api_client.get("/api/integrations/unifi/withheld", params={"kind": "domain"}).json()
+    finally:
+        core.db.set_setting(SETTINGS_KEY, json.dumps({}))
+    assert j["withheld_count"] == 0 and j["cap"] == 0 and j["withheld"] == []
 
 
 # ---------------- sync reconciliation ----------------

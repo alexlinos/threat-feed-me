@@ -18,7 +18,8 @@ from pydantic import BaseModel
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme.feed_ingestor import _redact
 from threatfeedme import core
-from threatfeedme.pusher_unifi import (ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
+from threatfeedme.pusher_unifi import (DEFAULT_MAX_ENTRIES, DEFAULT_MAX_PER_GROUP,
+                                       ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
                                        LAST_PUSH_KEY, UniFiPusher,
                                        effective_block, push_to_unifi)
 from threatfeedme.routers.feeds import _write_env_var
@@ -256,6 +257,45 @@ def unifi_push(_=Depends(require_auth), _csrf=Depends(csrf_check)):
     if summary is None:  # enabled flag raced off, or host missing
         raise HTTPException(status_code=400, detail="Integration is not fully configured")
     return {"success": True, "summary": summary}
+
+
+@router.get("/api/integrations/unifi/withheld")
+def unifi_withheld(kind: str = "ip", tier: Optional[str] = None,
+                   _=Depends(require_auth)):
+    """What the current tier selection would withhold at the gateway's group
+    cap, so coverage is inspectable without an API call to the gateway
+    (issue #20): the strongest entries are enforced first and these are the
+    ones that missed, in the same deterministic order. Recomputed from the
+    live corpus and contacts NO gateway, so it is safe to poll before the
+    integration is even enabled.
+
+    `kind` is 'ip' or 'domain'; `tier` defaults to the configured push tier
+    (the domain tier for the domain arm). The domain arm being off, or an
+    unusable tier, reports nothing withheld rather than erroring."""
+    if kind not in ("ip", "domain"):
+        raise HTTPException(status_code=400, detail="kind must be ip or domain")
+    block = effective_block(core.db, core.config)
+    use_tier = (tier if tier is not None
+                else block.get("tier", "high") if kind == "ip"
+                else block.get("domain_tier", ""))
+    if use_tier not in _VALID_TIERS:
+        return {"kind": kind, "tier": use_tier or "", "cap": 0, "entries": 0,
+                "tier_total": 0, "withheld_count": 0, "withheld": [],
+                "withheld_score_cutoff": None, "kept_score_floor": None}
+    # Hostless on purpose: select() only reads the local corpus, so the
+    # coverage view works before the operator has committed to a gateway.
+    pusher = UniFiPusher(host="", tier=(use_tier if kind == "ip" else "high"),
+                         domain_tier=(use_tier if kind == "domain" else ""),
+                         group_prefix=block.get("group_prefix", "threatfeedme"),
+                         max_entries=block.get("max_entries", DEFAULT_MAX_ENTRIES),
+                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP))
+    sel = pusher.select(core.db, kind, use_tier)
+    return {"kind": kind, "tier": use_tier, "cap": sel.cap,
+            "entries": len(sel.values), "tier_total": sel.total,
+            "withheld_count": max(0, sel.total - len(sel.values)),
+            "withheld_score_cutoff": sel.score_cutoff,
+            "kept_score_floor": sel.kept_floor,
+            "withheld": sel.withheld}
 
 
 # ---------------------------------------------------------------------------

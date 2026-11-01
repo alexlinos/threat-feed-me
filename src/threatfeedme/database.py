@@ -967,7 +967,20 @@ class Database:
 
     def iter_indicators_by_tiers(self, tiers, batch: int = 5000, kind: str = None,
                                  current_sources: bool = False):
-        """Stream indicators whose tier is in `tiers`, in score order.
+        """Stream indicators whose tier is in `tiers`, in deterministic score
+        order: confidence score, then effective (independent-vote) count, then
+        the value.
+
+        The tie-break matters for anyone who truncates this stream. When only
+        ``confidence_score DESC`` was used, indicators tied at the same score
+        came back in whatever order the b-tree happened to hold them, so a
+        truncation (the UniFi gateway-group cap, the export ``?limit`` path)
+        kept an unstable subset that rotated as rows were rewritten each
+        refresh — a real deployment silently lost ~24% of the High tier to
+        shuffle (issue #20). Scoring the tail deterministically (strongest
+        corroboration, then value) makes every truncation keep the same, and
+        the best, members. NULL effective_votes sorts last on DESC, so
+        not-yet-scored rows are the weakest, not the tie-breaking wildcard.
 
         Generator so the tier-file exports never hold the whole table as
         model objects — a full materialized list is hundreds of MB at 100k+
@@ -991,7 +1004,8 @@ class Database:
             cur = conn.cursor()
             cur.execute(
                 f"SELECT i.*, {_sources_sql(current_sources)} AS sources_str "
-                f"FROM indicators i WHERE i.tier IN ({marks}){kind_sql} ORDER BY i.confidence_score DESC",
+                f"FROM indicators i WHERE i.tier IN ({marks}){kind_sql} "
+                "ORDER BY i.confidence_score DESC, i.effective_votes DESC, i.ip",
                 values)
             while True:
                 rows = cur.fetchmany(batch)

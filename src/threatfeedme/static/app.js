@@ -947,6 +947,16 @@ document.addEventListener('DOMContentLoaded', () => {
 // modal (password-type input, write-only POST — never echoed back).
 let unifiLoaded = false;
 
+function unifiCapNote(sum) {
+    // The tier overflowed the gateway group cap: say how much was withheld and
+    // the weakest score still enforced, so a "green" push that is not full
+    // coverage reads honestly instead of looking complete (issue #20).
+    if (!sum || !sum.withheld) return '';
+    let s = ' · ' + sum.withheld.toLocaleString() + ' withheld at cap';
+    if (sum.kept_score_floor != null) s += ' (kept \u2265 ' + sum.kept_score_floor.toFixed(2) + ')';
+    return s;
+}
+
 function unifiRenderStatus(s) {
     const el = document.getElementById('unifi-status');
     if (!el) return;
@@ -960,9 +970,9 @@ function unifiRenderStatus(s) {
         else if (s.last_push.summary) {
             const sum = s.last_push.summary;
             let msg = 'Last push ' + at + ': ' + sum.entries.toLocaleString() +
-                ' IPs in ' + sum.groups + ' group(s)';
+                ' IPs in ' + sum.groups + ' group(s)' + unifiCapNote(sum);
             if (sum.domains) msg += ' · ' + sum.domains.entries.toLocaleString() +
-                ' domains in ' + sum.domains.groups + ' list(s)';
+                ' domains in ' + sum.domains.groups + ' list(s)' + unifiCapNote(sum.domains);
             if (sum.domain_error) msg += ' · DOMAIN PUSH FAILED: ' + sum.domain_error;
             parts.push(msg);
         }
@@ -1112,7 +1122,8 @@ async function unifiPush(btn) {
             const s = j.summary;
             el.textContent = 'Pushed ' + s.entries.toLocaleString() + ' entries into ' + s.groups +
                 ' group(s): ' + s.created + ' created, ' + s.updated + ' updated, ' +
-                s.unchanged + ' unchanged, ' + s.emptied + ' emptied. Now reference the groups in a UDM block rule.';
+                s.unchanged + ' unchanged, ' + s.emptied + ' emptied' + unifiCapNote(s) +
+                '. Now reference the groups in a UDM block rule.';
         } else { el.textContent = 'Push failed: ' + (detailText(j.detail) || r.status); }
     } finally { btn.disabled = false; }
 }
