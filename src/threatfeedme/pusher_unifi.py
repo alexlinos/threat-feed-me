@@ -33,6 +33,7 @@ import logging
 import os
 import socket
 import ssl
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional
@@ -55,8 +56,10 @@ LAST_PUSH_KEY = "unifi_last_push"
 
 # Chunk size stays well under the ~10k member cap community reports; the
 # total cap keeps a misconfigured tier=low from shoving 100k+ entries at a
-# home gateway. Values stream in confidence order, so a truncation keeps
-# the strongest indicators and the log says exactly what was dropped.
+# home gateway. Values stream in deterministic score order (score, effective
+# votes, value), so a truncation keeps a stable strongest-first subset rather
+# than one that rotates between pushes; the log and the push summary report how
+# many were withheld and the score that missed (issue #20).
 DEFAULT_MAX_PER_GROUP = 5000
 DEFAULT_MAX_ENTRIES = 50000
 _VALID_TIERS = ("high", "medium", "low")
@@ -70,6 +73,32 @@ _VALID_TIERS = ("high", "medium", "low")
 # grows into them. Implied per-tier entry cap = count x max_per_group,
 # strongest-kept truncation beyond it.
 TIER_LIST_COUNTS = {"high": 1, "medium": 4, "low": 10}
+
+# The withheld tail retained per selection for the push summary / coverage API.
+# Beyond this we still COUNT what was withheld (so the summary is honest), we
+# just stop keeping the value list, so a pathological corpus can't make the
+# coverage report itself eat memory. The endpoint re-counts on demand.
+_WITHHELD_REPORT_CAP = 20000
+
+
+@dataclass
+class Selection:
+    """One deterministic tier selection, before it is chunked into groups.
+
+    ``values`` is the strongest ``cap`` members in total order (score, votes,
+    value) — the exact set the pusher will write, so coverage and enforcement
+    never disagree. ``withheld`` is the next slice of the tail (bounded by
+    _WITHHELD_REPORT_CAP), ``total`` is every whitelisted value that matched
+    the tier, so ``total - len(values)`` is the true number not enforced. The
+    two cutoff scores are the boundary: ``kept_floor`` is the weakest score
+    still enforced, ``score_cutoff`` the strongest score that missed.
+    """
+    values: List[str]
+    withheld: List[str]
+    cap: int
+    total: int
+    score_cutoff: Optional[float] = None
+    kept_floor: Optional[float] = None
 
 
 class UniFiPusher:
@@ -239,55 +268,85 @@ class UniFiPusher:
 
     # ---------------- Collection & sync ----------------
 
-    def collect(self, db) -> List[str]:
-        """The tier's IPv4/CIDR values, whitelist-applied, confidence-ordered
-        (so a truncation keeps the strongest indicators)."""
-        tier_enum = ConfidenceTier(self.tier)
+    def _select(self, db, kind: str, tier_value: str,
+                list_count: Optional[int]) -> Selection:
+        """Whitelist- and v4-filter one tier's values and cap them in the
+        deterministic total order that iter_indicators_by_tiers now streams.
+
+        A single pass yields both what the pusher writes and, in the same
+        order, what it withholds — so the coverage the operator inspects is
+        the coverage the gateway enforces, never two views that can disagree
+        (issue #20). The cap is whichever binding limit is smaller: the
+        absolute ``max_entries`` and, when a fixed list count is given, the
+        ceiling the operator actually built policies for (list_count x
+        max_per_group). More than that would mint an extra list no policy
+        references, so we truncate strongest-kept, per sync's fixed-count
+        contract.
+        """
+        if tier_value not in _VALID_TIERS:
+            return Selection(values=[], withheld=[], cap=0, total=0)
+        tier_enum = ConfidenceTier(tier_value)
         wl_map = db.get_whitelist_map()
-        values: List[str] = []
+        cap = self.max_entries
+        if list_count:
+            cap = min(cap, list_count * self.max_per_group)
+        kept: List[str] = []
+        withheld: List[str] = []
+        total = 0
         skipped_v6 = 0
-        for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind='ip'):
+        score_cutoff: Optional[float] = None
+        kept_floor: Optional[float] = None
+        for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind=kind):
             if not is_included(ind, wl_map, tier=tier_enum):
                 continue
+            # Same path for both kinds: firewall_value handles any metadata-
+            # based transform (CIDR for IPs today), so each arm pushes the
+            # value a firewall must block, not the raw stored row.
             value = firewall_value(ind)
-            if ':' in value:  # UniFi address-groups are IPv4-only
+            if kind == 'ip' and ':' in value:      # UniFi address-groups are IPv4-only
                 skipped_v6 += 1
                 continue
-            values.append(value)
+            total += 1
+            if len(kept) < cap:
+                kept.append(value)
+                kept_floor = ind.confidence_score
+            elif len(withheld) < _WITHHELD_REPORT_CAP:
+                withheld.append(value)
+                if score_cutoff is None:            # first miss = strongest score that missed
+                    score_cutoff = ind.confidence_score
+            # Past the retained report we still counted the entry in total.
         if skipped_v6:
             logger.info("[unifi] skipped %d IPv6 indicators (address-group is v4-only)",
                         skipped_v6)
-        if len(values) > self.max_entries:
+        if total > cap:
             # ASCII only: Windows consoles default to cp1252.
             logger.warning(
-                "[unifi] %s tier has %d entries; pushing the strongest %d "
-                "(max_entries) - consider a higher tier, or raise the cap",
-                self.tier, len(values), self.max_entries)
-            values = values[:self.max_entries]
-        return values
+                "[unifi] %s tier has %d entries; enforcing the strongest %d "
+                "(cap %d) and withholding %d - consider a higher tier, or raise "
+                "max_entries / the list count",
+                tier_value, total, cap, cap, total - cap)
+        return Selection(values=kept, withheld=withheld, cap=cap, total=total,
+                         score_cutoff=score_cutoff, kept_floor=kept_floor)
+
+    def select(self, db, kind: str, tier_value: str) -> Selection:
+        """A tier's selection with the fixed list-count cap applied — exactly
+        what the push writes, and what the coverage API reports. An unknown or
+        off tier selects nothing."""
+        return self._select(db, kind, tier_value, TIER_LIST_COUNTS.get(tier_value))
+
+    def collect(self, db) -> List[str]:
+        """The tier's IPv4/CIDR values, whitelist-applied, in deterministic
+        score order (so a truncation keeps the strongest indicators). This is
+        the absolute max_entries ceiling only; the push path uses select(),
+        which also applies the fixed-list-count cap."""
+        return self._select(db, 'ip', self.tier, None).values
 
     def collect_domains(self, db) -> List[str]:
-        """The domain tier's values, whitelist-applied, confidence-ordered,
-        capped like the IP arm (a content-filter list is compiled on the
-        gateway; unbounded lists are how UDMs get slow)."""
-        tier_enum = ConfidenceTier(self.domain_tier)
-        wl_map = db.get_whitelist_map()
-        values: List[str] = []
-        for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind='domain'):
-            if not is_included(ind, wl_map, tier=tier_enum):
-                continue
-            # Mirror the IP arm: firewall_value handles metadata-based value
-            # transforms (CIDR for IPs today, future wildcard/normalization
-            # for domains). Using ind.ip directly here would bypass any such
-            # transform and push raw DB values.
-            values.append(firewall_value(ind))
-        if len(values) > self.max_entries:
-            logger.warning(
-                "[unifi] %s domain tier has %d entries; pushing the strongest %d "
-                "(max_entries) - consider a higher tier, or raise the cap",
-                self.domain_tier, len(values), self.max_entries)
-            values = values[:self.max_entries]
-        return values
+        """The domain tier's values, whitelist-applied, in deterministic score
+        order, capped like the IP arm (a content-filter list is compiled on
+        the gateway; unbounded lists are how UDMs get slow). The push path
+        uses select(), which also applies the fixed-list-count cap."""
+        return self._select(db, 'domain', self.domain_tier, None).values
 
     def sync(self, values: List[str], label: str = None,
              group_type: str = "address-group", list_count: int = None) -> Dict:
@@ -433,38 +492,55 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
         return _push_to_unifi(db, config)
 
 
+def _add_coverage(summary: Dict, sel: "Selection") -> None:
+    """Merge the truncation report into a sync summary so the panel and the
+    coverage API can say what a full tier *would* have enforced (issue #20):
+    how many were withheld, the cap that bound it, and the score boundary that
+    split enforced from withheld. These are cheap scalars, safe to persist in
+    the last-push record; the withheld values themselves come from the
+    on-demand endpoint."""
+    summary["withheld"] = max(0, sel.total - len(sel.values))
+    summary["cap"] = sel.cap
+    summary["tier_total"] = sel.total
+    summary["withheld_score_cutoff"] = sel.score_cutoff
+    summary["kept_score_floor"] = sel.kept_floor
+
+
 def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
     pusher = UniFiPusher.from_config(config, db=db)
     if pusher is None:
         return None
     try:
         pusher.login()
-        values = pusher.collect(db)
-        summary = pusher.sync(values, list_count=TIER_LIST_COUNTS[pusher.tier])
+        sel = pusher.select(db, 'ip', pusher.tier)
+        summary = pusher.sync(sel.values, list_count=TIER_LIST_COUNTS[pusher.tier])
     except Exception as e:
         record_push_outcome(db, error=str(e))
         raise
+    _add_coverage(summary, sel)
     logger.info(
         "[unifi] pushed %d entries into %d group(s) [%s-%s-*]: "
-        "%d created, %d updated, %d unchanged, %d emptied",
+        "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
         summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
-        summary["created"], summary["updated"], summary["unchanged"], summary["emptied"])
+        summary["created"], summary["updated"], summary["unchanged"],
+        summary["emptied"], summary["withheld"])
     # Domain arm: optional, and isolated — a domain-list failure must not
     # roll back or hide the IP push that just succeeded. Its error is
     # carried in the summary instead.
     if pusher.domain_tier:
         try:
-            summary["domains"] = pusher.sync(
-                pusher.collect_domains(db),
-                label=f"dom-{pusher.domain_tier}",
-                group_type="domain-group",
-                list_count=TIER_LIST_COUNTS[pusher.domain_tier])
-            d = summary["domains"]
+            dsel = pusher.select(db, 'domain', pusher.domain_tier)
+            d = pusher.sync(dsel.values,
+                            label=f"dom-{pusher.domain_tier}",
+                            group_type="domain-group",
+                            list_count=TIER_LIST_COUNTS[pusher.domain_tier])
+            summary["domains"] = d
+            _add_coverage(d, dsel)
             logger.info(
                 "[unifi] domain push: %d domains into %d list(s) [%s-dom-%s-*]: "
-                "%d created, %d updated, %d unchanged, %d emptied",
+                "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
                 d["entries"], d["groups"], pusher.group_prefix, pusher.domain_tier,
-                d["created"], d["updated"], d["unchanged"], d["emptied"])
+                d["created"], d["updated"], d["unchanged"], d["emptied"], d["withheld"])
         except Exception as e:
             summary["domain_error"] = str(e)
             logger.error("[unifi] domain push failed (IP push succeeded): %s", e)
