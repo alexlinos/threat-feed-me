@@ -11,7 +11,10 @@ import pytest
 
 from threatfeedme.database import Database
 from threatfeedme.models import ConfidenceTier
-from threatfeedme.scorer import ConfidenceScorer
+from threatfeedme.scorer import (
+    ConfidenceScorer, DEFAULT_SHARED_PLATFORMS, resolve_shared_platforms,
+    shared_platform_for,
+)
 
 FEEDS = [{"name": "urlhaus_keyed", "feed_type": "threat_intel"}]
 
@@ -61,6 +64,54 @@ def test_cloud_stores_and_paste_lockers_are_shared(db):
                   "mega.nz", "t.me", "paste.ee"):
         assert t(1.0, ["urlhaus_keyed"], 1.1, 10.0, kind="domain",
                  value=value) == ConfidenceTier.LOW, value
+
+
+def test_shared_platform_for_names_the_platform():
+    """The matcher returns the entry it hit, which is what the tag stores."""
+    assert shared_platform_for("raw.githubusercontent.com") == "githubusercontent.com"
+    assert shared_platform_for(
+        "pub-0462440f54f44b9fb3474df61e32d6ba.r2.dev") == "r2.dev"
+    assert shared_platform_for("EVIL-GitHub.COM") is None
+    assert shared_platform_for("github.com.evil.tld") is None
+    assert shared_platform_for("   ") is None
+    assert shared_platform_for(None) is None
+    assert shared_platform_for("github.com", platforms=("example.com",)) is None
+
+
+def test_resolver_default_override_and_disable():
+    """One reader for the config key, so ingest and scoring cannot diverge."""
+    assert resolve_shared_platforms({}) is DEFAULT_SHARED_PLATFORMS
+    assert resolve_shared_platforms(None) is DEFAULT_SHARED_PLATFORMS
+    cfg = {"scoring": {"high_confidence": {
+        "shared_platform_domains": [" GitHub.com ", ".gitlab.com", ""]}}}
+    assert resolve_shared_platforms(cfg) == ("github.com", "gitlab.com")
+    off = {"scoring": {"high_confidence": {"shared_platform_domains": []}}}
+    assert resolve_shared_platforms(off) == ()
+
+
+def test_ingest_tags_shared_platform_rows(db):
+    """A demoted domain must say why, or it looks like the feed went quiet."""
+    from threatfeedme.feed_ingestor import FeedIngestor
+    rm = FeedIngestor(db=db, shared_platforms=("github.com", "r2.dev")).row_metadata
+    assert rm({"ip": "github.com"}, "github.com", "domain") == {
+        "shared_platform": "github.com"}
+    assert rm({"ip": "x.r2.dev"}, "x.r2.dev", "domain") == {"shared_platform": "r2.dev"}
+    assert rm({"ip": "evil.example"}, "evil.example", "domain") == {}
+    assert rm({"ip": "github.com"}, "github.com", "ip") == {}
+    assert rm({"ip": "1.2.3.4", "cidr": "1.2.3.0/24"}, "1.2.3.0/24", "ip") == {
+        "cidr": "1.2.3.0/24"}
+    # The tag must not crowd out the one key scoring actually reads.
+    assert rm({"ip": "x.r2.dev", "cidr": "x.r2.dev"}, "x.r2.dev", "domain") == {
+        "cidr": "x.r2.dev", "shared_platform": "r2.dev"}
+
+
+def test_guard_and_ingest_share_one_matcher(db):
+    """Two consumers, one rule: they cannot drift apart by construction."""
+    s = _scorer(db)
+    for value in ("github.com", "pub-1.r2.dev", "evil-github.com",
+                  "malware.example-bad.tld", ""):
+        assert s._is_shared_platform(value) == (
+            shared_platform_for(value, s.shared_platforms) is not None), value
 
 
 def test_ordinary_domain_still_gets_force_high(db):

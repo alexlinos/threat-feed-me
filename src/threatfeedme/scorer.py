@@ -106,6 +106,41 @@ DEFAULT_SHARED_PLATFORMS = (
 )
 
 
+def shared_platform_for(value, platforms=DEFAULT_SHARED_PLATFORMS):
+    """Return the shared-platform entry `value` sits on, else None.
+
+    Matches the platform itself or a real subdomain of it, and never a
+    lookalike suffix: evil-github.com and github.com.evil.tld are somebody
+    else's domains. The tier guard and the ingestor both call this, so the
+    tag written at ingest can never disagree with the tier decided later.
+    """
+    if not value:
+        return None
+    v = str(value).strip().lower().rstrip('.')
+    if not v:
+        return None
+    for s in platforms or ():
+        s = str(s).strip().lower().lstrip('.')
+        if s and (v == s or v.endswith('.' + s)):
+            return s
+    return None
+
+
+def resolve_shared_platforms(config):
+    """The effective shared-platform list, read the one way.
+
+    A missing key means the curated DEFAULT_SHARED_PLATFORMS; an explicit
+    empty list disables the guard. The scorer and the ingestor both call
+    this rather than each parsing the key themselves, which is how the two
+    views could otherwise drift apart.
+    """
+    hc = ((config or {}).get('scoring') or {}).get('high_confidence') or {}
+    raw = hc.get('shared_platform_domains')
+    if raw is None:
+        return DEFAULT_SHARED_PLATFORMS
+    return tuple(str(p).strip().lower().lstrip('.') for p in raw if str(p).strip())
+
+
 def fp_penalty_factor(fp_count: int, reported_count: int,
                       k: float = FP_PENALTY_K, floor: float = FP_MIN_FACTOR) -> float:
     """Reputation multiplier for a feed given its false-positive rate."""
@@ -215,9 +250,7 @@ class ConfidenceScorer:
         self.authoritative_sources = set(auth_cfg)   # no DB (unit tests): trust config
         # Shared-platform guard (see DEFAULT_SHARED_PLATFORMS). Config may
         # override the curated list; an explicit empty list disables it.
-        shared_cfg = (high_conf_cfg or {}).get('shared_platform_domains')
-        shared = (DEFAULT_SHARED_PLATFORMS if shared_cfg is None
-                  else shared_cfg)
+        shared = resolve_shared_platforms(config)
         self.shared_platforms = {
             str(d).strip().lower().lstrip('.') for d in (shared or [])
             if str(d).strip()}
@@ -668,18 +701,8 @@ class ConfidenceScorer:
         return med_b, high_b
 
     def _is_shared_platform(self, value) -> bool:
-        """True for a domain on shared-hosting infrastructure.
-
-        Matches the platform itself or any subdomain of it, and never a
-        lookalike suffix: evil-github.com must not match github.com.
-        """
-        if not value:
-            return False
-        v = str(value).strip().lower().rstrip('.')
-        for s in self.shared_platforms:
-            if v == s or v.endswith('.' + s):
-                return True
-        return False
+        """True for a domain on shared-hosting infrastructure."""
+        return shared_platform_for(value, self.shared_platforms) is not None
 
     def _tier_from_votes(self, votes: float, sources: Optional[List[str]],
                          med_b: float, high_b: float,

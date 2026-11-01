@@ -106,6 +106,7 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
     safety_cfg = config.get('safety', {}) or {}
     from threatfeedme.credentials import KeyPolicy
     from threatfeedme import crowdsec
+    from threatfeedme.scorer import resolve_shared_platforms
     ingestor = FeedIngestor(
         db,
         safety=SafetyFilter.from_config(config),
@@ -114,6 +115,8 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
         crowdsec_lapi=crowdsec.lapi_url(db, config),
         crowdsec_console_id=crowdsec.console_integration_id(db, config),
         crowdsec_verify_ssl=bool(crowdsec.effective_block(db, config).get('verify_ssl', True)),
+        # Same key the tier guard reads, resolved once here.
+        shared_platforms=resolve_shared_platforms(config),
     )
     feeds = db.get_feed_sources(enabled_only=True)
     if only is not None:
