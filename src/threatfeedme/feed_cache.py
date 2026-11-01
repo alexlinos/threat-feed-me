@@ -18,9 +18,11 @@ could exceed the container's 3 GB cap. Now:
     the recurrence predictor's within-tier ordering finally changes what a
     capped firewall blocks.
 
-Same entries, same formats, same score order as the old renderer (txt and CSV
-byte-identical under that order). Two deliberate differences: ties in score
-are now ordered by value — the old SQL left them in unspecified order, and a
+Same entries, same formats, same score order as the old renderer (txt byte-
+identical for both kinds, CSV byte-identical for IPs — the domain CSV grew a
+submitted_url column in issue #17, and the JSON is unchanged). Two deliberate
+differences: ties in score are now ordered by value — the old SQL left them in
+unspecified order, and a
 deterministic tie-break is what keeps ?limit=N stable between polls instead
 of flickering entries in and out of a capped firewall's list — and the JSON's
 total_count follows the indicators array (a streamed body can't know the count
@@ -164,11 +166,19 @@ def stream_csv(db, name: str, kind: str, limit: Optional[int] = None,
     writer = csv.writer(out)
     # The first column is the indicator value; the header keeps the historical
     # name "ip" for both kinds so existing SIEM column mappings don't break.
-    writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
+    # Domain rows gain the submitted URL (issue #17) so triage — "is this a
+    # payload on a shared platform, or a domain the attacker owns?" — needs no
+    # SQL. The IP CSV keeps its exact six columns: an IP row never has one, and
+    # an empty column on a feed a firewall or SIEM already maps by position is
+    # a format change bought for nothing.
+    with_url = kind == "domain"
+    writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen",
+                     "sources"] + (["submitted_url"] if with_url else []))
     n = 0
     for row in iter_rows(db, name, kind, limit, hosts_only):
         writer.writerow([_value(row), row[3], row[4], _dt_str(row[5]), _dt_str(row[6]),
-                         ";".join(row[2])])
+                         ";".join(row[2])]
+                        + ([row[7] or ""] if with_url else []))
         n += 1
         if n % 2000 == 0:
             yield out.getvalue().encode()

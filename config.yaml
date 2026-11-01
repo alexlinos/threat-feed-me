@@ -11,6 +11,23 @@
 # the offending feed's reputation so its IPs score lower. You can still pin a
 # per-feed starting weight (weight: 0.0-1.0) if you have a measured reason to.
 
+# Feed ingestion behaviour: settings about WHAT the ingestor keeps, as
+# opposed to `feeds:` below, which is the roster of WHERE it reads from. (The
+# switch is documented as feeds.retain_submitted_url; it cannot live inside
+# `feeds:` itself, because that block is the list of feeds. The dotted
+# top-level spelling is accepted too.)
+feeds_settings:
+  # URL-shaped feeds — those published as a corpus of submission URLs
+  # (openphish, phishtank, phishunt) — keep the URL each indicator arrived on
+  # in that row's metadata, capped at 512 characters. The path is the only
+  # thing that separates a payload parked on a shared platform from malware
+  # on a domain the attacker actually owns, and it is the prerequisite for
+  # keying those feeds at host+path. It shows up in the dashboard's indicator
+  # list, the whitelist dialog and the domain CSV export. Turn it off to
+  # store no URL at all (rows keep the metadata they already have until they
+  # age out of retention).
+  retain_submitted_url: true
+
 feeds:
   # --- Talos (Snort.org IP block list, self-hosted via scraper) ----------
   # The scraper navigates Snort.org's CSRF-protected terms form; the POST

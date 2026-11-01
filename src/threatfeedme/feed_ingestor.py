@@ -205,6 +205,16 @@ _HOSTS_FILE_RE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+(.+)$', re.IGNO
 # userinfo/port are stripped below before validation.
 _URL_RE = re.compile(r'^https?://([^/\s]+)', re.IGNORECASE)
 
+# Ceiling on the submitted URL kept in indicator metadata (issue #17). The
+# metadata minimum is deliberate — feed_type/feed_weight/fetched_at used to be
+# written into every row and were read by nothing — so the one thing this
+# addition stores is length-bounded. 512 chars is far above the release-asset
+# URLs that motivated it (a measured corpus averaged 90-120) while keeping a
+# hostile feed from inflating every row with a megabyte of path. A longer
+# submission is stored truncated, which still carries the host and the leading
+# path segments that host+path keying will need; only the tail is lost.
+_MAX_STORED_URL = 512
+
 
 def _url_host(authority: str) -> str:
     """Bare hostname from a URL authority: drop user:pass@ and :port. A feed
@@ -227,10 +237,17 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
     them (including all-numeric-TLD shapes like 1.2.3.4.5), so no separate
     IP-pattern guard is needed and domains that merely EMBED a dotted quad
     (10.0.0.1.nip.io — real phishing infrastructure) still ingest.
+
+    A URL-shaped line additionally carries 'url': the submitted URL, capped at
+    _MAX_STORED_URL (issue #17). Only the URL branch sets it — a plain
+    domain-per-line or hosts-file entry has no submission path to remember, so
+    those rows stay {'ip', 'kind'} and still store {} metadata. On a host that
+    several URLs collapse onto (dedupe), the FIRST submission wins: it is the
+    one that made the row, and the rest carry no extra evidence about it.
     """
     indicators: Dict[str, Dict] = {}
 
-    def _add(candidate: str) -> None:
+    def _add(candidate: str, url: Optional[str] = None) -> None:
         domain = normalize_domain(candidate)
         if not domain:
             return
@@ -240,7 +257,9 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
         # literal www.com is left alone).
         if domain.startswith('www.') and domain.count('.') >= 2:
             domain = domain[4:]
-        indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
+        entry = indicators.setdefault(domain, {'ip': domain, 'kind': 'domain'})
+        if url and 'url' not in entry:
+            entry['url'] = url[:_MAX_STORED_URL]
 
     # A UTF-8 BOM survives .strip() (U+FEFF is not whitespace) and breaks the
     # ^-anchored regexes on the first line.
@@ -259,7 +278,13 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
             continue
         url = _URL_RE.match(line)
         if url:
-            _add(_url_host(url.group(1).lower()))
+            # Pass the whole line, not just the authority: the path is the
+            # difference between a payload parked on a shared platform and
+            # malware on a domain the attacker owns, and it is what host+path
+            # keying will need later. What is retained is the line AS PARSED
+            # (comment-stripped above), so the stored string matches the one
+            # that produced the indicator.
+            _add(_url_host(url.group(1).lower()), url=line)
             continue
         # Plain domain-per-line (first token, so trailing annotations on
         # loosely-formatted lists don't cost the indicator).
@@ -322,26 +347,42 @@ class FeedIngestor:
 
         Deliberately tiny: feed_type / feed_weight / fetched_at used to be
         written here on every fetch into every row and were read by nothing
-        (the scorer takes them from the feed). The one addition is
-        shared_platform, which is audit context rather than scoring input:
-        it names the platform a payload host sits on, so a domain the tier
-        guard refuses to promote is visibly a decision instead of looking
-        like the feed went quiet. Domains only, and only on a match, so
-        ordinary rows still store {}.
+        (the scorer takes them from the feed). The two additions are audit
+        context rather than scoring input:
+
+        * shared_platform names the platform a payload host sits on, so a
+          domain the tier guard refuses to promote is visibly a decision
+          instead of looking like the feed went quiet;
+        * url is the submitted URL of a URL-shaped line (issue #17), already
+          capped by the parser. Without it a payload parked on a shared
+          platform and malware on an attacker-owned domain are the same row —
+          the path is the only thing that tells them apart, and it is the
+          prerequisite for keying those feeds at host+path.
+
+        Both are domains-only and only on a match, so an ordinary row still
+        stores {} — and so does a URL-shaped row once the operator switches
+        feeds.retain_submitted_url off.
         """
         meta = {'cidr': entry['cidr']} if entry.get('cidr') else {}
         if kind == 'domain':
             platform = self._shared_platform_for(value, self.shared_platforms)
             if platform:
                 meta['shared_platform'] = platform
+            if self.retain_submitted_url and entry.get('url'):
+                meta['url'] = entry['url']
         return meta
 
     def __init__(self, db: Database, safety=None, allow_private_urls: bool = False,
                  key_policy: Optional[KeyPolicy] = None,
                  crowdsec_lapi: str = "", crowdsec_console_id: str = "",
                  crowdsec_verify_ssl: bool = True,
-                 shared_platforms=None):
+                 shared_platforms=None, retain_submitted_url: bool = True):
         self.db = db
+        # Keep the submitted URL of URL-shaped feed lines in row metadata
+        # (see row_metadata). On by default: the path is what makes a shared
+        # platform legible in the database at all. Off, ingestion stores no
+        # URL and metadata is exactly what it was before issue #17.
+        self.retain_submitted_url = bool(retain_submitted_url)
         # Shared-platform tag at ingest. Import inside: scorer is the tier
         # layer and must stay importable without pulling the ingest layer in.
         from threatfeedme.scorer import shared_platform_for, DEFAULT_SHARED_PLATFORMS

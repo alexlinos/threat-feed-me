@@ -845,12 +845,18 @@ class Database:
 
     def iter_served_rows(self, kind: str, tiers, batch: int = 5000):
         """Lean stream for the firewall feed URLs: plain tuples
-        (ip, cidr, sources, confidence_score, tier, first_seen, last_seen) in
-        score order — no ThreatIndicator object and no json.loads of every
+        (ip, cidr, sources, confidence_score, tier, first_seen, last_seen, url)
+        in score order — no ThreatIndicator object and no json.loads of every
         row's metadata. Building a model per row made a /feeds/low.txt poll
         over ~560k IPs peak around 1.6 GB, so two overlapping polls could
         exceed the container's memory cap (review 2026-09-22). `ip` breaks
-        score ties so ?limit=N is deterministic."""
+        score ties so ?limit=N is deterministic.
+
+        The eighth field is the submitted URL of a URL-shaped feed line
+        (issue #17), read with the same json_extract as the cidr rather than a
+        per-row json.loads; it is NULL for every IP row and for a domain row
+        that never carried one. Only the CSV renderer uses it — the .txt a
+        firewall polls stays byte-identical."""
         values = [t.value for t in tiers]
         marks = ",".join("?" * len(values))
         conn = self._get_connection(any_thread=True)
@@ -859,7 +865,8 @@ class Database:
                 "SELECT i.ip, json_extract(i.metadata, '$.cidr'), "
                 "(SELECT GROUP_CONCAT(source_name) FROM indicator_sources "
                 " WHERE indicator_id = i.id), "
-                "i.confidence_score, i.tier, i.first_seen, i.last_seen "
+                "i.confidence_score, i.tier, i.first_seen, i.last_seen, "
+                "json_extract(i.metadata, '$.url') "
                 f"FROM indicators i WHERE i.kind = ? AND i.tier IN ({marks}) "
                 "ORDER BY i.confidence_score DESC, i.ip",
                 [kind] + values)
@@ -867,15 +874,16 @@ class Database:
                 rows = cur.fetchmany(batch)
                 if not rows:
                     return
-                for ip, cidr, srcs, score, tier, first, last in rows:
+                for ip, cidr, srcs, score, tier, first, last, url in rows:
                     yield (ip, cidr, srcs.split(",") if srcs else [],
-                           score, tier, first, last)
+                           score, tier, first, last, url)
         finally:
             conn.close()
 
     def iter_served_rows_by_added(self, kind: str, tiers, after=None, batch: int = 2000):
-        """The iter_served_rows tuples in TAXII "date added" order: last_seen,
-        then value, starting strictly after the keyset `after` =
+        """The iter_served_rows leading fields (no url — TAXII does not serve
+        it) in TAXII "date added" order: last_seen, then value, starting
+        strictly after the keyset `after` =
         (last_seen, ip). last_seen is when the indicator was last re-affirmed
         by a feed, so a poll with added_after gets everything still being
         reported since then. No index on purpose: last_seen is rewritten for
@@ -1037,7 +1045,10 @@ class Database:
         """Paginated/searchable view of merged indicators.
 
         Excludes globally-whitelisted (removed) IPs by default. Returns
-        {'total': int, 'rows': [{ip, value, tier, confidence_score, sources}]}.
+        {'total': int, 'rows': [{ip, value, tier, confidence_score, sources,
+        submitted_url}]}. submitted_url is the URL a URL-shaped feed line
+        submitted (issue #17), or None — the metadata is parsed here anyway,
+        so surfacing it costs nothing and triage stops needing SQL.
         """
         now = _utcnow_iso()
         where, params = [], []
@@ -1122,6 +1133,7 @@ class Database:
                     "effective_votes": (round(row['effective_votes'], 2)
                                         if row['effective_votes'] is not None else None),
                     "sources": (row['sources_str'] or '').split(',') if row['sources_str'] else [],
+                    "submitted_url": meta.get('url'),
                 })
             return {"total": total, "rows": rows}
 
