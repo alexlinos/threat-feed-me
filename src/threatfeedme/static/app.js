@@ -92,6 +92,30 @@ async function removeWl(ip, feed) {
     else { const j = await r.json().catch(() => ({})); alert('Could not remove: ' + (detailText(j.detail) || r.status)); }
 }
 
+// ---- Never-block (issue #19): the operator's hard exclusion list ----
+// Distinct from the whitelist: no scope, no expiry, never a false positive.
+const addNb = guardSubmit(async function (e) {
+    e.preventDefault();
+    const body = {
+        value: document.getElementById('nb-value').value.trim(),
+        reason: document.getElementById('nb-reason').value.trim(),
+        added_by: document.getElementById('nb-by').value.trim() || 'dashboard',
+    };
+    const r = await apiFetch('/api/never-block', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.success !== false) { reloadPage(); }
+    else { alert('Could not add: ' + (j.message || detailText(j.detail) || r.status)); }
+    return false;
+});
+async function removeNb(value) {
+    if (!confirm('Remove never-block entry for ' + value + '? It may be emitted again.')) return;
+    const r = await apiFetch('/api/never-block?value=' + encodeURIComponent(value), {method: 'DELETE'});
+    if (r.ok) { reloadPage(); }
+    else { const j = await r.json().catch(() => ({})); alert('Could not remove: ' + (detailText(j.detail) || r.status)); }
+}
+
 // ---- Feeds ----
 const addFeed = guardSubmit(async function (e) {
     e.preventDefault();

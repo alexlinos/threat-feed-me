@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 from threatfeedme.models import (ThreatIndicator, WhitelistEntry, ConfidenceTier, FeedStats,
                     FeedSource, FeedType, ALL_FEEDS, REASON_FALSE_POSITIVE, REASON_OTHER,
-                    WhitelistMatcher)
+                    WhitelistMatcher, NeverBlockEntry, NeverBlockMatcher)
 from .geo.data import CountryBuckets
 
 
@@ -237,6 +237,22 @@ class Database:
                     added_at TEXT NOT NULL,
                     expires_at TEXT,
                     UNIQUE(ip, feed_name)
+                )
+            """)
+
+            # Operator-owned never-block list — a global emission veto, not a
+            # whitelist (see models.NeverBlockMatcher). Separate table so its
+            # values can never be read as false positives or feed state.
+            # Idempotent CREATE runs on every init, so existing DBs pick it up
+            # on upgrade with no migration stamp.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS never_block (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    value TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL DEFAULT 'ip',
+                    reason TEXT NOT NULL DEFAULT '',
+                    added_by TEXT NOT NULL DEFAULT 'dashboard',
+                    added_at TEXT NOT NULL
                 )
             """)
 
@@ -1339,7 +1355,57 @@ class Database:
             for row in cur.fetchall():
                 mapping.setdefault(row['ip'], set()).add(row['feed_name'])
         mapping.add_cidr_rules_from_keys()
+        # Thread the never-block veto onto the same map so every surface that
+        # already applies this matcher at emission enforces it too — the gate
+        # lives in row_included, so no caller can forget to check it.
+        mapping.never_block = self.get_never_block_matcher()
         return mapping
+
+    # ==================== NEVER-BLOCK (operator hard exclusion) ====================
+
+    def get_never_block_matcher(self) -> NeverBlockMatcher:
+        """The never-block list as a matcher, loaded from its own table."""
+        with self._cursor() as cur:
+            cur.execute("SELECT value FROM never_block")
+            return NeverBlockMatcher(row['value'] for row in cur.fetchall())
+
+    def add_never_block(self, value: str, kind: str, reason: str = "",
+                        added_by: str = "dashboard") -> bool:
+        """Add (or update) a never-block entry keyed on its stored value."""
+        now = _utcnow_iso()
+        with self._cursor() as cur:
+            cur.execute("""
+                INSERT INTO never_block (value, kind, reason, added_by, added_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(value) DO UPDATE SET
+                    kind = excluded.kind,
+                    reason = excluded.reason,
+                    added_by = excluded.added_by,
+                    added_at = excluded.added_at
+            """, (value, kind, reason, added_by, now))
+            return True
+
+    def remove_never_block(self, value: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM never_block WHERE value = ?", (value,))
+            return cur.rowcount > 0
+
+    def get_never_block(self) -> List[NeverBlockEntry]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM never_block ORDER BY added_at DESC")
+            return [NeverBlockEntry(
+                value=row['value'], kind=row['kind'], reason=row['reason'],
+                added_by=row['added_by'], added_at=row['added_at'],
+            ) for row in cur.fetchall()]
+
+    def touch_serve_stamp(self) -> None:
+        """Bump the serve stamp so cached feed bodies (and their ETags) rebuild
+        on the next request. Used after a never-block change, which affects
+        what is served but not what is scored."""
+        with self._cursor() as cur:
+            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('serve_stamp', ?)",
+                        (_utcnow_iso(),))
 
     def get_whitelist(self) -> List[WhitelistEntry]:
         """Get all active whitelist entries"""

@@ -205,12 +205,20 @@ class CrowdSecPusher:
         return {"ok": True}
 
     def collect(self, db) -> List[str]:
-        """The tier's IP/CIDR values, whitelist-applied, strongest first."""
+        """The tier's IP/CIDR values, whitelist-applied, strongest first. The
+        never-block veto is applied by is_included; we also count what it
+        refused so the push summary names the exclusion (issue #19)."""
         tier = ConfidenceTier(self.tier)
         wl = db.get_whitelist_map()
-        values = [firewall_value(i)
-                  for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind='ip')
-                  if is_included(i, wl, tier=tier)]
+        nb = getattr(wl, "never_block", None)
+        values: List[str] = []
+        self.last_refused = 0
+        for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind='ip'):
+            if nb and nb.matches(i.ip):
+                self.last_refused += 1
+                continue
+            if is_included(i, wl, tier=tier):
+                values.append(firewall_value(i))
         if len(values) > self.max_entries:
             logger.warning("[crowdsec] %s tier has %d entries; pushing the strongest %d "
                            "(max_entries)", self.tier, len(values), self.max_entries)
@@ -334,6 +342,8 @@ def push_to_crowdsec(db, config: Dict, force: bool = False, session=None) -> Opt
                                prev_scenario, e)
         summary = {"entries": len(values), "tier": pusher.tier, "scenario": scenario,
                    "expired_previous": expired, "duration_h": pusher.duration_h}
+        if getattr(pusher, "last_refused", 0):
+            summary["never_block_refused"] = pusher.last_refused
         _record(db, error=None, live_scenario=scenario, digest=digest,
                 tier=pusher.tier, pushed_at=datetime.now(timezone.utc).isoformat(),
                 summary=summary)

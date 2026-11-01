@@ -15,7 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from threatfeedme import core  # noqa: F401  (module-level __getattr__ lazy init)
 from threatfeedme.middleware import BodyLimitMiddleware, HostCheckMiddleware
 from threatfeedme.scheduler import _scheduler_loop, _scheduler_stop
-from threatfeedme.routers import feeds, indicators, integrations, system, taxii, whitelist
+from threatfeedme.routers import (feeds, indicators, integrations, never_block, system,
+                                  taxii, whitelist)
 
 
 @asynccontextmanager
@@ -83,5 +84,6 @@ app.include_router(indicators.router)
 app.include_router(system.router)
 app.include_router(feeds.router)
 app.include_router(whitelist.router)
+app.include_router(never_block.router)
 app.include_router(integrations.router)
 app.include_router(taxii.router)

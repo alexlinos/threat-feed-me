@@ -604,10 +604,20 @@ def indicators_page(request: Request, q: str = "", _=Depends(require_auth)):
             "reason_label": badge_label,
         })
 
+    # The operator's never-block list, rendered apart from the whitelist so it
+    # is never mistaken for a false positive or a feed error (issue #19).
+    never_block_rows = [{
+        "value": n.value,
+        "kind": n.kind,
+        "reason": n.reason,
+        "added_by": n.added_by,
+    } for n in core.db.get_never_block()[:200]]
+
     return core.templates.TemplateResponse(request, "indicators.html", {
         "page": "indicators",
         "q": q,
         "whitelist_rows": whitelist_rows,
+        "never_block_rows": never_block_rows,
         "all_feeds": ALL_FEEDS,
         "reason_options": WHITELIST_REASONS,
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),

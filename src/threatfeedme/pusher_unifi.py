@@ -33,7 +33,7 @@ import logging
 import os
 import socket
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional
@@ -92,6 +92,11 @@ class Selection:
     the tier, so ``total - len(values)`` is the true number not enforced. The
     two cutoff scores are the boundary: ``kept_floor`` is the weakest score
     still enforced, ``score_cutoff`` the strongest score that missed.
+
+    ``refused`` / ``refused_count`` are values the operator's never-block list
+    vetoed before the cap ever applied — a separate, named exclusion (issue
+    #19), not the same thing as whitelist or truncation and counted apart from
+    both.
     """
     values: List[str]
     withheld: List[str]
@@ -99,6 +104,8 @@ class Selection:
     total: int
     score_cutoff: Optional[float] = None
     kept_floor: Optional[float] = None
+    refused: List[str] = field(default_factory=list)
+    refused_count: int = 0
 
 
 class UniFiPusher:
@@ -292,11 +299,23 @@ class UniFiPusher:
             cap = min(cap, list_count * self.max_per_group)
         kept: List[str] = []
         withheld: List[str] = []
+        refused: List[str] = []
+        refused_count = 0
         total = 0
         skipped_v6 = 0
         score_cutoff: Optional[float] = None
         kept_floor: Optional[float] = None
+        nb = getattr(wl_map, "never_block", None)
         for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind=kind):
+            # Never-block first: a named operator veto (issue #19), counted
+            # apart from whitelist drops and from truncation. is_included also
+            # rejects it, but checking here is what lets the push report how
+            # many were refused and keep the values auditable.
+            if nb and nb.matches(ind.ip):
+                refused_count += 1
+                if len(refused) < _WITHHELD_REPORT_CAP:
+                    refused.append(firewall_value(ind))
+                continue
             if not is_included(ind, wl_map, tier=tier_enum):
                 continue
             # Same path for both kinds: firewall_value handles any metadata-
@@ -318,6 +337,9 @@ class UniFiPusher:
         if skipped_v6:
             logger.info("[unifi] skipped %d IPv6 indicators (address-group is v4-only)",
                         skipped_v6)
+        if refused_count:
+            logger.info("[unifi] refused %d never-block value(s) in the %s tier",
+                        refused_count, tier_value)
         if total > cap:
             # ASCII only: Windows consoles default to cp1252.
             logger.warning(
@@ -326,7 +348,8 @@ class UniFiPusher:
                 "max_entries / the list count",
                 tier_value, total, cap, cap, total - cap)
         return Selection(values=kept, withheld=withheld, cap=cap, total=total,
-                         score_cutoff=score_cutoff, kept_floor=kept_floor)
+                         score_cutoff=score_cutoff, kept_floor=kept_floor,
+                         refused=refused, refused_count=refused_count)
 
     def select(self, db, kind: str, tier_value: str) -> Selection:
         """A tier's selection with the fixed list-count cap applied — exactly
@@ -504,6 +527,10 @@ def _add_coverage(summary: Dict, sel: "Selection") -> None:
     summary["tier_total"] = sel.total
     summary["withheld_score_cutoff"] = sel.score_cutoff
     summary["kept_score_floor"] = sel.kept_floor
+    # The operator's never-block list refused these before the cap applied —
+    # a named exclusion, counted apart from truncation (issue #19).
+    if sel.refused_count:
+        summary["never_block_refused"] = sel.refused_count
 
 
 def _push_to_unifi(db, config: Dict) -> Optional[Dict]:

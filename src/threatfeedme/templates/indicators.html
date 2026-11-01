@@ -68,6 +68,38 @@
         </tbody>
     </table>
     </div>
+
+    <h2 class="section-title" id="never-block">Never block</h2>
+    <p class="hint">Destinations you decide are <b>never</b> emitted, whatever the feeds say — enforced at the
+       last moment for every list, push and export, at any tier. A veto that tier, provenance and rescoring
+       cannot override. <b>This is not a false positive:</b> a feed that reported the value keeps its reputation
+       (use the whitelist above for those, and note never-block entries never expire). Accepts an IP, a CIDR,
+       a domain, or a wildcard like <code>*.example.com</code>.</p>
+    <form class="wl-form" onsubmit="return addNb(event)">
+        <input class="ip" id="nb-value" type="text" placeholder="IP, CIDR, or *.domain" required style="width:190px">
+        <input class="reason" id="nb-reason" type="text" placeholder="Why (optional)">
+        <input id="nb-by" type="text" placeholder="Added by" value="dashboard" style="width:120px">
+        <button type="submit">Add</button>
+    </form>
+    <div class="table-scroll">
+    <table>
+        <thead><tr><th>Value</th><th>Kind</th><th>Why</th><th>Added by</th><th></th></tr></thead>
+        <tbody id="nb-body">
+        {% for n in never_block_rows %}
+            <tr>
+                <td><code>{{ n.value }}</code></td>
+                <td><span class="muted" style="font-size:.85em;text-transform:uppercase">{{ n.kind }}</span></td>
+                <td><span class="muted" style="font-size:.9em">{% if n.reason %}{{ n.reason }}{% endif %}</span></td>
+                <td>{{ n.added_by }}</td>
+                <td><button class="rm-btn" onclick='removeNb({{ n.value|tojson }})'>Remove</button></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5" class="muted">No never-block entries. Anything you add here is excluded from every
+                list and push at every tier.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
 {% endblock %}
 
 {% block modals %}

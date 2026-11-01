@@ -23,6 +23,14 @@ class WhitelistResponse(BaseModel):
     message: str
 
 
+class NeverBlockRequest(BaseModel):
+    # Operator-owned never-block entry (issue #19). `value` is an IP, CIDR,
+    # domain, or *.wildcard; stored key is the canonical form.
+    value: str = Field(max_length=300)
+    reason: str = Field("", max_length=500)
+    added_by: str = Field("dashboard", max_length=64)
+
+
 class FeedRequest(BaseModel):
     name: str = Field(max_length=64)
     # Bounded like the whitelist fields: a 900 KB URL was accepted and sat in
