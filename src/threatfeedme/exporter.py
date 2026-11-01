@@ -28,7 +28,17 @@ def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = N
     """is_included on raw fields — the ONE implementation of the rule. The
     lean feed-serving path (feed_cache) works on plain row tuples rather than
     ThreatIndicator objects, and must never disagree with the object-based
-    callers (UniFi push, stats, exports) about what a feed contains."""
+    callers (UniFi push, stats, exports) about what a feed contains.
+
+    The operator never-block list is checked here, at the single emission
+    gate, so every surface that builds this matcher excludes those values at
+    any tier — a veto that tier, provenance force-HIGH, rescore and re-ingest
+    cannot override. It sits BEFORE the whitelist/source math because it is
+    unconditional (an empty matcher short-circuits, so there is no per-row
+    cost when the operator has none)."""
+    nb = getattr(whitelist_map, "never_block", None)
+    if nb and nb.matches(ip):
+        return False
     eff = effective_sources(ip, sources, whitelist_map)
     if eff is None:
         return False

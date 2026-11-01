@@ -26,6 +26,7 @@ published compose file). Nothing is written anywhere else.
 | Vote grace | For each indicator a feed recently dropped: the feed name, the indicator and when it was dropped, so the feed's vote lasts `scoring.vote_grace_days` after the drop. Recorded for every feed, including `churn_log_exclude` ones | `source_left`, `source_seeded` | Pruned to the grace window (default 3 days) on every refresh; `source_seeded` holds one row per feed name. |
 | Feed telemetry | Per-feed fetch times, counts, HTTP status, overlap and reputation metrics | `feeds`, `feed_stats`, `deleted_feeds` | Until the feed is deleted, then a tombstone with the name only |
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
+| Never-block list | IP addresses, CIDR ranges, domain names and wildcard domains you mark as *never to block*, with the reason text you typed and an `added_by` label. A standing operator instruction, not feed state: it excludes those values from every list, export and push at every tier, and never feeds a feed's reputation. It is distinct from a false-positive flag and from the whitelist, and never expires | `never_block` | Until you remove the entry |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
 | Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved whether the host check is switched on, the dashboard sign-in set on the System page (the username and a salted scrypt hash of the password, never the password itself), the SHA-256 fingerprint of your UniFi gateway's TLS certificate once a Test connection has pinned it, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
 | Hostnames seen | The hostnames (from the `Host` header) the dashboard has been reached by, with a count and first/last time, so the System view can offer them for the host check. No client IP address. Capped at 200 names | Memory only, never written to disk | Until the process restarts |
@@ -176,6 +177,11 @@ Basic auth credentials are not logged.
 - Whitelist reasons and the `added_by` label are free text you type. Keep
   personal details out of them; they are stored in plain text and shown in
   the dashboard.
+- Never-block reasons and the `added_by` label are the same kind of free
+  text, held to the same care. A never-block entry is a standing instruction
+  to exclude a value from every export and push at every tier; it is stored
+  in plain text, never expires, and is shown in the dashboard. Removing it
+  lets the value be emitted again on the next refresh.
 - Block lists you export end up in your firewall's configuration and logs.
   What happens to them there is governed by that device and your policies.
 

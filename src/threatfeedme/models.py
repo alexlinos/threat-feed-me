@@ -53,6 +53,11 @@ class WhitelistMatcher(dict):
         # Wildcard domain rules: list of (apex_domain, set(feed_names)),
         # built from "*.apex" keys. Matching is label-edge suffix match.
         self.wildcard_rules: List[Tuple[str, Set[str]]] = []
+        # Operator-owned never-block matcher (see NeverBlockMatcher), attached
+        # by Database.get_whitelist_map so every path that already threads the
+        # whitelist map through row_included enforces never-block too, without
+        # any caller having to opt in. None for hand-built matchers (tests).
+        self.never_block: Optional["NeverBlockMatcher"] = None
 
     def add_cidr_rules_from_keys(self) -> None:
         """(Re)build CIDR and wildcard-domain rules from the current keys.
@@ -134,6 +139,64 @@ def effective_sources(
     if ALL_FEEDS in scoped:
         return None
     return [s for s in sources if s not in scoped]
+
+
+class NeverBlockMatcher:
+    """The operator's hard exclusion list — enforced at emission and
+    overridable by NOTHING: not tier, not provenance force-HIGH, not any
+    future ratification, and not rescore/re-ingest.
+
+    Deliberately NOT the whitelist. A whitelist entry carries operational
+    meaning we must not borrow: it is per-feed scoped, can expire, and a
+    false-positive reason feeds back into feed reputation. A never-block entry
+    is the opposite — operator intent, not feed state — so it lives in its own
+    table and matcher, records no feedback, never expires, and leaves feed
+    scores untouched. It holds the same value shapes as the whitelist (IP,
+    CIDR, domain, ``*.wildcard``) and matches identically, but as a global
+    veto: one match removes the value from every export, push and served list
+    at every tier. Consulted by ``exporter.row_included`` — the single
+    emission gate — so no surface can accidentally skip it.
+    """
+
+    __slots__ = ("exact", "cidr", "wildcards")
+
+    def __init__(self, values=()):
+        self.exact: Set[str] = set()
+        self.cidr: List[Any] = []
+        self.wildcards: List[str] = []
+        for v in values:
+            self.add(v)
+
+    def add(self, value: str) -> None:
+        if value.startswith("*."):
+            apex = value[2:]
+            if apex:
+                self.wildcards.append(apex)
+        elif "/" in value:
+            try:
+                self.cidr.append(ipaddress.ip_network(value, strict=False))
+            except ValueError:
+                self.exact.add(value)          # junk stays an exact string
+        else:
+            self.exact.add(value)
+
+    def matches(self, value: str) -> bool:
+        if value in self.exact:
+            return True
+        try:
+            addr = ipaddress.ip_address(value)
+        except ValueError:
+            for apex in self.wildcards:         # apex itself or any subdomain
+                if value == apex or value.endswith("." + apex):
+                    return True
+            return False
+        for net in self.cidr:
+            if addr.version == net.version and addr in net:
+                return True
+        return False
+
+    def __bool__(self) -> bool:
+        return bool(self.exact or self.cidr or self.wildcards)
 
 
 class FeedType(str, Enum):
@@ -228,6 +291,16 @@ class WhitelistEntry(BaseModel):
     feed_name: str = ALL_FEEDS
     # One of WHITELIST_REASONS; only false_positive affects feed scoring.
     reason_code: str = REASON_OTHER
+
+
+class NeverBlockEntry(BaseModel):
+    """An operator-owned never-block entry (see NeverBlockMatcher). `value` is
+    the stored key: an IP, a CIDR (with prefix), a domain, or a *.wildcard."""
+    value: str
+    kind: str = "ip"            # 'ip' or 'domain', for display only
+    reason: str = ""
+    added_by: str = "dashboard"
+    added_at: datetime
 
 
 class FeedStats(BaseModel):
