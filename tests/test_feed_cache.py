@@ -26,7 +26,10 @@ def db(tmp_path):
     # value order, so the tie-break is actually exercised
     d.add_indicators_bulk([("185.5.5.9", {}), ("185.5.5.1", {}), ("185.5.5.5", {})],
                           source="greensnow")
-    d.add_indicators_bulk([("evil-login.top", {}), ("phish.example.net", {})],
+    # One domain row carries a submitted URL (issue #17) so the CSV parity
+    # check exercises the new column with a value, not just with blanks.
+    d.add_indicators_bulk([("evil-login.top", {"url": "https://evil-login.top/login/step1.php"}),
+                           ("phish.example.net", {})],
                           source="phishing_army", kind="domain")
     ConfidenceScorer(d, {}).recalculate_all_scores()
     yield d
@@ -54,10 +57,15 @@ def _old_txt(db, name, kind):
 def _old_csv(db, name, kind):
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
+    # The domain CSV carries the submitted URL (issue #17); the IP CSV is
+    # unchanged, so parity means the old six columns for IPs and the old six
+    # plus submitted_url for domains.
+    w.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen",
+                "sources"] + (["submitted_url"] if kind == "domain" else []))
     for i in _old_indicators(db, name, kind):
         w.writerow([firewall_value(i), i.confidence_score, i.tier.value,
-                    i.first_seen, i.last_seen, ";".join(i.sources)])
+                    i.first_seen, i.last_seen, ";".join(i.sources)]
+                   + ([i.metadata.get("url") or ""] if kind == "domain" else []))
     return buf.getvalue().encode()
 
 

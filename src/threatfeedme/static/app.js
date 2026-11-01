@@ -609,14 +609,14 @@ async function loadIndicators() {
     // A failed search used to leave the previous results under the new query.
     const j = r && r.ok ? await r.json().catch(() => null) : null;
     if (!j || !Array.isArray(j.indicators)) {
-        body.innerHTML = '<tr><td colspan="6" class="muted">Search failed' +
+        body.innerHTML = '<tr><td colspan="7" class="muted">Search failed' +
             (r ? ' (HTTP ' + esc(r.status) + ')' : ' (server not answering)') + '. Try again.</td></tr>';
         document.getElementById('ind-pageinfo').textContent = '';
         return;
     }
     indTotal = j.total;
     if (!j.indicators.length) {
-        body.innerHTML = '<tr><td colspan="6" class="muted">No matching indicators.</td></tr>';
+        body.innerHTML = '<tr><td colspan="7" class="muted">No matching indicators.</td></tr>';
     } else {
         body.innerHTML = j.indicators.map(i => {
             const badge = 'tier-' + i.tier;
@@ -625,11 +625,20 @@ async function loadIndicators() {
             // "more evidence than the sources shown".
             const votes = i.effective_votes == null ? '—'
                 : i.effective_votes.toFixed(1) + (i.effective_votes > i.sources.length ? '+' : '');
+            // The URL a URL-shaped feed submitted (issue #17): what separates a
+            // payload parked on a shared platform from malware on a domain the
+            // attacker owns. Ellipsised from the LEFT (CSS) so the asset path —
+            // the part that actually distinguishes them — stays readable.
+            const sub = i.submitted_url
+                ? '<code class="ind-url" title="' + esc(i.submitted_url) + '">' +
+                  esc(i.submitted_url) + '</code>'
+                : '<span class="muted">—</span>';
             return '<tr><td><code>' + esc(i.value) + '</code></td>' +
                 '<td><span class="badge ' + badge + '">' + esc(i.tier) + '</span></td>' +
                 '<td>' + esc(i.confidence_score) + '</td>' +
                 '<td title="independent witnesses (overlap-discounted)">' + esc(votes) + '</td>' +
                 '<td class="muted" style="font-size:.82em">' + esc(i.sources.join(', ')) + '</td>' +
+                '<td>' + sub + '</td>' +
                 '<td><button class="mini-btn" data-ip="' + esc(i.ip) + '" onclick="openWhitelistModal(this.dataset.ip)">Whitelist…</button> <a class="vt-btn" href="https://www.virustotal.com/gui/search/' + encodeURIComponent(i.value) + '" target="_blank" title="Look up on VirusTotal">VT</a></td></tr>';
         }).join('');
     }
@@ -725,6 +734,10 @@ async function openWhitelistModal(ip) {
         '<option value="tier:medium">Medium only</option>' +
         '<option value="tier:low">Low only</option>';
     srcBox.textContent = 'Loading…';
+    const urlField = document.getElementById('wl-modal-url-field');
+    const urlCode = document.getElementById('wl-modal-url');
+    if (urlCode) { urlCode.textContent = ''; urlCode.title = ''; }   // never carry over
+    if (urlField) urlField.hidden = true;
     try {
         const j = await (await fetch('/api/indicators/' + encodeURIComponent(ip))).json();
         const sources = j.sources || [];
@@ -736,6 +749,14 @@ async function openWhitelistModal(ip) {
                 'title="Independent witnesses after overlap discounting; netblock votes are counted but not listed above.">' +
                 '≈ ' + esc(j.effective_votes.toFixed(1)) + ' independent votes</div>';
         }
+        // The submitted URL of a URL-shaped feed line (issue #17), in the
+        // dialog where the block/allow call is actually made. textContent, not
+        // innerHTML: this string came from a feed.
+        if (urlCode) {
+            urlCode.textContent = j.submitted_url || '';
+            urlCode.title = j.submitted_url || '';
+        }
+        if (urlField) urlField.hidden = !j.submitted_url;
     } catch (e) { srcBox.textContent = 'Could not load sources'; }
     openModal('wl-modal');
 }
