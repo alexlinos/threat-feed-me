@@ -46,6 +46,23 @@ def test_shared_platform_denies_force_high(db):
                  value=value) == ConfidenceTier.LOW, value
 
 
+def test_cloud_stores_and_paste_lockers_are_shared(db):
+    """The 2026-11-01 sweep found 22 pub-<hash>.r2.dev buckets in prod HIGH.
+
+    Each bucket belongs to one attacker, but every bucket resolves to
+    Cloudflare's shared edge, so a hostname block becomes a Cloudflare block.
+    Measured against the live keyed export: 105,580 of 121,677 URLs (86.8%)
+    sit on platforms in this list, so coverage here is the difference between
+    blocking a locker and blocking the internet's file hosting.
+    """
+    t = _scorer(db)._tier_from_votes
+    for value in ("pub-0462440f54f44b9fb3474df61e32d6ba.r2.dev",
+                  "commondatastorage.googleapis.com", "drive.google.com",
+                  "mega.nz", "t.me", "paste.ee"):
+        assert t(1.0, ["urlhaus_keyed"], 1.1, 10.0, kind="domain",
+                 value=value) == ConfidenceTier.LOW, value
+
+
 def test_ordinary_domain_still_gets_force_high(db):
     """The guard is scoped to shared platforms, not a blanket cap."""
     assert _scorer(db)._tier_from_votes(

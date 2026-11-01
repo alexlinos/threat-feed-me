@@ -91,10 +91,18 @@ DEFAULT_SHARED_PLATFORMS = (
     "gitlab.com", "bitbucket.org",
     "vercel.app", "vercel-storage.com", "netlify.app", "netlify.com",
     "pages.dev", "workers.dev", "trycloudflare.com", "cloudflarestorage.com",
+    "r2.dev",
     "b-cdn.net", "jsdelivr.net", "discordapp.com", "discordapp.net",
     "dropbox.com", "dropboxusercontent.com", "mediafire.com", "pastebin.com",
     "surge.sh", "filestackcontent.com", "weebly.com", "w3spaces.com",
     "godaddysites.com", "sourceforge.net", "0x0.st", "transfer.sh",
+    # Cloud object stores and consumer cloud drives. Prod HIGH held 22
+    # pub-<hash>.r2.dev buckets, one per attacker bucket but all on
+    # Cloudflare's shared edge; the same reasoning as github.com applies.
+    "googleapis.com", "drive.google.com", "onedrive.live.com", "sharepoint.com",
+    "box.com", "mega.nz", "wetransfer.com", "we.tl",
+    # Paste / paste-bin / messaging CDNs used as free payload lockers.
+    "paste.ee", "hastebin.com", "gitbook.io", "t.me", "telegram.me",
 )
 
 
