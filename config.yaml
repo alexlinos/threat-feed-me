@@ -499,6 +499,16 @@ scoring:
     authoritative_domain_feeds:
       - urlhaus_keyed
       - cert_pl
+    # Shared-hosting guard for the provenance path above. A domain under one
+    # of these resolves to IP space shared with everyone else's content on
+    # that platform, so force-HIGH on one curator's word would have the
+    # gateway blackhole the platform itself (prod 2026-10-31: urlhaus_keyed
+    # named github.com / raw.githubusercontent.com / codeload.github.com,
+    # UniFi resolved them and took GitHub down network-wide). Curated feeds
+    # report the payload HOST, not the attacker, so hosts like these are not
+    # evidence. Independent corroboration (min_domain_sources witnesses) still
+    # earns HIGH. Omit for the built-in list; set [] to disable the guard.
+    # shared_platform_domains: []
 
   medium_confidence:
     min_sources: 2

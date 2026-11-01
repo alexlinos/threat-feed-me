@@ -80,6 +80,66 @@ FP_MIN_FACTOR = 0.2
 # A feed at or below this penalty factor is surfaced as "degraded" in the UI.
 FP_DEGRADED_FACTOR = 0.6
 
+# Shared-hosting platforms. A domain under one of these resolves to IP
+# space shared with everyone else's content on that platform, so blocking
+# it at the gateway blackholes the platform, not the attacker. Curated
+# feeds name these because malware hosts payloads there: URLhaus reports
+# the payload HOST, not the attacker. Provenance force-HIGH must not
+# apply to them. Override with scoring.high_confidence.shared_platform_domains.
+DEFAULT_SHARED_PLATFORMS = (
+    "github.com", "githubusercontent.com", "github.io", "githubassets.com",
+    "gitlab.com", "bitbucket.org",
+    "vercel.app", "vercel-storage.com", "netlify.app", "netlify.com",
+    "pages.dev", "workers.dev", "trycloudflare.com", "cloudflarestorage.com",
+    "r2.dev",
+    "b-cdn.net", "jsdelivr.net", "discordapp.com", "discordapp.net",
+    "dropbox.com", "dropboxusercontent.com", "mediafire.com", "pastebin.com",
+    "surge.sh", "filestackcontent.com", "weebly.com", "w3spaces.com",
+    "godaddysites.com", "sourceforge.net", "0x0.st", "transfer.sh",
+    # Cloud object stores and consumer cloud drives. Prod HIGH held 22
+    # pub-<hash>.r2.dev buckets, one per attacker bucket but all on
+    # Cloudflare's shared edge; the same reasoning as github.com applies.
+    "googleapis.com", "drive.google.com", "onedrive.live.com", "sharepoint.com",
+    "box.com", "mega.nz", "wetransfer.com", "we.tl",
+    # Paste / paste-bin / messaging CDNs used as free payload lockers.
+    "paste.ee", "hastebin.com", "gitbook.io", "t.me", "telegram.me",
+)
+
+
+def shared_platform_for(value, platforms=DEFAULT_SHARED_PLATFORMS):
+    """Return the shared-platform entry `value` sits on, else None.
+
+    Matches the platform itself or a real subdomain of it, and never a
+    lookalike suffix: evil-github.com and github.com.evil.tld are somebody
+    else's domains. The tier guard and the ingestor both call this, so the
+    tag written at ingest can never disagree with the tier decided later.
+    """
+    if not value:
+        return None
+    v = str(value).strip().lower().rstrip('.')
+    if not v:
+        return None
+    for s in platforms or ():
+        s = str(s).strip().lower().lstrip('.')
+        if s and (v == s or v.endswith('.' + s)):
+            return s
+    return None
+
+
+def resolve_shared_platforms(config):
+    """The effective shared-platform list, read the one way.
+
+    A missing key means the curated DEFAULT_SHARED_PLATFORMS; an explicit
+    empty list disables the guard. The scorer and the ingestor both call
+    this rather than each parsing the key themselves, which is how the two
+    views could otherwise drift apart.
+    """
+    hc = ((config or {}).get('scoring') or {}).get('high_confidence') or {}
+    raw = hc.get('shared_platform_domains')
+    if raw is None:
+        return DEFAULT_SHARED_PLATFORMS
+    return tuple(str(p).strip().lower().lstrip('.') for p in raw if str(p).strip())
+
 
 def fp_penalty_factor(fp_count: int, reported_count: int,
                       k: float = FP_PENALTY_K, floor: float = FP_MIN_FACTOR) -> float:
@@ -179,8 +239,8 @@ class ConfidenceScorer:
         # 2026-09-22). The operator's config is the trust anchor: a configured
         # authoritative feed counts only while its stored row still matches the
         # same-named feed in config.feeds — same URL, and not an upload.
-        auth_cfg = set(((scoring.get('high_confidence') or {})
-                        .get('authoritative_domain_feeds')) or [])
+        high_conf_cfg = (scoring.get('high_confidence') or {})
+        auth_cfg = set(high_conf_cfg.get('authoritative_domain_feeds') or [])
         # pipeline.scorer_config passes the configured URLs explicitly (its
         # 'feeds' list is rebuilt from the DB, without URLs); direct callers
         # pass a config whose 'feeds' carry them.
@@ -188,6 +248,12 @@ class ConfidenceScorer:
             f.get('name'): f.get('url')
             for f in config.get('feeds', []) or [] if isinstance(f, dict)}
         self.authoritative_sources = set(auth_cfg)   # no DB (unit tests): trust config
+        # Shared-platform guard (see DEFAULT_SHARED_PLATFORMS). Config may
+        # override the curated list; an explicit empty list disables it.
+        shared = resolve_shared_platforms(config)
+        self.shared_platforms = {
+            str(d).strip().lower().lstrip('.') for d in (shared or [])
+            if str(d).strip()}
         if self.db is not None:
             try:
                 verified = set()
@@ -252,7 +318,9 @@ class ConfidenceScorer:
             tier = self._determine_tier(score, len(sources or []), sources)
         else:
             med_b, high_b = self._stored_breaks(kind=indicator.kind)
-            tier = self._tier_from_votes(votes, sources, med_b, high_b)
+            tier = self._tier_from_votes(votes, sources, med_b, high_b,
+                                         kind=indicator.kind,
+                                         value=indicator.ip)
         return score, tier
 
     def recalculate_all_scores(self) -> int:
@@ -319,7 +387,7 @@ class ConfidenceScorer:
                      votes, sources,
                      dom_med if kind == 'domain' else ip_med,
                      dom_high if kind == 'domain' else ip_high,
-                     kind).value,
+                     kind, value=ip).value,
                  votes, ip)
                 for ip, score, votes, sources, kind in evidence
             ]
@@ -632,9 +700,14 @@ class ConfidenceScorer:
         high_b = max((c[1] + c[2]) / 2, self.high_floor, med_b + 1e-9)
         return med_b, high_b
 
+    def _is_shared_platform(self, value) -> bool:
+        """True for a domain on shared-hosting infrastructure."""
+        return shared_platform_for(value, self.shared_platforms) is not None
+
     def _tier_from_votes(self, votes: float, sources: Optional[List[str]],
                          med_b: float, high_b: float,
-                         kind: str = 'ip') -> ConfidenceTier:
+                         kind: str = 'ip',
+                         value: Optional[str] = None) -> ConfidenceTier:
         """Tier from effective votes: strictly above the boundary. The high
         tier keeps the require_threat_intel gate — an IP known only from
         custom/manual data tops out at medium no matter how many votes.
@@ -671,10 +744,14 @@ class ConfidenceScorer:
         intel_ok = (not high_require_intel) or self._has_intel_source(sources)
         if kind == 'domain':
             auth_feeds = self.authoritative_sources   # provenance-verified names
-            if intel_ok and auth_feeds and any(
+            # Shared infrastructure never earns force-HIGH on one curator's
+            # word: the curator names the payload host, and that host is
+            # everybody's. The independent-witness gate below still applies.
+            shared = self._is_shared_platform(value)
+            if (intel_ok and not shared and auth_feeds and any(
                     s in auth_feeds
                     and self.feed_penalty.get(s, 1.0) >= FP_DEGRADED_FACTOR
-                    for s in sources):
+                    for s in sources)):
                 return ConfidenceTier.HIGH
             min_witnesses = float(high_cfg.get('min_domain_sources', 3))
             if votes >= min_witnesses and intel_ok:
