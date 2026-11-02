@@ -334,7 +334,7 @@ class UniFiPusher:
         result = {"checked": True, "arm": arm, "policy_id": policy_id,
                   "field": field, "written_group_ids": sorted(written_ids),
                   "referenced_group_id": None, "policy_name": None,
-                  "policy_enabled": None, "ok": False, "error": None}
+                  "policy_enabled": None, "ok": False, "error": None, "warning": None}
         if not field:
             result["error"] = f"unknown policy-check arm {arm!r}"
             return result
@@ -356,6 +356,12 @@ class UniFiPusher:
             return result
         result["policy_name"] = policy.get('name')
         result["policy_enabled"] = policy.get('enabled')
+        if not policy.get('enabled'):
+            # A correct reference in a DISABLED policy still enforces nothing:
+            # loud, but not a push error — the operator may keep the control
+            # parked on purpose.
+            result["warning"] = (f"policy '{policy.get('name')}' ({policy_id}) is disabled; "
+                                 "the pushed groups enforce nothing until it is enabled")
         destination = policy.get('destination') or {}
         referenced = destination.get(field)
         result["referenced_group_id"] = referenced

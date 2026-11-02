@@ -699,7 +699,16 @@ def test_push_succeeds_and_reports_check_when_policy_points_at_our_group(tmp_pat
     assert summary is not None
     assert summary["policy_check"]["ok"] is True
     assert summary["policy_check"]["referenced_group_id"] == "g7"
-    assert summary["written"]["tfm-high-1"] == "g7"        # referenced == written
+    assert summary["policy_check"]["warning"] is None       # enabled policy: no warning
+    assert summary["written"]["tfm-high-1"] == "g7"         # referenced == written
+    # a correct reference in a DISABLED policy is ok but loudly warned: it
+    # still enforces nothing (both stage-1 reports flagged this).
+    session.policies = [_policy("pol-ip", "TFM IP", "ip_group_id", "g7", enabled=False)]
+    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
+        "enabled": True, "host": "192.168.1.1"}}})
+    assert summary is not None
+    assert summary["policy_check"]["ok"] is True
+    assert "disabled" in summary["policy_check"]["warning"]
 
 
 def test_domain_policy_mismatch_is_an_explicit_domain_error(tmp_path, monkeypatch):
