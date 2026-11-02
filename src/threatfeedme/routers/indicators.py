@@ -189,6 +189,11 @@ def get_indicator_detail(ip: str, _=Depends(require_auth)):
         "effective_votes": (round(ind.effective_votes, 2)
                             if ind.effective_votes is not None else None),
         "sources": ind.sources,
+        # The URL a URL-shaped feed line submitted (issue #17), when this row
+        # has one: the difference between a payload parked on a shared platform
+        # and malware on a domain the attacker owns, without a SQL query.
+        # Rendered escaped by the dashboard (see openWhitelistModal).
+        "submitted_url": ind.metadata.get("url"),
     }
 
 

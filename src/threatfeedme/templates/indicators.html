@@ -21,8 +21,10 @@
     <table>
         <thead><tr><th>Indicator</th><th>Tier</th><th>Score</th>
             <th title="Independent witnesses: each source's vote is discounted by its measured overlap with sources already counted. Includes netblock votes, so it can exceed the listed sources.">Votes</th>
-            <th>Sources</th><th></th></tr></thead>
-        <tbody id="ind-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+            <th>Sources</th>
+            <th title="The URL a URL-shaped feed submitted, for feeds published as a list of URLs. It is what separates a payload parked on a shared platform from malware on a domain the attacker owns. Blank for domain and IP feeds, and for rows ingested before it was retained.">Submitted URL</th>
+            <th></th></tr></thead>
+        <tbody id="ind-body"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
     </table>
     </div>
 
@@ -110,6 +112,10 @@
         <div class="field">
             <label>Reported by</label>
             <div class="sources" id="wl-modal-sources">—</div>
+        </div>
+        <div class="field" id="wl-modal-url-field" hidden>
+            <label>Submitted URL (from the feed)</label>
+            <code class="wl-url" id="wl-modal-url"></code>
         </div>
         <div class="field">
             <label for="wl-modal-scope">Scope: whitelist from which tier?</label>

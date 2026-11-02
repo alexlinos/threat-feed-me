@@ -103,6 +103,15 @@ input::placeholder { color:var(--dim); }
    Cap it so it ellipsises instead of inflating the first column. */
 .feeds td:first-child > b { display:block; max-width:200px; overflow:hidden;
                text-overflow:ellipsis; white-space:nowrap; }
+/* Submitted URL (issue #17), the indicators table's sixth column. A
+   release-asset URL is long and the TAIL (…/releases/download/v1/setup.zip) is
+   what distinguishes one payload from another on the same platform, so it
+   ellipsises from the left like a feed URL does; the whole string is in the
+   title tooltip, the whitelist dialog and the CSV. */
+.ind-url { display:block; max-width:300px; overflow:hidden; text-overflow:ellipsis;
+           white-space:nowrap; direction:rtl; text-align:left;
+           font-size:.76em; color:var(--dim); }
+.wl-url { display:block; word-break:break-all; font-size:.8em; color:var(--dim); }
 .row-off td { opacity:.5; }
 /* Overlap heatmap (collapsed by default) */
 .heat { display:grid; gap:2px; align-items:center; }

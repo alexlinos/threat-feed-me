@@ -93,6 +93,29 @@ def next_due(db: Database, default_interval_seconds: int) -> Optional[Dict]:
     return {"feed": name, "in_s": max(0, int(left)), "late": left < -interval}
 
 
+def resolve_retain_submitted_url(config) -> bool:
+    """The feeds.retain_submitted_url switch, read the one way (issue #17).
+
+    Absent means ON: the retained URL is the point of the feature, and an
+    operator who wants the old, metadata-minimal behaviour has to say so.
+
+    The name is the documented one; the placement has to work around the
+    shipped shape of the config. `feeds:` is the feed ROSTER — a list of feed
+    dicts — so a settings key cannot live inside it. It lives in the sibling
+    `feeds_settings:` block instead, and the dotted top-level spelling
+    (`"feeds.retain_submitted_url": false`) is accepted as well so the
+    documented name is never a dead key.
+    """
+    cfg = config or {}
+    feeds = cfg.get('feeds')
+    for block in (cfg.get('feeds_settings'), feeds if isinstance(feeds, dict) else None):
+        if isinstance(block, dict) and 'retain_submitted_url' in block:
+            return bool(block['retain_submitted_url'])
+    if 'feeds.retain_submitted_url' in cfg:
+        return bool(cfg['feeds.retain_submitted_url'])
+    return True
+
+
 def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
                 collect_values: Optional[Dict] = None) -> Dict:
     """Fetch and ingest enabled feeds (optionally a subset by name).
@@ -117,6 +140,7 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
         crowdsec_verify_ssl=bool(crowdsec.effective_block(db, config).get('verify_ssl', True)),
         # Same key the tier guard reads, resolved once here.
         shared_platforms=resolve_shared_platforms(config),
+        retain_submitted_url=resolve_retain_submitted_url(config),
     )
     feeds = db.get_feed_sources(enabled_only=True)
     if only is not None:

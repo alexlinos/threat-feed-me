@@ -1037,7 +1037,10 @@ class Database:
         """Paginated/searchable view of merged indicators.
 
         Excludes globally-whitelisted (removed) IPs by default. Returns
-        {'total': int, 'rows': [{ip, value, tier, confidence_score, sources}]}.
+        {'total': int, 'rows': [{ip, value, tier, confidence_score, sources,
+        submitted_url}]}. submitted_url is the URL a URL-shaped feed line
+        submitted (issue #17), or None — the metadata is parsed here anyway,
+        so surfacing it costs nothing and triage stops needing SQL.
         """
         now = _utcnow_iso()
         where, params = [], []
@@ -1122,6 +1125,7 @@ class Database:
                     "effective_votes": (round(row['effective_votes'], 2)
                                         if row['effective_votes'] is not None else None),
                     "sources": (row['sources_str'] or '').split(',') if row['sources_str'] else [],
+                    "submitted_url": meta.get('url'),
                 })
             return {"total": total, "rows": rows}
 
