@@ -216,6 +216,19 @@ _URL_RE = re.compile(r'^https?://([^/\s]+)', re.IGNORECASE)
 _MAX_STORED_URL = 512
 
 
+def _submitted_url(line: str) -> Optional[str]:
+    """scheme://host/path of a submitted URL: no query string, fragment or
+    userinfo. Those carry the targeted victim's address and one-time tokens
+    (phishunt, measured: parameters named email, token, lptoken and code, one
+    real address in 1,090 URLs), and the path alone is what separates
+    payloads. None for a line urlsplit rejects: no URL beats a raw one."""
+    try:
+        u = urlsplit(line)
+        return u._replace(netloc=u.netloc.rpartition('@')[2], query='', fragment='').geturl()
+    except ValueError:
+        return None
+
+
 def _url_host(authority: str) -> str:
     """Bare hostname from a URL authority: drop user:pass@ and :port. A feed
     entry like http://evil.example:8080/x must yield evil.example, not be
@@ -281,10 +294,9 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
             # Pass the whole line, not just the authority: the path is the
             # difference between a payload parked on a shared platform and
             # malware on a domain the attacker owns, and it is what host+path
-            # keying will need later. What is retained is the line AS PARSED
-            # (comment-stripped above), so the stored string matches the one
-            # that produced the indicator.
-            _add(_url_host(url.group(1).lower()), url=line)
+            # keying will need later. Only scheme, host and path are kept
+            # (_submitted_url): the query is where victim data lives.
+            _add(_url_host(url.group(1).lower()), url=_submitted_url(line))
             continue
         # Plain domain-per-line (first token, so trailing annotations on
         # loosely-formatted lists don't cost the indicator).

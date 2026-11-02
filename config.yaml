@@ -18,12 +18,14 @@
 # top-level spelling is accepted too.)
 feeds_settings:
   # URL-shaped feeds — those published as a corpus of submission URLs
-  # (openphish, phishtank, phishunt) — keep the URL each indicator arrived on
-  # in that row's metadata, capped at 512 characters. The path is the only
+  # (openphish, phishtank, phishunt) — keep the path each indicator arrived
+  # on in that row's metadata, capped at 512 characters. The path is the only
   # thing that separates a payload parked on a shared platform from malware
   # on a domain the attacker actually owns, and it is the prerequisite for
-  # keying those feeds at host+path. It shows up in the dashboard's indicator
-  # list, the whitelist dialog and the domain CSV export. Turn it off to
+  # keying those feeds at host+path. Only scheme, host and path are kept (the
+  # query is where victim addresses and tokens live), and it shows only in
+  # the dashboard's indicator list and whitelist dialog, never in the public
+  # feed URLs. Turn it off to
   # store no URL at all (rows keep the metadata they already have until they
   # age out of retention).
   retain_submitted_url: true

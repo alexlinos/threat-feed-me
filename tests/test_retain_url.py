@@ -185,16 +185,23 @@ def test_a_url_is_still_parsed_as_a_host_not_a_path(db):
 
 # ---- E: the surfaces triage actually reads ----------------------------------
 
-def test_domain_csv_carries_the_submitted_url_column(db):
-    """Triage without SQL: the domain CSV's last column is the submitted URL."""
-    _ingest(db, RELEASE_URL + "\n" + "plain.example-forge.tld\n")
+def test_query_userinfo_and_fragment_are_never_stored(db):
+    """Phishing URLs carry the targeted victim's address and one-time tokens
+    in the query (and sometimes userinfo); only scheme, host and path stay."""
+    _ingest(db, "https://victim%40corp.example@login-check.example-forge.tld"
+                "/verify/step2.php?email=victim@corp.example&token=abc123\n")
+    assert _meta(db, "login-check.example-forge.tld")["url"] == \
+        "https://login-check.example-forge.tld/verify/step2.php"
+
+
+def test_public_domain_csv_does_not_carry_the_url(db):
+    """Feed URLs are unauthenticated: the submitted URL stays on the signed-in
+    dashboard and API and never reaches the CSV anyone can poll."""
+    _ingest(db, RELEASE_URL + "\n")
     body = b"".join(feed_cache.stream_csv(db, "all", "domain")).decode()
-    rows = list(csv.reader(io.StringIO(body)))
-    assert rows[0] == ["ip", "confidence_score", "tier", "first_seen",
-                       "last_seen", "sources", "submitted_url"]
-    by_value = {r[0]: r for r in rows[1:]}
-    assert by_value[SHARED_HOST][-1] == RELEASE_URL
-    assert by_value['plain.example-forge.tld'][-1] == ""      # blank, not absent
+    assert next(csv.reader(io.StringIO(body))) == [
+        "ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"]
+    assert RELEASE_PATH not in body
 
 
 def test_ip_csv_columns_are_unchanged(db):
