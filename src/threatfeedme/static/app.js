@@ -186,6 +186,10 @@ async function toggleFeed(el, name) {
     try {
         const r = await apiFetch('/api/feeds/' + encodeURIComponent(name) + '/enabled?enabled=' + enabled, {method:'POST'});
         if (!r.ok) throw new Error(r.status);
+        // The top-bar health count, the "needs attention" flag and the sort
+        // are server-rendered: switching a failing feed off left them saying
+        // it was still a problem until the next manual reload.
+        reloadWhenIdle(document.getElementById('refresh-status'), 300);
     } catch (e) {
         el.checked = !enabled;
         if (row) row.classList.toggle('row-off', enabled);
