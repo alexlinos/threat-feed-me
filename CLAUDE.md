@@ -976,6 +976,28 @@ and traps that aren't obvious from the code:
 - PRIVACY.md now lists both daily GitHub GETs (tags API, raw catalog); both
   switch off with `updates.enabled` / `catalog.enabled`.
 
+## v2.6.1-2.6.6 (2026-10-31 to 2026-11-02)
+
+- 2.6.1 CyberHost ships ON (ratified; CC BY-SA, attributed in README);
+  catalog_version 2. 2.6.2 URLhaus keyed export: its header is a COMMENTED
+  line. 2.6.3 shared-platform guard (#16, after urlhaus_keyed put github.com
+  in the pushed tier and a UniFi gateway blackholed GitHub). 2.6.4
+  deterministic UniFi truncation (#20) and the never-block list (#19).
+  2.6.5 UniFi policy read-back (#21).
+- **2.6.6 review fixes**: never-block now refuses any served RANGE that
+  overlaps an entry (rows store the network address + metadata.cidr, so
+  callers pass `cidr=` to row_included; the address alone let a /24 through).
+  UniFi read-back requires an enabled policy on EVERY filled group (Medium
+  shards into 4, Low 10; one policy references one group). Shared-platform
+  names stay at LOW however many feeds agree, customer subdomains included
+  (they resolve to the platform's shared edge, and Medium is the tier
+  firewalls block). Submitted URLs (#17, PR #24) keep scheme+host+path only
+  and never reach the public CSV (phishing queries carry victim addresses
+  and tokens).
+- Two weekend commits (f148b59, 1be8152) carry AI co-author trailers against
+  the no-attribution rule; left in history (rewriting main + v2.6.2 needs a
+  force-push). Check trailers before pushing.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
