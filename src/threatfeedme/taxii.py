@@ -180,7 +180,7 @@ def page(db, cid: str, added_after: Optional[str] = None,
             more = True
             break
         last_key = (row[6], row[0])
-        if not row_included(row[0], row[2], wl, tier=scope):
+        if not row_included(row[0], row[2], wl, tier=scope, cidr=row[1]):
             continue
         obj = indicator(kind, row)
         if obj is None:

@@ -15,8 +15,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 from threatfeedme.database import Database
-from threatfeedme.exporter import is_included
-from threatfeedme.models import ConfidenceTier, NeverBlockMatcher
+from threatfeedme.exporter import is_included, row_included
+from threatfeedme.models import ConfidenceTier, NeverBlockMatcher, WhitelistMatcher
 from threatfeedme.pusher_unifi import UniFiPusher
 
 
@@ -256,3 +256,24 @@ def test_router_registers_all_three_verbs():
         methods |= set(r.methods)
     assert paths == {"/api/never-block"}
     assert {"GET", "POST", "DELETE"} <= methods
+
+
+# ---- ranges: a served CIDR that covers a never-block value is refused ----
+
+@pytest.mark.parametrize("ip, cidr, served", [
+    ("203.0.113.0", "203.0.113.0/24", False),     # range contains a never-block IP
+    ("198.51.100.0", "198.51.100.0/25", False),   # range inside a never-block range
+    ("198.51.0.0", "198.51.0.0/16", False),       # range around a never-block range
+    ("192.0.2.0", "192.0.2.0/24", True),          # unrelated range still served
+    ("203.0.113.9", None, True),                  # unrelated single address
+])
+def test_never_block_refuses_overlapping_ranges(ip, cidr, served):
+    """Ranges are stored as their network address plus metadata.cidr; the
+    veto must judge the whole range, since that is what the firewall blocks."""
+    wl = WhitelistMatcher()
+    wl.never_block = NeverBlockMatcher(["203.0.113.5", "198.51.100.0/24"])
+    assert row_included(ip, ["feed_a", "feed_b"], wl, cidr=cidr) is served
+    from types import SimpleNamespace
+    ind = SimpleNamespace(ip=ip, sources=["feed_a", "feed_b"],
+                          metadata={"cidr": cidr} if cidr else {})
+    assert is_included(ind, wl) is served

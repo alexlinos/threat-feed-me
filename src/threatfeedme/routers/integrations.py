@@ -90,6 +90,10 @@ def _status() -> dict:
         # "" = domain push off; else the domain tier pushed into
         # Domain-type network lists ({prefix}-dom-{tier}-1..N).
         "domain_tier": block.get("domain_tier", ""),
+        # Policy ids whose destinations must reference the pushed groups
+        # (issue #21 read-back); "" = no check for that arm.
+        "ip_policy_id": block.get("ip_policy_id", ""),
+        "domain_policy_id": block.get("domain_policy_id", ""),
         "group_prefix": block.get("group_prefix", "threatfeedme"),
         # Presence only — the values are write-only by design.
         "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD)),
@@ -122,6 +126,9 @@ class UniFiSettingsRequest(BaseModel):
     tier: Optional[str] = None
     # "" turns the domain arm off (the default).
     domain_tier: Optional[str] = None
+    # Zone-based policy ids to read back after each arm's push (issue #21).
+    ip_policy_id: Optional[str] = None
+    domain_policy_id: Optional[str] = None
 
 
 @router.post("/api/integrations/unifi")
@@ -159,7 +166,8 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
         _clear_credentials()
         credentials_cleared = True
         stored.pop("cert_sha256", None)     # the pin belongs to the old gateway
-    for field in ("enabled", "host", "site", "tier", "domain_tier"):
+    for field in ("enabled", "host", "site", "tier", "domain_tier",
+                  "ip_policy_id", "domain_policy_id"):
         value = getattr(request, field)
         if value is not None:
             stored[field] = value.strip() if isinstance(value, str) else value

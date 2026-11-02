@@ -214,7 +214,7 @@ class CrowdSecPusher:
         values: List[str] = []
         self.last_refused = 0
         for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind='ip'):
-            if nb and nb.matches(i.ip):
+            if nb and nb.matches(firewall_value(i)):
                 self.last_refused += 1
                 continue
             if is_included(i, wl, tier=tier):
