@@ -4,8 +4,8 @@ Prod incident 2026-10-31: urlhaus_keyed reported `github.com`,
 `raw.githubusercontent.com` and `codeload.github.com` — URLhaus names the
 payload HOST, and malware hosts payloads on GitHub. Provenance force-HIGH put
 those on the pushed domain tier, UniFi resolved them to GitHub's serving IPs
-and blackholed GitHub for the whole LAN. The guard denies force-HIGH for
-shared platforms; independent corroboration still earns HIGH.
+and blackholed GitHub for the whole LAN. Names on shared platforms stay at
+Low however many feeds agree (2.6.6: corroboration used to reach Medium/HIGH).
 """
 import pytest
 
@@ -134,12 +134,20 @@ def test_lookalike_suffixes_are_not_shared(db):
     assert s._is_shared_platform(None) is False
 
 
-def test_independent_witnesses_still_earn_high_for_shared(db):
-    """Guard removes force-HIGH only; corroboration remains a path to HIGH."""
-    assert _scorer(db)._tier_from_votes(
-        3.0, ["urlhaus_keyed", "phishing_army", "openphish_community"],
-        1.1, 10.0, kind="domain",
-        value="raw.githubusercontent.com") == ConfidenceTier.HIGH
+def test_corroboration_never_lifts_shared_platforms_out_of_low(db):
+    """Agreement doesn't make a shared host hostile: two curators naming
+    github.com is two payloads hosted there. Neither the witness gate (HIGH)
+    nor the vote boundary (Medium, the tier firewalls block) applies, for the
+    platform's own names and for customer names on its shared edge alike."""
+    t = _scorer(db)._tier_from_votes
+    for value in ("github.com", "raw.githubusercontent.com", "drive.google.com",
+                  "pub-0123456789abcdef.r2.dev", "evil.github.io"):
+        assert t(3.0, ["a", "b", "c"], 1.1, 10.0, kind="domain",
+                 value=value) == ConfidenceTier.LOW, value
+        assert t(2.0, ["a", "b"], 1.1, 10.0, kind="domain",
+                 value=value) == ConfidenceTier.LOW, value
+    assert t(2.0, ["a", "b"], 1.1, 10.0, kind="domain",
+             value="evil-github.com") == ConfidenceTier.MEDIUM   # not a platform
 
 
 def test_ips_untouched_by_the_guard(db):

@@ -506,8 +506,10 @@ scoring:
     # named github.com / raw.githubusercontent.com / codeload.github.com,
     # UniFi resolved them and took GitHub down network-wide). Curated feeds
     # report the payload HOST, not the attacker, so hosts like these are not
-    # evidence. Independent corroboration (min_domain_sources witnesses) still
-    # earns HIGH. Omit for the built-in list; set [] to disable the guard.
+    # evidence, and corroboration doesn't change that: names under these stay
+    # at Low (the Everything list) however many feeds agree, because even a
+    # customer subdomain resolves to the platform's shared edge. Omit for the
+    # built-in list; set [] to disable the guard.
     # shared_platform_domains: []
 
   medium_confidence:

@@ -21,10 +21,12 @@ def is_included(indicator: ThreatIndicator, whitelist_map: dict, tier: Confidenc
     (feed_name starting with 'tier:') that exclude the indicator from that
     specific tier's output while allowing it in others.
     """
-    return row_included(indicator.ip, indicator.sources, whitelist_map, tier)
+    return row_included(indicator.ip, indicator.sources, whitelist_map, tier,
+                        cidr=indicator.metadata.get('cidr'))
 
 
-def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = None) -> bool:
+def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = None,
+                 cidr: str = None) -> bool:
     """is_included on raw fields — the ONE implementation of the rule. The
     lean feed-serving path (feed_cache) works on plain row tuples rather than
     ThreatIndicator objects, and must never disagree with the object-based
@@ -35,9 +37,11 @@ def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = N
     any tier — a veto that tier, provenance force-HIGH, rescore and re-ingest
     cannot override. It sits BEFORE the whitelist/source math because it is
     unconditional (an empty matcher short-circuits, so there is no per-row
-    cost when the operator has none)."""
+    cost when the operator has none). A range row is stored as its network
+    address with the prefix in `cidr`; the veto checks the whole range, since
+    that is what the firewall blocks."""
     nb = getattr(whitelist_map, "never_block", None)
-    if nb and nb.matches(ip):
+    if nb and nb.matches(cidr or ip):
         return False
     eff = effective_sources(ip, sources, whitelist_map)
     if eff is None:

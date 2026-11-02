@@ -86,7 +86,7 @@ def iter_rows(db, name: str, kind: str, limit: Optional[int] = None,
             return
         if hosts_only and row[1]:
             continue
-        if row_included(row[0], row[2], wl_map, tier=scope):
+        if row_included(row[0], row[2], wl_map, tier=scope, cidr=row[1]):
             served += 1
             yield row
 

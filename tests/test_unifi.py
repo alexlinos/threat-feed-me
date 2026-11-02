@@ -315,7 +315,8 @@ def test_sync_creates_chunked_groups():
     summary = p.sync(["198.51.100.1", "2.2.2.2", "3.3.3.3"])
     assert summary == {"entries": 3, "groups": 2, "created": 2,
                        "updated": 0, "unchanged": 0, "emptied": 0,
-                       "written": {"tfm-medium-1": "g100", "tfm-medium-2": "g101"}}
+                       "written": {"tfm-medium-1": "g100", "tfm-medium-2": "g101"},
+                       "filled": ["tfm-medium-1", "tfm-medium-2"]}
     names = {g["name"]: g["group_members"] for g in s.groups.values()}
     assert names == {"tfm-medium-1": ["198.51.100.1", "2.2.2.2"],
                      "tfm-medium-2": ["3.3.3.3"]}
@@ -650,6 +651,31 @@ def test_verify_policy_reference_passes_only_when_referenced_id_is_ours():
     # verification requested with nothing written -> refuses to assert success
     v = p.verify_policy_reference("pol-ip", {}, "ip")
     assert v["ok"] is False and "wrote no group ids" in v["error"]
+
+
+def test_every_filled_group_needs_an_enabled_policy():
+    """Medium shards into 4 groups and a policy references one. A policy on
+    group 1 alone used to pass while groups 2+ held entries nothing enforced;
+    padding groups (no entries) need no policy."""
+    p = _pusher(FakeSession(), ip_policy_id="pol-1")
+    written = {"tfm-medium-1": "g1", "tfm-medium-2": "g2", "tfm-medium-3": "g3",
+               "tfm-medium-4": "g4"}
+    filled = ["tfm-medium-1", "tfm-medium-2"]
+    one = [_policy("pol-1", "TFM 1", "ip_group_id", "g1")]
+
+    p.session = FakeSession(policies=one)
+    v = p.verify_policy_reference("pol-1", written, "ip", filled=filled)
+    assert v["ok"] is False and v["unenforced_groups"] == ["tfm-medium-2"]
+    assert "1 of 2 filled groups" in v["error"]
+
+    p.session = FakeSession(policies=one + [_policy("pol-2", "TFM 2", "ip_group_id", "g2",
+                                                    enabled=False)])
+    v = p.verify_policy_reference("pol-1", written, "ip", filled=filled)
+    assert v["ok"] is False                     # a disabled policy enforces nothing
+
+    p.session = FakeSession(policies=one + [_policy("pol-2", "TFM 2", "ip_group_id", "g2")])
+    v = p.verify_policy_reference("pol-1", written, "ip", filled=filled)
+    assert v["ok"] is True                      # groups 3-4 are empty padding
 
 
 def test_push_fails_when_ip_policy_references_a_foreign_group(tmp_path, monkeypatch):

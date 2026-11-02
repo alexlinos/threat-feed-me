@@ -317,7 +317,7 @@ class UniFiPusher:
 
     def verify_policy_reference(self, policy_id: str,
                                 written: Optional[Mapping[str, object]] = None,
-                                arm: str = "ip") -> Dict:
+                                arm: str = "ip", filled=None) -> Dict:
         """Read a policy back and assert its destination references one of
         the groups just written (issue #21 acceptance: the policy's
         referenced object id must equal a written object id — a successful
@@ -378,6 +378,21 @@ class UniFiPusher:
                 f"an object this pusher does not own (we write {ours}). The push is cosmetic: "
                 "repoint the policy at one of our groups in the gateway UI")
             return result
+        # A policy references ONE group, and Medium/Low shard into 4/10. Every
+        # group that received entries needs an enabled policy of its own (the
+        # named one counts even if disabled: that case is the warning above),
+        # or the overflow groups are written and enforce nothing.
+        enforced = {(p.get('destination') or {}).get(field) for p in policies
+                    if p.get('enabled') or p.get('_id') == policy_id}
+        unenforced = [n for n in (filled or []) if typed.get(n) not in enforced]
+        if unenforced:
+            result["unenforced_groups"] = unenforced
+            result["error"] = (
+                f"{len(unenforced)} of {len(filled)} filled groups have no enabled policy "
+                f"referencing them ({', '.join(unenforced)}): their entries are pushed but "
+                "nothing enforces them. Add a Block policy per group in the gateway UI, or "
+                "choose a tier that fits one group")
+            return result
         result["ok"] = True
         return result
 
@@ -420,7 +435,7 @@ class UniFiPusher:
             # apart from whitelist drops and from truncation. is_included also
             # rejects it, but checking here is what lets the push report how
             # many were refused and keep the values auditable.
-            if nb and nb.matches(ind.ip):
+            if nb and nb.matches(firewall_value(ind)):
                 refused_count += 1
                 if len(refused) < _WITHHELD_REPORT_CAP:
                     refused.append(firewall_value(ind))
@@ -567,7 +582,11 @@ class UniFiPusher:
 
         return {"entries": len(values), "groups": len(chunks), "created": created,
                 "updated": updated, "unchanged": unchanged, "emptied": emptied,
-                "written": written}
+                "written": written,
+                # groups that received entries: each must be enforced by some
+                # policy (verify_policy_reference), padding groups need not be
+                "filled": [f"{self.group_prefix}-{label}-{i}"
+                           for i, chunk in enumerate(chunks, 1) if chunk]}
 
 
 def cert_fingerprint(host_url: str, timeout: float = 20) -> str:
@@ -680,7 +699,8 @@ def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
     # fails explicitly — a cosmetic sync must never report success.
     if pusher.ip_policy_id:
         v = pusher.verify_policy_reference(pusher.ip_policy_id,
-                                           summary.get("written") or {}, "ip")
+                                           summary.get("written") or {}, "ip",
+                                           filled=summary.get("filled"))
         summary["policy_check"] = v
         if not v["ok"]:
             detail = f"UniFi IP policy check failed: {v['error']}"
@@ -711,7 +731,8 @@ def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
             # domain error (the IP push already succeeded and stands).
             if pusher.domain_policy_id:
                 v = pusher.verify_policy_reference(pusher.domain_policy_id,
-                                                   d.get("written") or {}, "domain")
+                                                   d.get("written") or {}, "domain",
+                                                   filled=d.get("filled"))
                 d["policy_check"] = v
                 if not v["ok"]:
                     raise RuntimeError(f"UniFi domain policy check failed: {v['error']}")

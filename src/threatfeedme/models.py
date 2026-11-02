@@ -158,12 +158,13 @@ class NeverBlockMatcher:
     emission gate — so no surface can accidentally skip it.
     """
 
-    __slots__ = ("exact", "cidr", "wildcards")
+    __slots__ = ("exact", "cidr", "wildcards", "addrs")
 
     def __init__(self, values=()):
         self.exact: Set[str] = set()
         self.cidr: List[Any] = []
         self.wildcards: List[str] = []
+        self.addrs: List[Any] = []          # exact IP entries, for range overlap
         for v in values:
             self.add(v)
 
@@ -179,10 +180,25 @@ class NeverBlockMatcher:
                 self.exact.add(value)          # junk stays an exact string
         else:
             self.exact.add(value)
+            try:
+                self.addrs.append(ipaddress.ip_address(value))
+            except ValueError:
+                pass                            # a domain
 
     def matches(self, value: str) -> bool:
+        """`value` is an IP, a domain, or a served RANGE (a feed's CIDR). A
+        range is refused when it overlaps any entry at all: serving
+        203.0.113.0/24 blocks the never-block 203.0.113.5 just as surely as
+        serving the address itself would."""
         if value in self.exact:
             return True
+        if "/" in value:
+            try:
+                net = ipaddress.ip_network(value, strict=False)
+            except ValueError:
+                return False
+            return (any(a.version == net.version and a in net for a in self.addrs)
+                    or any(c.version == net.version and c.overlaps(net) for c in self.cidr))
         try:
             addr = ipaddress.ip_address(value)
         except ValueError:

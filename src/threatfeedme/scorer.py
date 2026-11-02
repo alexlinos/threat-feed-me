@@ -742,13 +742,18 @@ class ConfidenceScorer:
         high_cfg = self.config.get('scoring', {}).get('high_confidence', {})
         high_require_intel = bool(high_cfg.get('require_threat_intel', False))
         intel_ok = (not high_require_intel) or self._has_intel_source(sources)
+        if kind == 'domain' and self._is_shared_platform(value):
+            # Shared infrastructure stays at Low however many feeds agree:
+            # curators name the payload HOST, and that host's addresses are
+            # everybody's. Even a customer name (pub-<hash>.r2.dev,
+            # x.github.io) resolves to the platform's shared edge, so a
+            # gateway that blocks by resolved IP takes the platform down;
+            # Medium is the tier firewalls are told to block. Low keeps them
+            # in the Everything list for DNS-layer filtering.
+            return ConfidenceTier.LOW
         if kind == 'domain':
             auth_feeds = self.authoritative_sources   # provenance-verified names
-            # Shared infrastructure never earns force-HIGH on one curator's
-            # word: the curator names the payload host, and that host is
-            # everybody's. The independent-witness gate below still applies.
-            shared = self._is_shared_platform(value)
-            if (intel_ok and not shared and auth_feeds and any(
+            if (intel_ok and auth_feeds and any(
                     s in auth_feeds
                     and self.feed_penalty.get(s, 1.0) >= FP_DEGRADED_FACTOR
                     for s in sources)):
