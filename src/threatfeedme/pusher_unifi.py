@@ -36,7 +36,7 @@ import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional, cast
 
 import requests
 
@@ -73,6 +73,16 @@ _VALID_TIERS = ("high", "medium", "low")
 # grows into them. Implied per-tier entry cap = count x max_per_group,
 # strongest-kept truncation beyond it.
 TIER_LIST_COUNTS = {"high": 1, "medium": 4, "low": 10}
+
+# Which destination field each arm's policy must reference to actually act
+# on the pushed groups (issue #21). The live domain policy targets
+# matching_target=WEB and reads destination.web_group_id — a DIFFERENT
+# reference than the IP arm's ip_group_id — and it can point at a look-alike
+# object the pusher never writes, so a sync can report success while the
+# policy enforces something else entirely. When the operator names the
+# policies (ip_policy_id / domain_policy_id), every push reads them back and
+# fails its status unless the referenced object is one we just wrote.
+POLICY_DEST_FIELDS = {"ip": "ip_group_id", "domain": "web_group_id"}
 
 # The withheld tail retained per selection for the push summary / coverage API.
 # Beyond this we still COUNT what was withheld (so the summary is honest), we
@@ -114,6 +124,7 @@ class UniFiPusher:
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
                  domain_tier: str = "",
+                 ip_policy_id: str = "", domain_policy_id: str = "",
                  timeout: int = 20, session=None, cert_sha256: str = None):
         host = (host or "").strip()
         # Strip any scheme, then drop anything after the first '/' — a path
@@ -151,6 +162,11 @@ class UniFiPusher:
         self.domain_tier = domain_tier if domain_tier in _VALID_TIERS else ""
         if domain_tier and domain_tier not in _VALID_TIERS:
             logger.warning("[unifi] unknown domain_tier %r; domain push off", domain_tier)
+        # Policy ids to verify after each arm's push (issue #21): the
+        # zone-based policy _id whose destination must reference the groups
+        # we wrote. Empty = no read-back check for that arm.
+        self.ip_policy_id = (ip_policy_id or "").strip()
+        self.domain_policy_id = (domain_policy_id or "").strip()
         self.group_prefix = group_prefix or "threatfeedme"
         self.max_entries = max(1, int(max_entries))
         self.max_per_group = max(1, int(max_per_group))
@@ -190,6 +206,8 @@ class UniFiPusher:
             max_entries=cfg.get('max_entries', DEFAULT_MAX_ENTRIES),
             max_per_group=cfg.get('max_per_group', DEFAULT_MAX_PER_GROUP),
             domain_tier=cfg.get('domain_tier', ''),
+            ip_policy_id=cfg.get('ip_policy_id', ''),
+            domain_policy_id=cfg.get('domain_policy_id', ''),
             cert_sha256=cfg.get('cert_sha256'),
         )
 
@@ -271,6 +289,91 @@ class UniFiPusher:
             return (r.json() or {}).get('data', [])
         except ValueError:
             return []
+
+    def _api_v2(self, method: str, path: str, **kwargs):
+        """Native Network API v2 (/v2/api/site/{site}/...): the response is
+        the object or list itself, no meta/data envelope (same mapping
+        aiounifi's ApiRequestV2 does — the surface the controller's own UI
+        and the documented Network API expose for zone-based policies)."""
+        r = self._request(method, f"{self.host}/proxy/network/v2/api/site/{self.site}{path}", **kwargs)
+        try:
+            return r.json()
+        except ValueError:
+            return None
+
+    def list_firewall_policies(self) -> List[Dict]:
+        """Zone-based firewall policies, read-only. This is the ONLY way to
+        see what the gateway actually consults: a policy targets
+        destination.ip_group_id (IP arm) or destination.web_group_id (WEB
+        arm), and neither is discoverable from the firewallgroup listing
+        alone (issue #21)."""
+        data = self._api_v2('GET', '/firewall-policies')
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):      # defensive: some builds keep the envelope
+            inner = data.get('data')
+            return inner if isinstance(inner, list) else []
+        return []
+
+    def verify_policy_reference(self, policy_id: str,
+                                written: Optional[Mapping[str, object]] = None,
+                                arm: str = "ip") -> Dict:
+        """Read a policy back and assert its destination references one of
+        the groups just written (issue #21 acceptance: the policy's
+        referenced object id must equal a written object id — a successful
+        sync response is NOT evidence the control is live).
+
+        `arm` is 'ip' (check destination.ip_group_id) or 'domain' (check
+        destination.web_group_id). Never raises: an unreachable policy or a
+        foreign reference comes back as ok=False with a human-readable
+        error, so the caller can fail the push status without losing the
+        sync summary."""
+        field = POLICY_DEST_FIELDS.get(arm)
+        typed = cast(Dict[str, Optional[str]], written or {})
+        written_ids = {v for v in typed.values() if v}
+        result = {"checked": True, "arm": arm, "policy_id": policy_id,
+                  "field": field, "written_group_ids": sorted(written_ids),
+                  "referenced_group_id": None, "policy_name": None,
+                  "policy_enabled": None, "ok": False, "error": None}
+        if not field:
+            result["error"] = f"unknown policy-check arm {arm!r}"
+            return result
+        if not written_ids:
+            result["error"] = ("policy check requested but this push wrote no group ids; "
+                               "cannot assert the policy points at our object")
+            return result
+        try:
+            policies = self.list_firewall_policies()
+        except Exception as e:
+            result["error"] = (f"policy check failed: could not read the gateway's firewall "
+                               f"policies to verify {policy_id} ({e})")
+            return result
+        policy = next((p for p in policies if p.get('_id') == policy_id), None)
+        if policy is None:
+            result["error"] = (f"firewall policy {policy_id} not found on the gateway; the "
+                               "pushed groups are not wired to anything — set the correct "
+                               "policy id or check the policy was not deleted")
+            return result
+        result["policy_name"] = policy.get('name')
+        result["policy_enabled"] = policy.get('enabled')
+        destination = policy.get('destination') or {}
+        referenced = destination.get(field)
+        result["referenced_group_id"] = referenced
+        ours = ", ".join(sorted(written_ids))
+        if not referenced:
+            result["error"] = (
+                f"policy '{policy.get('name')}' ({policy_id}) does not set destination.{field}; "
+                f"it cannot enforce the groups we pushed ({ours}). Reference one of them in the "
+                "gateway UI")
+            return result
+        if referenced not in written_ids:
+            result["error"] = (
+                f"policy '{policy.get('name')}' ({policy_id}) references {field}={referenced}, "
+                f"an object this pusher does not own (we write {ours}). The push is cosmetic: "
+                "repoint the policy at one of our groups in the gateway UI")
+            return result
+        result["ok"] = True
+        return result
 
 
     # ---------------- Collection & sync ----------------
@@ -407,23 +510,42 @@ class UniFiPusher:
 
         created = updated = unchanged = emptied = 0
         current = {f"{self.group_prefix}-{label}-{i}" for i in range(1, len(chunks) + 1)}
+        # name -> gateway object id for every group THIS push owns (issue #21:
+        # the policy read-back asserts against these ids, not group names).
+        written: Dict[str, Optional[str]] = {}
+        missing_ids: List[str] = []
         for idx, chunk in enumerate(chunks, 1):
             name = f"{self.group_prefix}-{label}-{idx}"
             existing = groups.get(name)
             if existing is None:
-                self._api('POST', '/rest/firewallgroup', json={
+                resp = self._api('POST', '/rest/firewallgroup', json={
                     "name": name,
                     "group_type": group_type,
                     "group_members": chunk,
                 })
                 created += 1
+                gid = None
+                if resp and isinstance(resp, list) and isinstance(resp[0], dict):
+                    gid = resp[0].get('_id')
+                written[name] = gid
+                if gid is None:
+                    missing_ids.append(name)
             elif list(existing.get('group_members') or []) != chunk:
                 body = dict(existing)
                 body['group_members'] = chunk
                 self._api('PUT', f"/rest/firewallgroup/{existing['_id']}", json=body)
                 updated += 1
+                written[name] = existing.get('_id')
             else:
                 unchanged += 1
+                written[name] = existing.get('_id')
+        if missing_ids:
+            # A POST that did not echo its created object: one cheap re-list
+            # so the policy read-back still has real ids to assert against.
+            for name, g in {g.get('name'): g
+                            for g in self._api('GET', '/rest/firewallgroup')}.items():
+                if name in missing_ids:
+                    written[name] = g.get('_id')
 
         marker = f"{self.group_prefix}-"
         for name, g in groups.items():
@@ -438,7 +560,8 @@ class UniFiPusher:
                 emptied += 1
 
         return {"entries": len(values), "groups": len(chunks), "created": created,
-                "updated": updated, "unchanged": unchanged, "emptied": emptied}
+                "updated": updated, "unchanged": unchanged, "emptied": emptied,
+                "written": written}
 
 
 def cert_fingerprint(host_url: str, timeout: float = 20) -> str:
@@ -545,6 +668,19 @@ def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
         record_push_outcome(db, error=str(e))
         raise
     _add_coverage(summary, sel)
+    # Policy read-back (issue #21): a 200 from the group API is NOT evidence
+    # the control is live. When the operator names the IP policy, its
+    # destination must reference a group this push wrote, or the push status
+    # fails explicitly — a cosmetic sync must never report success.
+    if pusher.ip_policy_id:
+        v = pusher.verify_policy_reference(pusher.ip_policy_id,
+                                           summary.get("written") or {}, "ip")
+        summary["policy_check"] = v
+        if not v["ok"]:
+            detail = f"UniFi IP policy check failed: {v['error']}"
+            logger.error("[unifi] %s", detail)
+            record_push_outcome(db, summary=summary, error=detail)
+            raise RuntimeError(detail)
     logger.info(
         "[unifi] pushed %d entries into %d group(s) [%s-%s-*]: "
         "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
@@ -563,6 +699,16 @@ def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
                             list_count=TIER_LIST_COUNTS[pusher.domain_tier])
             summary["domains"] = d
             _add_coverage(d, dsel)
+            # Same read-back for the domain arm (issue #21): the live policy
+            # reads destination.web_group_id, a different object than the
+            # domain-group we write. A mismatch is surfaced as an explicit
+            # domain error (the IP push already succeeded and stands).
+            if pusher.domain_policy_id:
+                v = pusher.verify_policy_reference(pusher.domain_policy_id,
+                                                   d.get("written") or {}, "domain")
+                d["policy_check"] = v
+                if not v["ok"]:
+                    raise RuntimeError(f"UniFi domain policy check failed: {v['error']}")
             logger.info(
                 "[unifi] domain push: %d domains into %d list(s) [%s-dom-%s-*]: "
                 "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
