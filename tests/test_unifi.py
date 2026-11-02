@@ -17,8 +17,9 @@ from threatfeedme.pusher_unifi import (UniFiPusher, push_ready, push_to_unifi,
 
 
 class FakeResponse:
-    def __init__(self, data=None, headers=None, status=200):
+    def __init__(self, data=None, headers=None, status=200, raw=None):
         self._data = data if data is not None else []
+        self._raw = raw              # v2-style: json() returns this verbatim
         self.headers = headers or {}
         self.status_code = status
 
@@ -27,15 +28,18 @@ class FakeResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
     def json(self):
+        if self._raw is not None:
+            return self._raw
         return {"meta": {"rc": "ok"}, "data": self._data}
 
 
 class FakeSession:
     """Session stub speaking just enough UniFi OS API."""
 
-    def __init__(self, groups=None):
+    def __init__(self, groups=None, policies=None):
         self.verify = True
         self.groups = {g["_id"]: dict(g) for g in (groups or [])}
+        self.policies = policies if policies is not None else []
         self.calls = []          # (method, url, json)
         self._next_id = 100
 
@@ -49,6 +53,9 @@ class FakeSession:
         if method in ("POST", "PUT"):
             # Mutations must carry the CSRF token from login.
             assert headers and headers.get("X-CSRF-Token"), "missing CSRF token"
+        if method == "GET" and url.endswith("/firewall-policies"):
+            # Native v2 surface: the list itself, no meta/data envelope.
+            return FakeResponse(raw=self.policies)
         if method == "GET" and url.endswith("/rest/firewallgroup"):
             return FakeResponse(list(self.groups.values()))
         if method == "POST" and url.endswith("/rest/firewallgroup"):
@@ -307,7 +314,8 @@ def test_sync_creates_chunked_groups():
     p.login()
     summary = p.sync(["198.51.100.1", "2.2.2.2", "3.3.3.3"])
     assert summary == {"entries": 3, "groups": 2, "created": 2,
-                       "updated": 0, "unchanged": 0, "emptied": 0}
+                       "updated": 0, "unchanged": 0, "emptied": 0,
+                       "written": {"tfm-medium-1": "g100", "tfm-medium-2": "g101"}}
     names = {g["name"]: g["group_members"] for g in s.groups.values()}
     assert names == {"tfm-medium-1": ["198.51.100.1", "2.2.2.2"],
                      "tfm-medium-2": ["3.3.3.3"]}
@@ -596,3 +604,145 @@ def test_site_id_is_validated(api_client, site, ok):
     # the site id is interpolated into authenticated gateway API paths
     r = api_client.post("/api/integrations/unifi", json={"site": site})
     assert (r.status_code == 200) is ok, r.text
+
+
+# ---------------- policy read-back (issue #21) ----------------
+
+def _policy(_id, name, field, gid, enabled=True):
+    """A zone-based policy as the v2 firewall-policies endpoint returns it."""
+    return {"_id": _id, "name": name, "enabled": enabled,
+            "matching_target": "WEB" if field == "web_group_id" else "CLOUD",
+            "destination": {field: gid}}
+
+
+def test_verify_policy_reference_passes_only_when_referenced_id_is_ours():
+    """Acceptance (#21): the policy's referenced object id must EQUAL a
+    written object id. Same id -> ok; a foreign look-alike object (the live
+    bug: policy reads a web group the pusher never writes) -> explicit
+    error, never a silent pass."""
+    p = _pusher(FakeSession(), ip_policy_id="pol-ip", domain_policy_id="pol-dom")
+    written = {"tfm-high-1": "g1"}
+
+    s = FakeSession(policies=[_policy("pol-ip", "TFM IP", "ip_group_id", "g1")])
+    p.session = s
+    v = p.verify_policy_reference("pol-ip", written, "ip")
+    assert v["ok"] is True and v["error"] is None
+    assert v["referenced_group_id"] == "g1" and v["policy_name"] == "TFM IP"
+
+    s = FakeSession(policies=[_policy("pol-dom", "TFM Dom", "web_group_id", "g-foreign")])
+    p.session = s
+    v = p.verify_policy_reference("pol-dom", {"tfm-dom-high-1": "g1"}, "domain")
+    assert v["ok"] is False
+    assert "cosmetic" in v["error"] and "g-foreign" in v["error"] and "g1" in v["error"]
+
+    # destination present but the arm's field unset -> explicit error
+    s = FakeSession(policies=[{"_id": "pol-ip", "name": "No dest", "enabled": True,
+                               "destination": {}}])
+    p.session = s
+    v = p.verify_policy_reference("pol-ip", written, "ip")
+    assert v["ok"] is False and "does not set destination.ip_group_id" in v["error"]
+
+    # policy id not on the gateway at all -> explicit error
+    p.session = FakeSession(policies=[])
+    v = p.verify_policy_reference("pol-ip", written, "ip")
+    assert v["ok"] is False and "not found on the gateway" in v["error"]
+
+    # verification requested with nothing written -> refuses to assert success
+    v = p.verify_policy_reference("pol-ip", {}, "ip")
+    assert v["ok"] is False and "wrote no group ids" in v["error"]
+
+
+def test_push_fails_when_ip_policy_references_a_foreign_group(tmp_path, monkeypatch):
+    """The regression (#21): the groups push fine, but the named policy
+    reads a foreign object -> the push STATUS becomes an explicit error,
+    the outcome records it, and the summary is kept for the panel."""
+    from threatfeedme.database import Database
+    from threatfeedme import pusher_unifi as pu
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("203.0.113.9", "f1", {})
+    db.set_indicator_score("203.0.113.9", 0.9, "high")
+    monkeypatch.setenv(ENV_USER, "svc")
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    session = FakeSession(policies=[_policy("pol-ip", "TFM IP", "ip_group_id", "g-foreign")])
+    monkeypatch.setattr(pu.UniFiPusher, "from_config",
+                        classmethod(lambda cls, config, db=None: _pusher(
+                            session, tier="high", ip_policy_id="pol-ip")))
+    outcomes = []
+    monkeypatch.setattr(pu, "record_push_outcome",
+                        lambda db, summary=None, error=None: outcomes.append((summary, error)))
+    with pytest.raises(RuntimeError, match="policy check failed"):
+        pu.push_to_unifi(db, {"integrations": {"unifi": {
+            "enabled": True, "host": "192.168.1.1"}}})
+    assert outcomes and outcomes[-1][1] and "cosmetic" in outcomes[-1][1]
+    # the sync summary survives inside the recorded outcome (panel forensics)
+    assert outcomes[-1][0]["entries"] == 1
+    assert outcomes[-1][0]["policy_check"]["referenced_group_id"] == "g-foreign"
+
+
+def test_push_succeeds_and_reports_check_when_policy_points_at_our_group(tmp_path, monkeypatch):
+    from threatfeedme.database import Database
+    from threatfeedme import pusher_unifi as pu
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("203.0.113.9", "f1", {})
+    db.set_indicator_score("203.0.113.9", 0.9, "high")
+    monkeypatch.setenv(ENV_USER, "svc")
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    session = FakeSession(
+        groups=[{"_id": "g7", "name": "tfm-high-1", "group_type": "address-group",
+                 "group_members": ["203.0.113.9"]}],
+        policies=[_policy("pol-ip", "TFM IP", "ip_group_id", "g7")])
+    monkeypatch.setattr(pu.UniFiPusher, "from_config",
+                        classmethod(lambda cls, config, db=None: _pusher(
+                            session, tier="high", ip_policy_id="pol-ip")))
+    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
+        "enabled": True, "host": "192.168.1.1"}}})
+    assert summary is not None
+    assert summary["policy_check"]["ok"] is True
+    assert summary["policy_check"]["referenced_group_id"] == "g7"
+    assert summary["policy_check"]["warning"] is None       # enabled policy: no warning
+    assert summary["written"]["tfm-high-1"] == "g7"         # referenced == written
+    # a correct reference in a DISABLED policy is ok but loudly warned: it
+    # still enforces nothing (both stage-1 reports flagged this).
+    session.policies = [_policy("pol-ip", "TFM IP", "ip_group_id", "g7", enabled=False)]
+    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
+        "enabled": True, "host": "192.168.1.1"}}})
+    assert summary is not None
+    assert summary["policy_check"]["ok"] is True
+    assert "disabled" in summary["policy_check"]["warning"]
+
+
+def test_domain_policy_mismatch_is_an_explicit_domain_error(tmp_path, monkeypatch):
+    """The exact #21 shape: domain groups write fine (1765-style), the live
+    policy reads a 2015-member web group we never write. The domain arm's
+    status must say so explicitly while the IP push stands."""
+    from threatfeedme.database import Database
+    from threatfeedme import pusher_unifi as pu
+    db = Database(str(tmp_path / "t.db"))
+    db.add_indicator("203.0.113.9", "f1", {})
+    db.add_indicator("evil.example.io", "f1", {}, kind="domain")
+    db.set_indicator_score("203.0.113.9", 0.9, "high")
+    db.set_indicator_score("evil.example.io", 0.9, "high")
+    monkeypatch.setenv(ENV_USER, "svc")
+    monkeypatch.setenv(ENV_PASSWORD, "pw")
+    session = FakeSession(policies=[_policy("pol-dom", "TFM Dom", "web_group_id", "g-web-2015")])
+    monkeypatch.setattr(pu.UniFiPusher, "from_config",
+                        classmethod(lambda cls, config, db=None: _pusher(
+                            session, tier="high", domain_tier="high",
+                            domain_policy_id="pol-dom")))
+    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
+        "enabled": True, "host": "192.168.1.1"}}})
+    assert summary is not None
+    assert summary["entries"] == 1                          # IP push stands
+    assert "domain_error" in summary and "policy check failed" in summary["domain_error"]
+    assert summary["domains"]["policy_check"]["referenced_group_id"] == "g-web-2015"
+
+
+def test_no_policy_ids_means_no_policy_readback_calls():
+    """Default off: operators who have not named policies pay no extra API
+    calls and get no policy_check key."""
+    s = FakeSession()
+    p = _pusher(s, max_per_group=5)
+    p.login()
+    summary = p.sync(["198.51.100.1"])
+    assert "written" in summary                             # ids always tracked
+    assert not [c for c in s.calls if "firewall-policies" in c[1]]
