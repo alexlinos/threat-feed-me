@@ -46,7 +46,7 @@ jobs:
             # be checked out as a worktree.
             git checkout --orphan infra-snapshots
             git rm -rf . >/dev/null 2>&1 || true
-            git commit -q -m "infra-watch: init snapshot branch"
+            git commit -q --allow-empty -m "infra-watch: init snapshot branch"
             git checkout -q main
           fi
           git worktree add .snaps infra-snapshots
