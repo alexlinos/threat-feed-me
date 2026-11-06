@@ -1,11 +1,18 @@
-# Infra list watch — 2026-11-06 01:41 UTC
+# Infra list watch — 2026-11-06 14:23 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
-| aws_ip_ranges | 7055 | 7055 | 0 | 100.0 | baseline seeded |
-| m365_endpoints | 306 | 306 | 0 | 100.0 | baseline seeded |
-| gcp_cloud | 1151 | 1151 | 0 | 100.0 | baseline seeded |
-| gcp_goog | 148 | 148 | 0 | 100.0 | baseline seeded |
-| azure_service_tags | 98685 | 98685 | 0 | 100.0 | baseline seeded |
-| cloudflare_ips | 22 | 22 | 0 | 100.0 | baseline seeded |
-| github_meta | 8472 | 8472 | 0 | 100.0 | baseline seeded |
+| aws_ip_ranges | 7055 | 0 | 0 | 0.0 | ok |
+| m365_endpoints | 306 | 0 | 0 | 0.0 | ok |
+| gcp_cloud | 1151 | 0 | 0 | 0.0 | ok |
+| gcp_goog | 148 | 0 | 0 | 0.0 | ok |
+| azure_service_tags | 98685 | 0 | 0 | 0.0 | ok |
+| cloudflare_ips | 22 | 0 | 0 | 0.0 | ok |
+| github_meta | 8497 | 25 | 0 | 0.3 | ok |
+
+## github_meta
+- added: `meta|packages|4.207.215.240/28`
+- added: `meta|web|135.235.149.144/28`
+- added: `meta|web|172.130.153.16/28`
+- added: `meta|web|172.130.201.80/28`
+- added: `meta|web|172.194.155.208/28`

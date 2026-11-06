@@ -1,68 +1,109 @@
 {
- "fetched_at": "2026-11-06 01:41 UTC",
+ "fetched_at": "2026-11-06 14:23 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
    "count": 7055,
-   "baseline": true,
-   "added": 7055,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": null,
+   "min_v6_prefix": 32,
+   "alert": false,
+   "alert_reasons": []
   },
   "m365_endpoints": {
    "status": "ok",
    "count": 306,
-   "baseline": true,
-   "added": 306,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 13,
+   "min_v6_prefix": 35,
+   "alert": false,
+   "alert_reasons": []
   },
   "gcp_cloud": {
    "status": "ok",
    "count": 1151,
-   "baseline": true,
-   "added": 1151,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 14,
+   "min_v6_prefix": 44,
+   "alert": false,
+   "alert_reasons": []
   },
   "gcp_goog": {
    "status": "ok",
    "count": 148,
-   "baseline": true,
-   "added": 148,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 10,
+   "min_v6_prefix": 29,
+   "alert": false,
+   "alert_reasons": []
   },
   "azure_service_tags": {
    "status": "ok",
    "count": 98685,
-   "baseline": true,
-   "added": 98685,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 11,
+   "min_v6_prefix": 36,
+   "alert": false,
+   "alert_reasons": []
   },
   "cloudflare_ips": {
    "status": "ok",
    "count": 22,
-   "baseline": true,
-   "added": 22,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 13,
+   "min_v6_prefix": 29,
+   "alert": false,
+   "alert_reasons": []
   },
   "github_meta": {
    "status": "ok",
-   "count": 8472,
-   "baseline": true,
-   "added": 8472,
+   "count": 8497,
+   "baseline": false,
+   "added": 25,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [
+    "meta|packages|4.207.215.240/28",
+    "meta|web|135.235.149.144/28",
+    "meta|web|172.130.153.16/28",
+    "meta|web|172.130.201.80/28",
+    "meta|web|172.194.155.208/28"
+   ],
+   "removed_sample": [],
+   "pct_change": 0.3,
+   "min_v4_prefix": 15,
+   "min_v6_prefix": 29,
+   "alert": false,
+   "alert_reasons": []
   }
  }
 }
