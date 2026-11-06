@@ -31,6 +31,22 @@ class NeverBlockRequest(BaseModel):
     added_by: str = Field("dashboard", max_length=64)
 
 
+class ApplicationListRequest(BaseModel):
+    """An application list (issue #26): a vendor allow-list served at
+    /lists/<name>.*. Bounded like every other stored free text; the fields
+    are validated by the router, stored verbatim, and only ever read back
+    through applications.py."""
+    name: str = Field(max_length=64)
+    url: str = Field(max_length=2048)
+    format: str = Field("list", max_length=8)
+    filter_expr: str = Field("", max_length=512)
+    enabled: bool = True
+    update_interval: int = 21600
+    min_v4_prefix: int = 8
+    min_v6_prefix: int = 20
+    change_threshold_pct: float = 50.0
+
+
 class FeedRequest(BaseModel):
     name: str = Field(max_length=64)
     # Bounded like the whitelist fields: a 900 KB URL was accepted and sat in

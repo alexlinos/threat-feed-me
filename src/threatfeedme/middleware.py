@@ -130,7 +130,7 @@ class BodyLimitMiddleware:
 ALLOWED_HOSTS_ENV = "TFM_ALLOWED_HOSTS"
 ALLOWED_HOSTS_SETTING = "allowed_hosts"
 ENFORCE_SETTING = "allowed_hosts_enforce"
-_EXEMPT_PREFIXES = ("/feeds/", "/taxii2/", "/static/")
+_EXEMPT_PREFIXES = ("/feeds/", "/lists/", "/taxii2/", "/static/")
 _EXEMPT_PATHS = frozenset({"/healthz", "/favicon.ico"})
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")

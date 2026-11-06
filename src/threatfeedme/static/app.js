@@ -1334,7 +1334,7 @@ async function recalcNow(btn) {
 // ---- Views (v2.5 shell) ----------------------------------------------------
 // One page, five views; the hash names the view. The inline script in
 // dashboard.html already picked the first one before paint.
-const VIEWS = ['guide', 'lists', 'feeds', 'integrations', 'system'];
+const VIEWS = ['guide', 'lists', 'applications', 'feeds', 'integrations', 'system'];
 function showView(v, focus) {
     const root = document.documentElement;
     if (!root.hasAttribute('data-view')) return;          // not the dashboard page
@@ -1344,6 +1344,7 @@ function showView(v, focus) {
     if (root.getAttribute('data-view') !== v) window.scrollTo(0, 0);
     root.setAttribute('data-view', v);
     if (v === 'integrations') { loadUnifiOnce(); loadCsOnce(); }
+    if (v === 'applications') { loadApplications(); }
     if (focus) {
         const h = document.querySelector('#view-' + v + ' h1');
         if (h) { h.setAttribute('tabindex', '-1'); h.focus({preventScroll: true}); }
@@ -1577,6 +1578,90 @@ async function addHostName(e, where) {
     return false;
 }
 document.addEventListener('DOMContentLoaded', loadHostCheck);
+
+// ---- Applications (issue #26): vendor allow-lists --------------------------
+// Rows are re-fetched on every visit to the view; there are a handful of
+// lists and the pending/approve state must never be stale when clicked.
+let appsLoaded = false;
+async function loadApplications() {
+    try {
+        const j = await (await apiFetch('/api/applications')).json();
+        renderApplications(j.applications || []);
+        appsLoaded = true;
+    } catch (e) { /* offline / auth: the view stays empty, message row says it */ }
+}
+function renderApplications(rows) {
+    const tb = document.querySelector('#apps-table tbody');
+    const callout = document.getElementById('apps-pending-callout');
+    if (!tb) return;
+    const held = rows.filter(r => r.pending);
+    if (callout) {
+        callout.hidden = held.length === 0;
+        callout.innerHTML = held.map(r =>
+            '<b>' + esc(r.name) + '</b> is holding a refresh that moved too much of ' +
+            'the list. Review and approve or discard it in the row below.').join('<br>');
+    }
+    tb.innerHTML = rows.map(r => {
+        const url = location.origin + '/lists/' + encodeURIComponent(r.name) + '.txt';
+        const statusCell = (r.pending ? '<span class="warn">held for approval</span>' : esc(r.last_status || 'never fetched')) +
+            (r.enabled ? '' : ' <span class="muted">(disabled)</span>');
+        const actions =
+            '<button onclick="appRefresh(\'' + esc(r.name) + '\')">Refresh now</button> ' +
+            (r.pending
+                ? '<button onclick="appPending(\'' + esc(r.name) + '\',\'approve\')">Approve</button> ' +
+                  '<button onclick="appPending(\'' + esc(r.name) + '\',\'reject\')">Discard</button> '
+                : '') +
+            '<button onclick="appDelete(\'' + esc(r.name) + '\')">Delete</button>';
+        return '<tr><td><a href="#applications/' + esc(r.name) + '">' + esc(r.name) + '</a></td>' +
+            '<td>' + (r.entry_count ? r.entry_count.toLocaleString() : '—') + '</td>' +
+            '<td>' + esc(r.last_refresh_at || '—') + '</td>' +
+            '<td>' + statusCell + '</td>' +
+            '<td><input class="url-box" type="text" readonly value="' + esc(url) + '" onclick="this.select()"></td>' +
+            '<td>' + actions + '</td></tr>';
+    }).join('');
+}
+async function appRefresh(name) {
+    const j = await (await apiFetch('/api/applications/' + encodeURIComponent(name) + '/refresh',
+                                    {method: 'POST'})).json();
+    appMsg(name + ': ' + (j.outcome || (j.success ? 'ok' : 'failed')) +
+           (j.error ? ' (' + j.error + ')' : ''));
+    loadApplications();
+}
+async function appPending(name, verdict) {
+    await apiFetch('/api/applications/' + encodeURIComponent(name) + '/pending/' + verdict,
+                   {method: 'POST'});
+    appMsg(name + ': held refresh ' + (verdict === 'approve' ? 'approved and serving' : 'discarded'));
+    loadApplications();
+}
+async function appDelete(name) {
+    if (!confirm('Delete application list ' + name + '? Its served URL will 404.')) return;
+    await apiFetch('/api/applications/' + encodeURIComponent(name), {method: 'DELETE'});
+    appMsg(name + ' deleted');
+    loadApplications();
+}
+function appMsg(t) {
+    const el = document.getElementById('apps-msg');
+    if (el) el.textContent = t;
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('apps-add-form');
+    if (!form) return;
+    form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const fd = new FormData(form);
+        const body = {
+            name: fd.get('name'), url: fd.get('url'), format: fd.get('format'),
+            filter_expr: fd.get('filter_expr') || '',
+            update_interval: parseInt(fd.get('update_interval'), 10) || 21600,
+        };
+        const res = await apiFetch('/api/applications',
+            {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const j = await res.json().catch(() => ({}));
+        appMsg(j.message || j.detail || ('save failed (' + res.status + ')'));
+        if (res.ok) { form.reset(); loadApplications(); }
+    });
+});
+
 
 // The top bar's "new feeds available" link: open Feeds and bring the first
 // row awaiting review into view (they sort to the top of their group).

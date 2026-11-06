@@ -29,6 +29,7 @@ published compose file). Nothing is written anywhere else.
 | Whitelist | Indicator, scope, the reason text you typed, an `added_by` label, timestamps and optional expiry | `whitelist` | Until expiry or manual removal |
 | Never-block list | IP addresses, CIDR ranges, domain names and wildcard domains you mark as *never to block*, with the reason text you typed and an `added_by` label. A standing operator instruction, not feed state: it excludes those values from every list, export and push at every tier, and never feeds a feed's reputation. It is distinct from a false-positive flag and from the whitelist, and never expires | `never_block` | Until you remove the entry |
 | False-positive flags | Indicator, feed name, reason code, timestamp | `feed_feedback` | Until cleared |
+| Application lists | Vendor allow-lists you add under Apps (issue #26): the list config (name, URL, JSON filter, refresh interval, prefix floors, change threshold), the currently served entries, the last 30 days of per-refresh +/- diffs, and any refresh the change guard is holding. Entries are the vendor's own published ranges, fetched from the URL you configured — third-party data about public infrastructure, never anything from your network | `application_lists`, `application_list_entries`, `application_list_history`, `application_list_pending` | Config and entries until you edit or delete the list; diffs pruned at 30 days (the newest 200 rows per list always kept); a held refresh until you approve or discard it |
 | Settings | Tier boundaries, refresh interval, retention, UniFi, CrowdSec and predictor toggles, the dashboard hostnames you saved whether the host check is switched on, the dashboard sign-in set on the System page (the username and a salted scrypt hash of the password, never the password itself), the SHA-256 fingerprint of your UniFi gateway's TLS certificate once a Test connection has pinned it, and the last UniFi/CrowdSec push outcome | `settings` | Until changed |
 | Hostnames seen | The hostnames (from the `Host` header) the dashboard has been reached by, with a count and first/last time, so the System view can offer them for the host check. No client IP address. Capped at 200 names | Memory only, never written to disk | Until the process restarts |
 | Feed polls | Per served feed URL and TAXII collection: when it was last fetched, how many times, and the fetching client's User-Agent (truncated), so the dashboard can show "polled 3m ago by FortiGate". No client IP address | `settings` (`feed_polls`) | Overwritten on every poll; one entry per URL |
@@ -51,6 +52,14 @@ gateway (see `pusher_unifi.py`).
 All outbound traffic is initiated by the feed ingestor, the daily release
 check and feed catalog poll, and, if you enable them, the UniFi and CrowdSec
 integrations. All are in `src/threatfeedme/`.
+
+**To the application-list vendors you add.** The Apps feature (issue #26)
+GETs each enabled list's URL on its own schedule with the User-Agent
+`threat-feed-me (application list fetch)` and, where supported, an
+`If-None-Match` conditional header. The same SSRF / private-address policy
+that guards feed URLs guards these: an operator-supplied URL cannot point
+the container at your internal network. The vendor sees your server's
+public IP address, the User-Agent and the request time.
 
 **To the threat feed providers you enable.** On every refresh the ingestor
 makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent
@@ -141,6 +150,7 @@ set `updates.enabled` and `catalog.enabled` to false to stop the attempts).
 | Endpoint | Authentication | Who can see what |
 |---|---|---|
 | `/feeds/*` | None, by design | Anyone who can reach the port can download your block lists. Firewalls polling a feed cannot present credentials, so the lists are treated as non-secret. |
+| `/lists/*` | None, by design | Vendor allow-lists (issue #26) at `/lists/<name>.txt`, `.csv` and `.json`, served the same way as `/feeds/*`: firewalls poll them without credentials, so they are treated as non-secret. They contain only entries you configured a vendor URL for. |
 | `/taxii2/*` | None, by design | The same block lists as `/feeds/*`, as STIX 2.1 Indicators over TAXII 2.1 (read-only), each with its confidence, tier and the names of the feeds that reported it. For SIEM and threat-intel platforms that subscribe rather than poll a text file. |
 | Startup holding page | None | Only while a first start or an upgrade migrates the database: every request to the dashboard port gets the same static "starting up" page with a 503. It reads nothing from the request and logs nothing. |
 | `/healthz` | None | Returns `{"ok": true}` and nothing else. |
