@@ -1,0 +1,92 @@
+# Daily watch of the upstream application-list sources (roadmap 2.6).
+#
+# Why: the 2.6 feature will serve vendor allow-lists (AWS, Microsoft 365,
+# Google Cloud, Azure, Cloudflare, GitHub). Before the fetchers ship we need
+# the real change cadence and file-shape stability of each vendor, and after
+# they ship the same watch is the early-warning for a poisoned vendor file.
+# Snapshots live on the orphan branch `infra-snapshots`, so change history
+# is `git log infra-snapshots` and the diff of any commit is the vendor's
+# diff. An alert issue opens only on suspicious movement: over the change
+# threshold, or a CIDR suddenly wider than the 2.6 prefix floor.
+name: Infra list watch
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily, off the hour
+  workflow_dispatch:        # manual re-run while iterating on sources
+
+permissions:
+  contents: write    # commit snapshots to the orphan branch
+  issues: write      # open the alert issue
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -c constraints.txt
+
+      - name: Attach snapshot branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code origin infra-snapshots >/dev/null 2>&1; then
+            git fetch origin infra-snapshots
+            git branch -f infra-snapshots FETCH_HEAD
+          else
+            # Bootstrap: orphan branch with one empty-tree commit so it can
+            # be checked out as a worktree.
+            git checkout --orphan infra-snapshots
+            git rm -rf . >/dev/null 2>&1 || true
+            git commit -q -m "infra-watch: init snapshot branch"
+            git checkout -q main
+          fi
+          git worktree add .snaps infra-snapshots
+
+      - name: Watch sources
+        id: watch
+        run: |
+          set -o pipefail
+          python scripts/infra_watch.py --snapshots .snaps/snapshots --update | tee watch.log
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Commit changed snapshots
+        run: |
+          cd .snaps
+          git add -A snapshots
+          if ! git diff --cached --quiet; then
+            git commit -m "infra-watch: $(date -u +%F) snapshot refresh"
+            git push origin HEAD:infra-snapshots
+          fi
+
+      - name: Report
+        if: always()
+        run: cat .snaps/snapshots/report.md 2>/dev/null || cat watch.log || true
+
+      - name: Open alert issue
+        # Only a real verdict of "suspicious" opens an issue; fetch failures
+        # show up as a red run instead. One open alert at a time: reuse the
+        # existing one rather than spamming during a multi-day vendor churn.
+        if: steps.watch.outputs.exit == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create infra-watch --color B60205 \
+            --description "Suspicious upstream change to an application-list source" --force
+          TITLE="Infra list watch: suspicious change ($(date -u +%F))"
+          EXISTING=$(gh issue list --label infra-watch --state open --json number -q '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file .snaps/snapshots/report.md
+          else
+            gh issue create --title "$TITLE" --label infra-watch \
+              --body-file .snaps/snapshots/report.md
+          fi

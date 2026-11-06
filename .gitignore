@@ -31,3 +31,6 @@ Thumbs.db
 
 # Hermes local scaffolding (plans, env) — never ship
 .hermes/
+
+# CI worktree for the infra-snapshots orphan branch
+.snaps/
