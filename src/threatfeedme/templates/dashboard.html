@@ -34,7 +34,7 @@
    app.js takes over from here. #}
 <script>
 (function () {
-    var views = ['guide', 'lists', 'feeds', 'integrations', 'system'];
+    var views = ['guide', 'lists', 'applications', 'feeds', 'integrations', 'system'];
     var h = (location.hash || '').replace('#', '').split('/')[0];
     var ret = null;
     try { ret = sessionStorage.getItem('tfm.return'); sessionStorage.removeItem('tfm.return'); } catch (e) {}
@@ -226,6 +226,47 @@
     <p class="hint lists-hint">IP lists go to your firewall's address or threat-feed setting, domain lists to your
         DNS filter. Lists are cumulative (Medium includes High), whitelisted entries are removed, and an IP list
         never contains a domain. Start with <b>Medium</b>. <a href="#integrations">Step-by-step for your firewall →</a></p>
+</section>
+
+{# ======================= APPLICATIONS (vendor allow-lists) ============= #}
+<section class="view" id="view-applications" aria-labelledby="apps-title">
+    <div class="view-head">
+        <h1 id="apps-title">Applications</h1>
+        <p class="hint">Vendor allow-lists (cloud and SaaS ranges) served at their own URLs,
+            separate from the threat lists: these entries are known-good by definition, so they
+            never enter scoring, telemetry or the predictor, and the known-good output filter
+            does not run on them. Instead every refresh passes prefix floors, a special-use
+            address check, and the change guard; a refresh that moves too much of a list is
+            held here for your approval instead of served silently.</p>
+    </div>
+
+    <div id="apps-pending-callout" hidden class="callout" role="status"></div>
+
+    <table class="feed-table" id="apps-table" aria-label="Application lists">
+        <thead><tr><th>List</th><th>Entries</th><th>Last refresh</th><th>Status</th><th>URL</th><th></th></tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <details class="feed-add" id="apps-add">
+        <summary>Add an application list</summary>
+        <form id="apps-add-form" class="row-form">
+            <label>Name <input name="name" required pattern="[a-z0-9][a-z0-9-]{0,62}[a-z0-9]"
+                               title="lowercase letters, digits and dashes" maxlength="64"></label>
+            <label>URL <input name="url" required type="url" maxlength="2048"
+                              placeholder="https://vendor.example/ip-ranges.txt"></label>
+            <label>Format
+                <select name="format"><option value="list">plain list</option><option value="json">JSON</option></select>
+            </label>
+            <label>Filter (JSON only) <input name="filter_expr" maxlength="512"
+                                             placeholder="$.prefixes[*].ipv4Prefix"></label>
+            <label>Every (s) <input name="update_interval" type="number" value="21600" min="300" max="604800"></label>
+            <button type="submit">Add list</button>
+        </form>
+        <p class="muted">Fetched URLs obey the same SSRF / private-address policy as feeds.
+            A JSON filter is a small expression, <code>$.a.b[*].c</code>; the dedicated
+            vendor fetchers (Microsoft 365, Azure) are a follow-up slice.</p>
+    </details>
+    <p id="apps-msg" class="hint" role="status" aria-live="polite"></p>
 </section>
 
 {# ======================= FEEDS (roster + telemetry) ======================= #}

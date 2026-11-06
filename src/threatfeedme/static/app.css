@@ -279,6 +279,7 @@ a:hover { color:#6ee7b7; }
 html[data-view="guide"] .rail-link[data-view="guide"],
 html[data-view="lists"] .rail-link[data-view="lists"],
 html[data-view="feeds"] .rail-link[data-view="feeds"],
+html[data-view="applications"] .rail-link[data-view="applications"],
 html[data-view="integrations"] .rail-link[data-view="integrations"],
 html[data-view="system"] .rail-link[data-view="system"] { background:var(--raised); color:var(--accent-hi); }
 .main { flex:1; min-width:0; display:flex; flex-direction:column; }
@@ -319,6 +320,7 @@ html[data-view="system"] .rail-link[data-view="system"] { background:var(--raise
 html[data-view] .view { display:none; }
 html[data-view="guide"] #view-guide, html[data-view="lists"] #view-lists,
 html[data-view="feeds"] #view-feeds, html[data-view="integrations"] #view-integrations,
+html[data-view="applications"] #view-applications,
 html[data-view="system"] #view-system { display:block; }
 .view-head { margin:0 0 20px; }
 .view-head h1 { margin:0 0 6px; font-size:24px; font-weight:800; letter-spacing:-.015em; }
