@@ -1,0 +1,68 @@
+{
+ "fetched_at": "2026-11-06 01:41 UTC",
+ "sources": {
+  "aws_ip_ranges": {
+   "status": "ok",
+   "count": 7055,
+   "baseline": true,
+   "added": 7055,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "m365_endpoints": {
+   "status": "ok",
+   "count": 306,
+   "baseline": true,
+   "added": 306,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "gcp_cloud": {
+   "status": "ok",
+   "count": 1151,
+   "baseline": true,
+   "added": 1151,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "gcp_goog": {
+   "status": "ok",
+   "count": 148,
+   "baseline": true,
+   "added": 148,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "azure_service_tags": {
+   "status": "ok",
+   "count": 98685,
+   "baseline": true,
+   "added": 98685,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "cloudflare_ips": {
+   "status": "ok",
+   "count": 22,
+   "baseline": true,
+   "added": 22,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "github_meta": {
+   "status": "ok",
+   "count": 8472,
+   "baseline": true,
+   "added": 8472,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  }
+ }
+}
