@@ -1732,7 +1732,7 @@ function ubRender(box) {
     html += '<div class="ub-row2">';
     if (mode === 'app') {
         html += '<div class="ub-field"><label for="ubw-' + id + '">Wildcards</label><select id="ubw-' + id + '" data-k="wildcards">' +
-            [['keep', 'Keep as *.example.com'], ['strip', 'Strip to example.com'], ['drop', 'Leave out']]
+            [['keep', 'Keep *.example.com entries'], ['drop', 'Leave them out']]
                 .map(([v, t]) => '<option value="' + v + '"' + (v === s.wildcards ? ' selected' : '') + '>' + t + '</option>').join('') +
             '</select></div>';
     }

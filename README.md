@@ -500,14 +500,17 @@ for a Sophos third-party feed.
 **Application list URLs.** `/lists/<name>.txt` (also `.csv`, `.json`) serves
 an application list exactly as stored, which can mix IPs, networks, domains,
 wildcards and URLs. These options shape one list for one kind of firewall
-object, combine freely, and apply before `?limit=N`:
+object, combine freely, and apply before `?limit=N`. They only choose which
+of the vendor's own entries are served: nothing is converted (no domain is
+ever resolved into IP ranges) or rewritten, because vendors move addresses
+behind their names and a derived list goes stale without anyone noticing.
 
 | Option | Values | Effect |
 |---|---|---|
 | `kind` | `ip`, `domain`, `url` | only that kind of entry (an IP-address feed fails its whole import on a hostname) |
 | `family` | `4`, `6` | drop IP entries of the other version; domains and URLs are untouched |
 | `hosts` | `1` | drop networks wider than one address; `/32` and `/128` entries are served bare |
-| `wildcards` | `keep`, `strip`, `drop` | what to do with `*.example.com` (default `keep`) |
+| `wildcards` | `keep`, `drop` | `drop` leaves `*.example.com` entries out (default `keep`) |
 
 For example `/lists/github-hooks.txt?kind=ip&family=4&hosts=1`. Unlike the
 threat-list URLs, an unknown option here is a `400`, so a misspelt option can

@@ -409,12 +409,23 @@ MIXED = ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32", "2001:db8::/48",
     ({"kind": "ip", "family": 6}, ["2001:db8::/48", "2001:db8::1"]),
     # Sophos: v4 single addresses, bare (a /32 is served as its address).
     ({"kind": "ip", "family": 4, "hosts": True}, ["198.51.100.7", "203.0.113.9"]),
-    # strip folds *.a.example.net onto the a.example.net already listed.
-    ({"kind": "domain", "wildcards": "strip"}, ["a.example.net", "cdn.example.net"]),
     ({"kind": "domain", "wildcards": "drop"}, ["a.example.net"]),
 ])
 def test_select_entries_options(opts, expected):
     assert applications.select_entries(MIXED, **opts) == expected
+
+
+def test_options_only_select_never_rewrite_vendor_entries():
+    # Maintainer's rule: serve strictly what the vendor publishes. Every
+    # option is a subset of the stored entries (hosts=1 only drops the /32
+    # prefix length from the same address); no domain becomes an address and
+    # no wildcard is widened or narrowed.
+    combos = [{"kind": k, "family": f, "wildcards": w}
+              for k in (None, "ip", "domain", "url") for f in (None, 4, 6)
+              for w in ("keep", "drop")]
+    for opts in combos:
+        assert set(applications.select_entries(MIXED, **opts)) <= set(MIXED), opts
+    assert "cdn.example.net" not in applications.select_entries(MIXED, kind="domain")
 
 
 def test_select_entries_family_leaves_domains_alone():

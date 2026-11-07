@@ -165,20 +165,28 @@ def select_entries(entries: List[str], kind: Optional[str] = None,
                    family: Optional[int] = None, hosts: bool = False,
                    wildcards: str = "keep") -> List[str]:
     """The /lists/ URL options, so one stored list can feed every kind of
-    firewall object. Each option only removes or rewrites; they combine
-    freely and are applied before ?limit.
+    firewall object. Each option only selects which of the vendor's own
+    entries are served; they combine freely and are applied before ?limit.
+
+    Nothing here turns one kind of entry into another or rewrites what a
+    vendor published: no resolving domains to addresses, no widening or
+    narrowing a wildcard. Vendors move addresses behind their names (Microsoft
+    has, several times), and a derived list goes stale silently; the
+    maintainer's rule is to serve strictly what the vendor publishes.
 
       kind      ip | domain | url: only that kind of entry (a FortiGate IP
                 feed fails its whole import on one hostname line);
       family    4 | 6: drop IP entries of the other version (domains and
                 URLs are untouched; add kind=ip for a pure address list);
       hosts     drop networks wider than one address and serve /32 and /128
-                entries as bare addresses (Sophos takes no CIDR at all);
-      wildcards keep | strip | drop: what to do with *.example.com (some DNS
-                consumers match subdomains implicitly and reject the *.).
+                entries as bare addresses, the same address written without
+                its prefix (Sophos takes no CIDR at all);
+      wildcards keep | drop: leave *.example.com entries out for consumers
+                that reject them. Never stripped to example.com: on an
+                exact-match firewall that silently narrows what the vendor
+                listed.
     """
     out: List[str] = []
-    seen: set = set()
     for e in entries:
         k = entry_kind(e)
         if kind and k != kind:
@@ -191,14 +199,9 @@ def select_entries(entries: List[str], kind: Optional[str] = None,
                 if net.num_addresses > 1:
                     continue
                 e = str(net.network_address)
-        elif k == "domain" and e.startswith("*."):
-            if wildcards == "drop":
-                continue
-            if wildcards == "strip":
-                e = e[2:]
-        if e not in seen:            # strip can fold *.a.com onto a.com
-            seen.add(e)
-            out.append(e)
+        elif k == "domain" and e.startswith("*.") and wildcards == "drop":
+            continue
+        out.append(e)
     return out
 
 
