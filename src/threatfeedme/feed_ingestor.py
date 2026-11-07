@@ -116,13 +116,19 @@ def _host_addresses(host: str) -> List[str]:
     return [info[4][0] for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
 
 
+class UnsafeURLError(RuntimeError):
+    """An SSRF refusal. A RuntimeError subclass so existing handlers keep
+    working, but distinct, so a caller that treats RuntimeError as a bug
+    (applications.refresh_list) can still record a refusal as status."""
+
+
 def _assert_public(host: str, addresses: List[str]) -> None:
     """The SSRF rule, shared by the early URL check and the connect-time
     guard so the two can never disagree."""
     for addr in addresses:
         ip = ipaddress.ip_address(addr.split('%', 1)[0])
         if not ip.is_global:
-            raise RuntimeError(
+            raise UnsafeURLError(
                 f"feed URL host '{host}' resolves to non-public address {ip}; "
                 "refusing to fetch (set safety.allow_private_feed_urls: true "
                 "to permit internal feed URLs)"
@@ -147,7 +153,7 @@ def _require_public_url(url: str) -> None:
     connect-time guard below closes that gap."""
     host = urlsplit(url).hostname
     if not host:
-        raise RuntimeError(f"feed URL has no host: {url!r}")
+        raise UnsafeURLError(f"feed URL has no host: {url!r}")
     try:
         addresses = _host_addresses(host)
     except socket.gaierror as e:

@@ -247,7 +247,9 @@ def _scheduler_loop():
         # lists. A vendor error is per-list status, never a dead tick.
         try:
             from threatfeedme import applications as _apps
-            _apps.refresh_due(core.db)
+            safety_cfg = core.config.get('safety', {}) or {}
+            _apps.refresh_due(core.db, allow_private=bool(
+                safety_cfg.get('allow_private_feed_urls', False)))
         except Exception as e:
             logger.error(f"Scheduler application-list pass failed: {e}")
 

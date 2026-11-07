@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from threatfeedme import applications, auth, core
+from threatfeedme import applications, auth, core, feed_ingestor
 from threatfeedme.database import Database
 
 
@@ -46,16 +46,26 @@ class FakeResp:
         self.content = body if isinstance(body, bytes) else body.encode()
         self.headers = {"ETag": etag} if etag else {}
         self.status_code = status
+        self.closed = False
 
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
 
+    def iter_content(self, chunk_size=1):
+        for i in range(0, len(self.content), chunk_size):
+            yield self.content[i:i + chunk_size]
+
+    def close(self):
+        self.closed = True
+
 
 def fake_get_factory(body=None, etag="v1", status=200):
     calls = []
-    def get(url, headers=None, timeout=None):
+    def get(url, headers=None, timeout=None, **kwargs):
         calls.append((url, headers))
+        get.kwargs = kwargs
+        get.guard_armed = getattr(feed_ingestor._ssrf_guard, "active", False)
         return FakeResp(body, etag=etag, status=status)
     get.calls = calls
     return get
@@ -84,6 +94,9 @@ def rtr(db, monkeypatch):
     # test_never_block).
     monkeypatch.setitem(core.__dict__, "db", db)
     from threatfeedme.routers import applications as r
+    # Seam, not core.config: reading core.config lazily initializes core
+    # (CLAUDE.md test-isolation traps).
+    monkeypatch.setitem(r.__dict__, "_allow_private", lambda: False)
     return r
 
 
@@ -110,6 +123,12 @@ def test_gate_accepts_policy_shapes(entry):
     ("169.254.1.1", "link-local"),
     ("224.0.0.5", "multicast"),
     ("2001:db8::/8", "v6 floor"),
+    # Supernets straddling special-use space: is_private on a network needs
+    # both ends private, so 2.7.0 accepted all four (overlap is the rule).
+    ("172.0.0.0/8", "holds RFC1918 172.16/12"),
+    ("192.0.0.0/8", "holds RFC1918 192.168/16"),
+    ("100.0.0.0/8", "holds CGNAT 100.64/10"),
+    ("2001::/20", "holds IETF 2001::/23"),
 ])
 def test_gate_rejects_dangerous(entry, why):
     ok, _ = applications.guard_entry(entry)
@@ -123,9 +142,11 @@ def test_gate_rejects_control_chars_and_oversize():
 
 
 def test_gate_honours_per_list_floors():
-    ok, _ = applications.guard_entry("198.18.0.0/8")   # /8 == floor: allowed
-    assert ok
-    ok, _ = applications.guard_entry("198.18.0.0/7", v4_floor=8)
+    # A public /8 that touches no special-use space (a real vendor block;
+    # there is no documentation range this wide).
+    ok, reason = applications.guard_entry("3.0.0.0/8")   # /8 == floor: allowed
+    assert ok, reason
+    ok, _ = applications.guard_entry("2.0.0.0/7", v4_floor=8)
     assert not ok
 
 
@@ -222,7 +243,7 @@ def test_refresh_etag_304_is_not_modified(db):
 def test_refresh_bug_propagates_not_swallowed(db):
     # Only vendor-shaped failures become per-list status; a programming bug
     # (RuntimeError) must raise so it is loud, not recorded as "error".
-    def boom(url, headers=None, timeout=None):
+    def boom(url, headers=None, timeout=None, **kwargs):
         raise RuntimeError("bug")
     with pytest.raises(RuntimeError):
         applications.refresh_list(db, "acme", get=boom)
@@ -230,11 +251,52 @@ def test_refresh_bug_propagates_not_swallowed(db):
 
 def test_refresh_network_error_records_status(db):
     import requests
-    def boom(url, headers=None, timeout=None):
+    def boom(url, headers=None, timeout=None, **kwargs):
         raise requests.ConnectionError("down")
     s = applications.refresh_list(db, "acme", get=boom)
     assert s["outcome"] == "error" and "down" in s["error"]
     assert db.get_application_list("acme")["last_status"].startswith("error:")
+
+
+# ------------------------------------------------------------ fetch safety --
+# 2.7.0 shipped list fetches with no SSRF guard: the connect-time guard is
+# thread-local and only FeedIngestor armed it, so a list URL could read
+# cloud metadata or any LAN host and echo it back via rejected-entry notes.
+
+def test_fetch_arms_ssrf_guard_and_drops_env_proxies(db):
+    get = fake_get_factory("198.51.100.1\n")
+    s = applications.refresh_list(db, "acme", get=get)
+    assert s["outcome"] == "ok"
+    assert get.guard_armed, "connect-time guard was not armed for the fetch"
+    assert get.kwargs["proxies"] == feed_ingestor._NO_PROXIES
+    assert get.kwargs["stream"] is True
+    assert not getattr(feed_ingestor._ssrf_guard, "active", False)   # restored
+
+
+def test_refresh_refuses_private_url_before_any_request(db, monkeypatch):
+    monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda h: ["169.254.169.254"])
+    get = fake_get_factory("secret\n")
+    s = applications.refresh_list(db, "acme", get=get)
+    assert s["outcome"] == "error" and "non-public" in s["error"]
+    assert get.calls == []                       # nothing was requested
+    assert not getattr(feed_ingestor._ssrf_guard, "active", False)
+
+
+def test_refresh_allow_private_leaves_guard_off(db, monkeypatch):
+    # safety.allow_private_feed_urls: true governs list URLs like feed URLs.
+    monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda h: ["10.0.0.5"])
+    get = fake_get_factory("198.51.100.1\n")
+    s = applications.refresh_list(db, "acme", get=get, allow_private=True)
+    assert s["outcome"] == "ok" and not get.guard_armed
+    assert get.kwargs["proxies"] is None
+
+
+def test_refresh_size_cap_is_enforced_while_streaming(db, monkeypatch):
+    monkeypatch.setattr(applications, "MAX_BODY_BYTES", 64)
+    get = fake_get_factory("198.51.100.1\n" * 20)        # 260 bytes
+    s = applications.refresh_list(db, "acme", get=get)
+    assert s["outcome"] == "error" and "size cap" in s["error"]
+    assert db.get_entries("acme") == []
 
 
 def test_prune_keeps_recent_rows(db):
@@ -328,6 +390,17 @@ def test_api_crud_validation(rtr, db):
     with pytest.raises(HTTPException) as e:
         rtr.delete_application("bb", _=None, _csrf=None)
     assert e.value.status_code == 404
+
+
+def test_api_add_refuses_internal_url(rtr, db, monkeypatch):
+    from fastapi import HTTPException
+    from threatfeedme.schemas import ApplicationListRequest
+    monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda h: ["169.254.169.254"])
+    with pytest.raises(HTTPException) as e:
+        rtr.add_application(ApplicationListRequest(
+            name="meta", url="http://metadata.example/latest/"), _=None, _csrf=None)
+    assert e.value.status_code == 400 and "non-public" in e.value.detail
+    assert db.get_application_list("meta") is None
 
 
 def test_csrf_enforced_over_http(db, monkeypatch):  # setitem, see rtr

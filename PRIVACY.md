@@ -58,8 +58,11 @@ GETs each enabled list's URL on its own schedule with the User-Agent
 `threat-feed-me (application list fetch)` and, where supported, an
 `If-None-Match` conditional header. The same SSRF / private-address policy
 that guards feed URLs guards these: an operator-supplied URL cannot point
-the container at your internal network. The vendor sees your server's
-public IP address, the User-Agent and the request time.
+the container at your internal network, and while the guard is on the
+proxy environment variables are ignored for these requests too (see feed
+requests below). 2.7.0 did not enforce this for application lists; 2.7.1
+does. The vendor sees your server's public IP address, the User-Agent and
+the request time.
 
 **To the threat feed providers you enable.** On every refresh the ingestor
 makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent

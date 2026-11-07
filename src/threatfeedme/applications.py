@@ -18,9 +18,10 @@ known-good infrastructure). What runs instead, at every emission:
   * the change guard: a refresh that moves more than a threshold share of
     a list is held for operator approval, never served silently.
 
-Fetches go through the same urllib3 connection guard the feed ingestor
-installs (SSRF, private-address policy), because these URLs are
-operator-supplied and must obey the same rule as any feed URL.
+Fetches arm the same connect-time SSRF guard the feed ingestor uses
+(private-address policy, safety.allow_private_feed_urls), because these
+URLs are operator-supplied and must obey the same rule as any feed URL.
+See fetch(): the guard is thread-local and does nothing unless armed.
 """
 from __future__ import annotations
 
@@ -35,6 +36,9 @@ from urllib.parse import urlparse
 import requests
 
 from threatfeedme.domains import is_valid_domain
+from threatfeedme.feed_ingestor import (_NO_PROXIES, UnsafeURLError,
+                                        _require_public_url, _ssrf_guard)
+from threatfeedme.safety import _SPECIAL_V4, _SPECIAL_V6
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +90,15 @@ def _net_ok(net: ipaddress.IPv4Network | ipaddress.IPv6Network,
     if any(net.subnet_of(d) for d in _DOCUMENTATION_NETS
            if d.version == net.version):
         return True, ""
-    # is_private covers bogons, RFC1918, loopback and CGNAT across the
-    # ipaddress versions; reserved/link-local/multicast cover the rest of
-    # special-use space. An allow-list entry in any of it is a bug or a
-    # poison attempt — an allow for your own network is firewall config,
-    # not something a served list should carry.
+    # An allow-list entry in special-use space is a bug or a poison attempt:
+    # an allow for your own network is firewall config, not something a
+    # served list should carry. Overlap, not containment, is the rule, as
+    # in safety.py: is_private on a NETWORK needs both ends private, so a
+    # supernet straddling it (172.0.0.0/8 holds 172.16.0.0/12) passed the
+    # is_* tests alone in 2.7.0. Those stay for the rest of reserved space.
+    for special in (_SPECIAL_V4 if net.version == 4 else _SPECIAL_V6):
+        if net.overlaps(special):
+            return False, f"special-use address space (overlaps {special})"
     if (net.is_private or net.is_loopback or net.is_link_local
             or net.is_multicast or net.is_reserved or net.is_unspecified):
         return False, "special-use address space"
@@ -224,25 +232,45 @@ def parse_body(body: str, fmt: str, filter_expr: str) -> List[str]:
 
 
 def fetch(url: str, etag: Optional[str] = None,
-          get: Callable = requests.get) -> Tuple[Optional[str], Optional[str]]:
+          get: Callable = requests.get,
+          allow_private: bool = False) -> Tuple[Optional[str], Optional[str]]:
     """Conditional GET. Returns (body, new_etag), or (None, etag) on 304.
 
-    No scheme allowlist dance here: the process-wide urllib3 guard that
-    feed_ingestor installs enforces the SSRF / private-address policy the
-    moment the request connects, so this fetch cannot reach an internal
-    host any more than the feed ingestor can.
+    SSRF policy, same as a feed fetch (safety.allow_private_feed_urls): an
+    early public-URL check for a clear error, then feed_ingestor's
+    connect-time guard armed for this thread, which is the enforcing check
+    and covers every redirect hop. The guard is thread-local and only
+    FeedIngestor arms it, so a fetch that does not arm it itself is not
+    guarded at all: 2.7.0 shipped exactly that, and a list URL could read
+    cloud metadata or any LAN host. Env proxies are off while guarded (the
+    guard would otherwise pin the proxy's address), and the body is read
+    under a running byte cap instead of buffered whole first.
     """
     headers = {"User-Agent": USER_AGENT}
     if etag:
         headers["If-None-Match"] = etag
-    resp = get(url, headers=headers, timeout=60)
-    resp.raise_for_status()
-    if resp.status_code == 304:
-        return None, etag
-    raw = resp.content
-    if len(raw) > MAX_BODY_BYTES:
-        raise ValueError("response over size cap")
-    return raw.decode("utf-8", errors="replace"), resp.headers.get("ETag")
+    if not allow_private:
+        _require_public_url(url)
+    guard_was = getattr(_ssrf_guard, "active", False)
+    _ssrf_guard.active = not allow_private
+    try:
+        resp = get(url, headers=headers, timeout=60, stream=True,
+                   proxies=None if allow_private else _NO_PROXIES)
+        try:
+            resp.raise_for_status()
+            if resp.status_code == 304:
+                return None, etag
+            chunks, total = [], 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                total += len(chunk)
+                if total > MAX_BODY_BYTES:
+                    raise ValueError("response over size cap")
+                chunks.append(chunk)
+        finally:
+            resp.close()
+    finally:
+        _ssrf_guard.active = guard_was
+    return b"".join(chunks).decode("utf-8", errors="replace"), resp.headers.get("ETag")
 
 
 # --------------------------------------------------------------------------
@@ -271,7 +299,8 @@ def _stamp_epoch(stamp: str) -> float:
     return dt.timestamp()
 
 
-def refresh_list(db, name: str, get: Callable = requests.get) -> Dict[str, Any]:
+def refresh_list(db, name: str, get: Callable = requests.get,
+                 allow_private: bool = False) -> Dict[str, Any]:
     """One list, one poll. Never raises for a vendor error: the per-list
     status is what the dashboard shows, and one dead vendor must not stop
     the scheduler pass. `get` is injectable for tests (repo rule: offline).
@@ -281,7 +310,8 @@ def refresh_list(db, name: str, get: Callable = requests.get) -> Dict[str, Any]:
         raise ValueError(f"unknown list '{name}'")
     summary: Dict[str, Any] = {"name": name, "outcome": "ok"}
     try:
-        body, new_etag = fetch(row["source_url"], row.get("http_etag"), get=get)
+        body, new_etag = fetch(row["source_url"], row.get("http_etag"), get=get,
+                               allow_private=allow_private)
         if body is None:
             db.set_application_list_state(name, status="not-modified")
             summary["outcome"] = "not-modified"
@@ -315,14 +345,18 @@ def refresh_list(db, name: str, get: Callable = requests.get) -> Dict[str, Any]:
             summary["status_note"] = f"{len(rejected)} rejected ({sample})"
             db.set_application_list_state(name, status=f"ok ({len(rejected)} rejected)")
         return summary
-    except (requests.RequestException, ValueError, KeyError, TypeError, OSError) as exc:
+    # An SSRF refusal (early check or the connect-time guard) is a per-list
+    # status like any other vendor error, not a 500. Other RuntimeErrors are
+    # bugs and stay loud.
+    except (requests.RequestException, ValueError, KeyError, TypeError, OSError,
+            UnsafeURLError) as exc:
         logger.warning("[applications] refresh of %s failed: %s", name, exc)
         db.set_application_list_state(name, status=f"error: {str(exc)[:200]}")
         summary.update(outcome="error", error=str(exc)[:300])
         return summary
 
 
-def refresh_due(db) -> List[Dict[str, Any]]:
+def refresh_due(db, allow_private: bool = False) -> List[Dict[str, Any]]:
     """Scheduler pass: refresh every enabled list whose interval elapsed.
     Sequential by design — these are a handful of vendor URLs and the ETag
     path costs one request each; a pool would just add a way to hammer a
@@ -338,7 +372,7 @@ def refresh_due(db) -> List[Dict[str, Any]]:
             except ValueError:
                 pass  # unparseable stamp: treat as due
         try:
-            summaries.append(refresh_list(db, row["name"]))
+            summaries.append(refresh_list(db, row["name"], allow_private=allow_private))
         except Exception as exc:  # a broken row must not end the pass
             logger.warning("[applications] %s: %s", row["name"], exc)
     db.prune_application_history(HISTORY_RETENTION_DAYS, HISTORY_KEEP_ROWS)
