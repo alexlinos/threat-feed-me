@@ -69,15 +69,25 @@ def _dt_iso(raw):
         return raw
 
 
+def _family(value: str) -> int:
+    """IP version of a served IP value (address or netblock): 6 if it has a
+    colon. Only called on kind='ip' rows, which are validated addresses."""
+    return 6 if ":" in value else 4
+
+
 def iter_rows(db, name: str, kind: str, limit: Optional[int] = None,
-              hosts_only: bool = False) -> Iterator[tuple]:
+              hosts_only: bool = False, family: Optional[int] = None) -> Iterator[tuple]:
     """Whitelist-filtered served rows for one feed URL, score order, <= limit.
 
     hosts_only (?hosts=1) leaves out every network entry: Sophos Firewall's
     third-party feeds take "one indicator per line" and reject ranges and
     networks outright, and a CIDR is never expanded (a Spamhaus DROP /16
     would be 65k lines). The row's own value is unchanged, so an entry with
-    a netblock is omitted, not shown as its anchor address."""
+    a netblock is omitted, not shown as its anchor address.
+
+    family (?family=4|6) leaves out the other IP version, for consumers that
+    take one family per list: Sophos third-party feeds reject IPv6 as well
+    as networks, pfBlockerNG keeps v4 and v6 lists apart. No-op on domains."""
     tiers, scope = _FEEDS[name]
     wl_map = db.get_whitelist_map()
     served = 0
@@ -85,6 +95,8 @@ def iter_rows(db, name: str, kind: str, limit: Optional[int] = None,
         if limit is not None and served >= limit:
             return
         if hosts_only and row[1]:
+            continue
+        if family and kind == "ip" and _family(_value(row)) != family:
             continue
         if row_included(row[0], row[2], wl_map, tier=scope, cidr=row[1]):
             served += 1
@@ -114,36 +126,49 @@ def _lock_for(key) -> threading.Lock:
         return _locks.setdefault(key, threading.Lock())
 
 
-def _build_txt(db, name: str, kind: str, version: str, hosts_only: bool = False) -> _TxtEntry:
+def _build_txt(db, name: str, kind: str, version: str, hosts_only: bool = False,
+               family: Optional[int] = None) -> _TxtEntry:
     buf = io.BytesIO()
     offsets = array("Q", [0])        # offsets[i] = byte offset after i lines
-    for row in iter_rows(db, name, kind, hosts_only=hosts_only):
+    for row in iter_rows(db, name, kind, hosts_only=hosts_only, family=family):
         buf.write(_value(row).encode() + b"\n")
         offsets.append(buf.tell())
     # stable across restarts (hash() is salted per process)
-    variant = ":hosts" if hosts_only else ""
+    variant = (":hosts" if hosts_only else "") + (f":v{family}" if family else "")
     digest = hashlib.sha1(f"{kind}:{name}:{version}{variant}".encode()).hexdigest()[:16]
     etag = f'"{digest}"'
     return _TxtEntry(version, buf.getvalue(), offsets, etag)
 
 
-def txt(db, name: str, kind: str, limit: Optional[int] = None,
-        hosts_only: bool = False) -> Tuple[bytes, str]:
-    """The .txt body (optionally the top `limit` lines) and its ETag.
-    Single-flight per URL: concurrent polls wait for one build, never
-    run their own. The hosts-only variant is its own cached body."""
-    key = (kind, name, hosts_only)
+def txt_with_count(db, name: str, kind: str, limit: Optional[int] = None,
+                   hosts_only: bool = False,
+                   family: Optional[int] = None) -> Tuple[bytes, str, int]:
+    """The .txt body (optionally the top `limit` lines), its ETag, and how
+    many entries the URL serves before `limit` (the X-Entry-Count header:
+    ?limit=1 reads a list's size without downloading it). Single-flight per
+    URL: concurrent polls wait for one build, never run their own. Each
+    hosts/family variant is its own cached body."""
+    if kind != "ip":
+        family = None                # one cached body for every domain URL
+    key = (kind, name, hosts_only, family)
     version = db.serve_fingerprint()
     entry = _txt.get(key)
     if entry is None or entry.version != version:
         with _lock_for(key):
             entry = _txt.get(key)
             if entry is None or entry.version != version:
-                entry = _build_txt(db, name, kind, version, hosts_only)
+                entry = _build_txt(db, name, kind, version, hosts_only, family)
                 _txt[key] = entry
-    if limit is None or limit >= len(entry.offsets) - 1:
-        return entry.body, entry.etag
-    return entry.body[:entry.offsets[limit]], entry.etag[:-1] + f"-top{limit}\""
+    total = len(entry.offsets) - 1
+    if limit is None or limit >= total:
+        return entry.body, entry.etag, total
+    return entry.body[:entry.offsets[limit]], entry.etag[:-1] + f"-top{limit}\"", total
+
+
+def txt(db, name: str, kind: str, limit: Optional[int] = None,
+        hosts_only: bool = False, family: Optional[int] = None) -> Tuple[bytes, str]:
+    """The .txt body and its ETag (txt_with_count without the count)."""
+    return txt_with_count(db, name, kind, limit, hosts_only, family)[:2]
 
 
 def invalidate() -> None:
@@ -159,14 +184,14 @@ def mark_scores_changed(db) -> None:
 # ---- .csv / .json: streamed straight from the cursor -------------------------
 
 def stream_csv(db, name: str, kind: str, limit: Optional[int] = None,
-               hosts_only: bool = False) -> Iterator[bytes]:
+               hosts_only: bool = False, family: Optional[int] = None) -> Iterator[bytes]:
     out = io.StringIO()
     writer = csv.writer(out)
     # The first column is the indicator value; the header keeps the historical
     # name "ip" for both kinds so existing SIEM column mappings don't break.
     writer.writerow(["ip", "confidence_score", "tier", "first_seen", "last_seen", "sources"])
     n = 0
-    for row in iter_rows(db, name, kind, limit, hosts_only):
+    for row in iter_rows(db, name, kind, limit, hosts_only, family):
         writer.writerow([_value(row), row[3], row[4], _dt_str(row[5]), _dt_str(row[6]),
                          ";".join(row[2])])
         n += 1
@@ -177,7 +202,7 @@ def stream_csv(db, name: str, kind: str, limit: Optional[int] = None,
 
 
 def stream_json(db, name: str, kind: str, limit: Optional[int] = None,
-                hosts_only: bool = False) -> Iterator[bytes]:
+                hosts_only: bool = False, family: Optional[int] = None) -> Iterator[bytes]:
     # Compact separators + ensure_ascii=False: exactly what Starlette's
     # JSONResponse rendered before, so the values and bytes match.
     def dump(v):
@@ -188,7 +213,7 @@ def stream_json(db, name: str, kind: str, limit: Optional[int] = None,
            dump(datetime.now(timezone.utc).isoformat()) + b',"indicators":[')
     n = 0
     chunk = []
-    for row in iter_rows(db, name, kind, limit, hosts_only):
+    for row in iter_rows(db, name, kind, limit, hosts_only, family):
         chunk.append((b"," if n else b"") + dump({
             "value": _value(row), "ip": row[0], "confidence_score": row[3],
             "tier": row[4], "sources": row[2], "last_seen": _dt_iso(row[6]),

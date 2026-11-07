@@ -33,6 +33,12 @@ _LIMIT = Query(None, ge=1, le=10_000_000,
 # rejects ranges and networks in a third-party feed; see feed_cache.iter_rows).
 _HOSTS = Query(None, ge=0, le=1,
                description="1 = serve single addresses only; network entries are omitted")
+# ?family=4|6: one IP version only (Sophos rejects IPv6 lines too; pfBlockerNG
+# keeps v4 and v6 lists apart). Ignored on the domain URLs. Unknown query
+# parameters stay ignored here, as they always were: a 400 would break a
+# firewall that already polls a URL carrying one.
+_FAMILY = Query(None, pattern="^[46]$",
+                description="4 or 6 = serve only that IP version")
 
 
 def _known(name: str) -> None:
@@ -48,73 +54,88 @@ def _polled(request: Request, name: str, kind: str, ext: str) -> None:
                  request.headers.get("user-agent", ""))
 
 
+def _fam(family: Optional[str]) -> Optional[int]:
+    return int(family) if family else None
+
+
 def _feed_txt(request: Request, name: str, kind: str, limit: Optional[int],
-              hosts: Optional[int] = None) -> Response:
+              hosts: Optional[int] = None, family: Optional[str] = None) -> Response:
     _known(name)
     _polled(request, name, kind, "txt")
-    body, etag = feed_cache.txt(core.db, name, kind, limit, hosts_only=bool(hosts))
-    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    body, etag, total = feed_cache.txt_with_count(core.db, name, kind, limit,
+                                                  hosts_only=bool(hosts), family=_fam(family))
+    # X-Entry-Count is the size before ?limit, so ?limit=1 is a cheap way to
+    # ask how big a URL's list is (the dashboard's URL builder does).
+    headers = {"Cache-Control": "no-cache", "ETag": etag, "X-Entry-Count": str(total)}
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return Response(body, media_type="text/plain; charset=utf-8", headers=headers)
 
 
 def _feed_csv(request: Request, name: str, kind: str, limit: Optional[int],
-              hosts: Optional[int] = None) -> StreamingResponse:
+              hosts: Optional[int] = None, family: Optional[str] = None) -> StreamingResponse:
     _known(name)
     _polled(request, name, kind, "csv")
-    return StreamingResponse(feed_cache.stream_csv(core.db, name, kind, limit, bool(hosts)),
+    return StreamingResponse(feed_cache.stream_csv(core.db, name, kind, limit, bool(hosts),
+                                                   _fam(family)),
                              media_type="text/csv; charset=utf-8")
 
 
 def _feed_json(request: Request, name: str, kind: str, limit: Optional[int],
-               hosts: Optional[int] = None) -> StreamingResponse:
+               hosts: Optional[int] = None, family: Optional[str] = None) -> StreamingResponse:
     _known(name)
     _polled(request, name, kind, "json")
-    return StreamingResponse(feed_cache.stream_json(core.db, name, kind, limit, bool(hosts)),
+    return StreamingResponse(feed_cache.stream_json(core.db, name, kind, limit, bool(hosts),
+                                                    _fam(family)),
                              media_type="application/json")
 
 
 @router.get("/feeds/{name}.txt", response_class=PlainTextResponse)
 def feed_txt(name: str, request: Request, limit: Optional[int] = _LIMIT,
-             hosts: Optional[int] = _HOSTS):
+             hosts: Optional[int] = _HOSTS,
+             family: Optional[str] = _FAMILY):
     """Plain-text block list, one IP/CIDR per line — the firewall feed format."""
-    return _feed_txt(request, name, "ip", limit, hosts)
+    return _feed_txt(request, name, "ip", limit, hosts, family)
 
 
 @router.get("/feeds/{name}.csv")
 def feed_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
-             hosts: Optional[int] = _HOSTS):
+             hosts: Optional[int] = _HOSTS,
+             family: Optional[str] = _FAMILY):
     """CSV with metadata (for SIEM / spreadsheet use)."""
-    return _feed_csv(request, name, "ip", limit, hosts)
+    return _feed_csv(request, name, "ip", limit, hosts, family)
 
 
 @router.get("/feeds/{name}.json")
 def feed_json(name: str, request: Request, limit: Optional[int] = _LIMIT,
-             hosts: Optional[int] = _HOSTS):
+             hosts: Optional[int] = _HOSTS,
+             family: Optional[str] = _FAMILY):
     """JSON with full details (for programmatic / SIEM ingestion)."""
-    return _feed_json(request, name, "ip", limit, hosts)
+    return _feed_json(request, name, "ip", limit, hosts, family)
 
 
 @router.get("/feeds/domains/{name}.txt", response_class=PlainTextResponse)
 def domain_feed_txt(name: str, request: Request, limit: Optional[int] = _LIMIT,
-             hosts: Optional[int] = _HOSTS):
+             hosts: Optional[int] = _HOSTS,
+             family: Optional[str] = _FAMILY):
     """Plain-text domain block list, one domain per line (DNS filter / RPZ)."""
-    return _feed_txt(request, name, "domain", limit, hosts)
+    return _feed_txt(request, name, "domain", limit, hosts, family)
 
 
 @router.get("/feeds/domains/{name}.csv")
 def domain_feed_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
-             hosts: Optional[int] = _HOSTS):
+             hosts: Optional[int] = _HOSTS,
+             family: Optional[str] = _FAMILY):
     """Domain CSV with metadata (for SIEM / spreadsheet use)."""
-    return _feed_csv(request, name, "domain", limit, hosts)
+    return _feed_csv(request, name, "domain", limit, hosts, family)
 
 
 @router.get("/feeds/domains/{name}.json")
 def domain_feed_json(name: str, request: Request, limit: Optional[int] = _LIMIT,
-             hosts: Optional[int] = _HOSTS):
+             hosts: Optional[int] = _HOSTS,
+             family: Optional[str] = _FAMILY):
     """Domain JSON with full details (for programmatic / SIEM ingestion)."""
-    return _feed_json(request, name, "domain", limit, hosts)
+    return _feed_json(request, name, "domain", limit, hosts, family)
 
 
 # ==================== JSON API (authenticated when auth enabled) ============

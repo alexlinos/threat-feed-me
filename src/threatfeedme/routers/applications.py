@@ -16,10 +16,10 @@ strip these entries by design.
 """
 import hashlib
 import logging
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response
 
 from threatfeedme import applications, core
 from threatfeedme.auth import csrf_check, require_auth
@@ -79,43 +79,80 @@ def _validate(req: ApplicationListRequest) -> None:
 
 # ---------------------------------------------------------------- serving --
 
-def _served(request: Request, name: str, ext: str, limit: Optional[int]):
-    """Entries + ETag for one list. The ETag mixes body digest and the row's
-    entry_version, so a swap bustes caches even through a proxy that hashes
-    bodies."""
+# URL options (applications.select_entries has the semantics). Annotated, not
+# Query-object defaults, so a direct call in a test gets None.
+_Kind = Annotated[Optional[str], Query(pattern="^(ip|domain|url)$",
+                                       description="Only IPs, domains or URLs")]
+_Family = Annotated[Optional[str], Query(pattern="^[46]$",
+                                         description="Drop IP entries of the other version")]
+_Hosts = Annotated[Optional[int], Query(ge=0, le=1,
+                                        description="1 = single addresses only, no networks")]
+_Wildcards = Annotated[Optional[str], Query(pattern="^(keep|strip|drop)$",
+                                            description="What to do with *.example.com")]
+# Unlike /feeds (where unknown parameters were always ignored and a 400 would
+# break polls that already work), these URLs are new in 2.7 and composed by
+# the dashboard's builder: an unknown or misspelt option is an error, never a
+# silently different list.
+_OPTIONS = frozenset({"limit", "kind", "family", "hosts", "wildcards"})
+
+
+def _served(request: Request, name: str, ext: str, limit: Optional[int],
+            kind: Optional[str] = None, family: Optional[str] = None,
+            hosts: Optional[int] = None, wildcards: Optional[str] = None):
+    """The entries one list URL serves, plus the count before ?limit."""
+    unknown = set(getattr(request, "query_params", {}) or {}) - _OPTIONS
+    if unknown:
+        raise HTTPException(status_code=400, detail=(
+            f"Unknown option(s): {', '.join(sorted(unknown))}; "
+            f"list URLs take {', '.join(sorted(_OPTIONS))}"))
     _row_or_404(name)
-    entries = core.db.get_entries(name)
+    entries = applications.select_entries(
+        core.db.get_entries(name), kind=kind, family=int(family) if family else None,
+        hosts=bool(hosts), wildcards=wildcards or "keep")
+    total = len(entries)
     if limit is not None:
         entries = entries[:limit]
     from threatfeedme import polls
     polls.record(core.db, f"lists/{name}.{ext}", request.headers.get("user-agent", ""))
-    return entries
+    return entries, total
+
+
+def _respond(request: Request, body: str, media_type: str, total: int) -> Response:
+    """Every format gets an ETag (from the body, so each option combination
+    has its own) and X-Entry-Count, the size before ?limit: ?limit=1 reads a
+    list's size without downloading it."""
+    etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag, "X-Entry-Count": str(total)}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type=media_type, headers=headers)
 
 
 @router.get("/lists/{name}.txt", response_class=PlainTextResponse)
-def list_txt(name: str, request: Request, limit: Optional[int] = _LIMIT):
-    entries = _served(request, name, "txt", limit)
+def list_txt(name: str, request: Request, limit: Optional[int] = _LIMIT,
+             kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
+             wildcards: _Wildcards = None):
+    entries, total = _served(request, name, "txt", limit, kind, family, hosts, wildcards)
     body = "\n".join(entries) + ("\n" if entries else "")
-    etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
-    headers = {"Cache-Control": "no-cache", "ETag": etag}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
-    return Response(body, media_type="text/plain; charset=utf-8", headers=headers)
+    return _respond(request, body, "text/plain; charset=utf-8", total)
 
 
 @router.get("/lists/{name}.csv")
-def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT):
-    entries = _served(request, name, "csv", limit)
-    return StreamingResponse((f"{e}\r\n" for e in entries),
-                             media_type="text/csv; charset=utf-8")
+def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
+             kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
+             wildcards: _Wildcards = None):
+    entries, total = _served(request, name, "csv", limit, kind, family, hosts, wildcards)
+    return _respond(request, "".join(f"{e}\r\n" for e in entries),
+                    "text/csv; charset=utf-8", total)
 
 
 @router.get("/lists/{name}.json")
-def list_json(name: str, request: Request, limit: Optional[int] = _LIMIT):
-    entries = _served(request, name, "json", limit)
+def list_json(name: str, request: Request, limit: Optional[int] = _LIMIT,
+              kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
+              wildcards: _Wildcards = None):
+    entries, total = _served(request, name, "json", limit, kind, family, hosts, wildcards)
     import json as _json
-    return StreamingResponse(iter([_json.dumps({"entries": entries})]),
-                             media_type="application/json")
+    return _respond(request, _json.dumps({"entries": entries}), "application/json", total)
 
 
 # ------------------------------------------------------------------- API --
