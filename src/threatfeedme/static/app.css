@@ -207,6 +207,13 @@ input::placeholder { color:var(--dim); }
 .heat-title-ip { color:var(--accent-hi); }
 .heat-title-domain { color:var(--purple); }
 
+/* Applications view (issues #26/#28): section heads in the feeds idiom */
+.apps-subhead { margin:20px 0 2px; font-size:.85em; font-weight:650;
+                text-transform:uppercase; letter-spacing:.12em; }
+.apps-vendor { margin:14px 0 2px; font-size:.78em; font-weight:650;
+               text-transform:uppercase; letter-spacing:.12em;
+               color:var(--accent-hi); }
+
 /* UniFi panel: the enable switch carries a visible text label (an unlabeled
    bare switch got saved untouched in the field). */
 .unifi-enable-label { display:inline-flex; align-items:center; gap:8px;
