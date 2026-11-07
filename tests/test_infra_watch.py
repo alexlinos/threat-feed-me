@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import infra_watch as iw
@@ -107,6 +109,37 @@ def test_adobe_source_is_optional():
     src = next(s for s in iw.SOURCES if s.name == "adobe_endpoints")
     assert src.optional is True
     assert all(not s.optional for s in iw.SOURCES if s.name != "adobe_endpoints")
+
+
+def _fake_adobe_get(monkeypatch, page, files):
+    fetched = []
+
+    def get(url, headers=None):
+        fetched.append(url)
+        if url == iw.ADOBE_PAGE_URL:
+            return page.encode()
+        return files[url].encode()
+    monkeypatch.setattr(iw, "get", get)
+    return fetched
+
+
+def test_adobe_uses_only_the_linked_file_on_an_adobe_host(monkeypatch):
+    page = ('<a href="https://cdn.other.example/endpoints-allowlist.txt">mirror</a>'
+            '<a href="https://www.adobe.com/files/endpoints-allowlist-2026.txt">file</a>'
+            '<script src="https://assets.tracker.example/x.js"></script>')
+    good = "https://www.adobe.com/files/endpoints-allowlist-2026.txt"
+    fetched = _fake_adobe_get(monkeypatch, page, {good: "*.adobe.com\n"})
+    assert iw.fetch_adobe() == "*.adobe.com\n"
+    assert fetched == [iw.ADOBE_PAGE_URL, good]       # the foreign mirror is never fetched
+
+
+def test_adobe_without_a_linked_file_fails_instead_of_mining_the_page(monkeypatch):
+    # The page's own hosts (CDN, scripts, analytics) must never become entries
+    # on a list firewalls allow.
+    page = '<p>*.adobe.com</p><script src="https://assets.tracker.example/x.js"></script>'
+    _fake_adobe_get(monkeypatch, page, {})
+    with pytest.raises(ValueError):
+        iw.fetch_adobe()
 
 
 def test_normalize_cloudflare_dict_of_lists():

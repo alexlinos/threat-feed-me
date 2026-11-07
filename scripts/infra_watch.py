@@ -32,6 +32,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 from pathlib import Path
 
 import requests
@@ -112,21 +113,26 @@ ADOBE_PAGE_URL = "https://helpx.adobe.com/enterprise/kb/network-endpoints.html"
 ADOBE_FILE_RE = re.compile(r"""https?://[^\s\"'<>]+?\.(?:txt|csv)(?:\?[^\s\"'<>]*)?""")
 
 
+def _adobe_host(link: str) -> bool:
+    host = (urlsplit(link).hostname or "").lower()
+    return host == "adobe.com" or host.endswith(".adobe.com")
+
+
 def fetch_adobe() -> str:
     """Adobe's endpoints live on a bot-walled help page, with a downloadable
     allowlist file linked from it. Same pattern as Azure: fetch the page,
-    prefer the linked file, otherwise use the page itself, whose exhaustive
-    lists are inline. Returns raw text; normalize_adobe extracts. The
-    source is optional in SOURCES: an Akamai 403 must not fail the watch.
+    then the linked file. Only that file is used, and only from an Adobe
+    host: mining the page's own text would put its CDN, script and
+    analytics hosts on a list firewalls ALLOW, and a link elsewhere is not
+    Adobe's word. No file means a failed fetch; the source is optional in
+    SOURCES, so the watch carries on and the last good snapshot stays.
+    Returns raw text; normalize_adobe extracts.
     """
     page = get(ADOBE_PAGE_URL).decode("utf-8", errors="replace")
     for link in sorted(set(ADOBE_FILE_RE.findall(page))):
-        if "allowlist" in link.lower() or "endpoint" in link.lower():
-            try:
-                return get(link).decode("utf-8", errors="replace")
-            except (requests.RequestException, ValueError):
-                break
-    return page
+        if _adobe_host(link) and ("allowlist" in link.lower() or "endpoint" in link.lower()):
+            return get(link).decode("utf-8", errors="replace")
+    raise ValueError("no downloadable Adobe allowlist file linked from the endpoints page")
 
 
 # Host-shaped tokens in prose: optional scheme, optional leading wildcard,

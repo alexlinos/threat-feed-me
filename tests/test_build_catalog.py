@@ -38,22 +38,34 @@ def test_aws_slices_per_service(tmp_path):
         "v4|us-east-1|EC2|192.0.2.0/24", "v6|GLOBAL|S3|2001:db8::/40",
         "v4|GLOBAL|S3|198.51.100.0/24"]})
     by_slug = {m["slug"]: m for m in manifest["lists"]}
-    assert set(by_slug) == {"aws-ec2", "aws-s3"}
+    # Per service across all regions, plus per service and region (the
+    # GLOBAL pseudo-region only feeds the all-regions lists).
+    assert set(by_slug) == {"aws-ec2", "aws-s3", "aws-ec2-us-east-1"}
     assert by_slug["aws-s3"]["entries"] == 2
+    assert by_slug["aws-ec2"]["group"] == "All regions"
+    assert by_slug["aws-ec2-us-east-1"]["group"] == "Per region"
     assert by_slug["aws-ec2"]["url"] == \
         "https://factory.example/catalog/aws-ec2.txt"
     assert (out / "aws-ec2.txt").read_text() == "192.0.2.0/24\n"
 
 
-def test_m365_slices_per_area_and_form_and_cloud(tmp_path):
+def test_m365_slices_per_area_form_category_and_cloud(tmp_path):
     manifest, _ = _build(tmp_path, {
         "m365_endpoints": ["ip|Exchange|Optimize|192.0.2.5",
                            "url|Exchange|Optimize|outlook.office.com",
                            "url|Common|Allow|*.office.com"],
         "m365_gcc_high": ["ip|Common|Allow|198.51.100.9"]})
-    slugs = {m["slug"] for m in manifest["lists"]}
-    assert slugs == {"m365-exchange-ips", "m365-exchange-urls",
-                     "m365-common-urls", "m365-gcchigh-common-ips"}
+    by_slug = {m["slug"]: m for m in manifest["lists"]}
+    every = {"m365-exchange-ips", "m365-exchange-urls",       # 2.7 slugs kept
+             "m365-common-urls", "m365-gcchigh-common-ips"}
+    per_category = {"m365-exchange-ips-optimize", "m365-exchange-urls-optimize",
+                    "m365-common-urls-allow", "m365-gcchigh-common-ips-allow"}
+    assert set(by_slug) == every | per_category
+    assert {by_slug[s]["group"] for s in every} == {"All categories"}
+    assert by_slug["m365-exchange-ips-optimize"]["group"] == "Optimize"
+    # Each cloud is its own vendor on the page, as the reference design has it.
+    assert by_slug["m365-gcchigh-common-ips"]["vendor"] == "Microsoft 365 US Gov GCC High"
+    assert by_slug["m365-exchange-ips"]["name"] == "Exchange Online IPs"
 
 
 def test_azure_slices_per_tag_and_skips_unnamed(tmp_path):
@@ -62,8 +74,11 @@ def test_azure_slices_per_tag_and_skips_unnamed(tmp_path):
         "cidr|Sql||198.51.100.0/27",
         "cidr||Global|203.0.113.0/24",          # pre-fix snapshot shape
     ]})
-    slugs = {m["slug"] for m in manifest["lists"]}
-    assert slugs == {"azure-storage-eastus", "azure-sql"}
+    by_slug = {m["slug"]: m for m in manifest["lists"]}
+    # Global tags only: regional ones (Storage.EastUS) would be ~2,900 more
+    # lists, and the global tag already covers every region.
+    assert set(by_slug) == {"azure-sql"}
+    assert by_slug["azure-sql"]["group"] == "All regions"
     assert not (out / "azure.txt").exists()     # never one Azure blob
 
 
@@ -121,3 +136,32 @@ def test_rebuild_with_unchanged_snapshots_rewrites_nothing(tmp_path):
     assert changed["generated_at"] == "2026-11-08T00:00:00Z"
     assert json.loads((out / "catalog.json").read_text())["generated_at"] == \
         "2026-11-08T00:00:00Z"
+
+
+def test_manifest_carries_vendor_docs_for_vendors_present(tmp_path):
+    manifest, _ = _build(tmp_path, {"cloudflare_ips": ["v4|203.0.113.0/24"]})
+    assert set(manifest["vendors"]) == {"Cloudflare"}
+    assert manifest["vendors"]["Cloudflare"]["docs"].startswith("https://")
+
+
+def test_retired_list_file_is_deleted(tmp_path):
+    # A list the factory stops producing must 404 at its URL, not keep
+    # serving a frozen allow-list to installs that switched it on.
+    data = {"aws_ip_ranges": ["v4|GLOBAL|EC2|192.0.2.0/24",
+                              "v4|GLOBAL|S3|198.51.100.0/24"]}
+    _manifest, out = _build(tmp_path, data)
+    assert (out / "aws-s3.txt").exists()
+    snaps = tmp_path / "snapshots"
+    (snaps / "aws_ip_ranges.json").write_text(json.dumps(
+        {"source": "aws_ip_ranges", "entries": ["v4|GLOBAL|EC2|192.0.2.0/24"]}),
+        encoding="utf-8")
+    bc.build(snaps, out, "https://factory.example/", "2026-11-08T00:00:00Z")
+    assert not (out / "aws-s3.txt").exists() and (out / "aws-ec2.txt").exists()
+
+
+def test_no_snapshots_deletes_nothing(tmp_path):
+    _manifest, out = _build(tmp_path, {"cloudflare_ips": ["v4|203.0.113.0/24"]})
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    bc.build(empty, out, "https://factory.example/", "2026-11-08T00:00:00Z")
+    assert (out / "cloudflare.txt").exists()   # a broken run never wipes the catalog

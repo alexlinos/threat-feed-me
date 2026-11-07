@@ -15,10 +15,16 @@ Input entries are the canonical strings infra_watch writes
 (``kind|dim|dim|value``). Output, under ``--out``:
 
   * ``<slug>.txt`` per catalog list: sorted unique entry values, one per
-    line, exactly what a slice 1 "list" source serves after the guard.
-  * ``catalog.json``: {generated_at, lists: [{slug, name, vendor,
-    description, format, entries, bytes, url}]}. ``url`` is --base-url
-    joined with the file name.
+    line, exactly what a slice 1 "list" source serves after the guard. A
+    file whose list is no longer produced is deleted, so an install that
+    had it switched on reports an error instead of serving it frozen.
+  * ``catalog.json``: {generated_at, vendors: {name: {description, docs}},
+    lists: [{slug, name, vendor, group, description, format, entries,
+    bytes, url}]}. ``url`` is --base-url joined with the file name;
+    ``group`` is the tab a list sits under on the Applications page (all
+    regions vs per region, Microsoft's endpoint categories; empty for a
+    vendor with one view); ``docs`` links each vendor's own documentation
+    on what to allow.
 
 Slicers are pure functions over the snapshot entry lists so tests can
 exercise them offline against fixtures (repo rule: no network in tests).
@@ -38,8 +44,50 @@ from typing import Callable, Iterable
 DEFAULT_BASE_URL = ("https://raw.githubusercontent.com/alexlinos/"
                     "threat-feed-me/infra-snapshots/")
 
-# A catalog list: (vendor, display name, one-line description, entries)
-CatalogList = tuple[str, str, str, list[str]]
+# A catalog list: (vendor, display name, one-line description, entries, group)
+CatalogList = tuple[str, str, str, list[str], str]
+
+ALL_REGIONS = "All regions"
+PER_REGION = "Per region"
+ALL_CATEGORIES = "All categories"
+M365_CATEGORIES = ("Optimize", "Allow", "Default")
+
+_RENTABLE = (" These ranges also host other customers' workloads, so allowing"
+             " them lets anything running there through.")
+_M365_TEXT = ("Microsoft sorts these endpoints into three categories: Optimize,"
+              " Allow and Default. Most sites want All categories, which"
+              " combines the three.")
+_GOOGLE_DOCS = "https://support.google.com/a/answer/10026322"
+_M365_DOCS = "https://learn.microsoft.com/microsoft-365/enterprise/"
+
+# Vendor -> (description, the vendor's own page on what to allow).
+VENDORS: dict[str, tuple[str, str]] = {
+    "AWS": ("Amazon Web Services address ranges per service. Most sites want a"
+            " service across all regions; per-region lists suit narrower rules."
+            " AMAZON and EC2 are rentable space." + _RENTABLE,
+            "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html"),
+    "Microsoft Azure": ("Azure service tags, one list per service across all"
+                        " regions. AzureCloud is all of Azure's public space."
+                        + _RENTABLE,
+                        "https://learn.microsoft.com/azure/virtual-network/service-tags-overview"),
+    "Microsoft 365 Worldwide": (_M365_TEXT, _M365_DOCS + "urls-and-ip-address-ranges"),
+    "Microsoft 365 US Gov GCC High": (
+        _M365_TEXT, _M365_DOCS + "microsoft-365-u-s-government-gcc-high-endpoints"),
+    "Microsoft 365 US Gov DoD": (
+        _M365_TEXT, _M365_DOCS + "microsoft-365-u-s-government-dod-endpoints"),
+    "Microsoft 365 China (21Vianet)": (
+        _M365_TEXT, _M365_DOCS + "urls-and-ip-address-ranges-21vianet"),
+    "Google": ("Google's own front ends: Gmail, Drive, Meet and the other"
+               " Workspace apps, kept apart from Google Cloud.", _GOOGLE_DOCS),
+    "Google Cloud": ("Google Cloud customer and service ranges, all regions."
+                     + _RENTABLE, _GOOGLE_DOCS),
+    "Cloudflare": ("Cloudflare's edge network ranges." + _RENTABLE,
+                   "https://www.cloudflare.com/ips/"),
+    "GitHub": ("GitHub's address ranges per service, from the GitHub meta API.",
+               "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-githubs-ip-addresses"),
+    "Adobe": ("Domains Adobe lists for Creative Cloud, Acrobat and Document Cloud.",
+              "https://helpx.adobe.com/enterprise/kb/network-endpoints.html"),
+}
 
 
 def slugify(text: str) -> str:
@@ -55,80 +103,111 @@ def _value(entry: str) -> str:
 # Slicers: canonical snapshot entries -> {slug: CatalogList}
 # --------------------------------------------------------------------------
 
+def _aws_name(service: str) -> str:
+    return service.replace("_", " ").title()
+
+
 def slice_aws(entries: list[str]) -> dict[str, CatalogList]:
+    """Per service across all regions, and per service and region (the
+    GLOBAL pseudo-region only appears in the all-regions lists)."""
     by_service: dict[str, list[str]] = {}
+    by_region: dict[tuple[str, str], list[str]] = {}
     for e in entries:
         parts = e.split("|")
         if len(parts) != 4:
             continue
-        by_service.setdefault(parts[2], []).append(parts[3])
+        _kind, region, service, prefix = parts
+        by_service.setdefault(service, []).append(prefix)
+        if region and region != "GLOBAL":
+            by_region.setdefault((service, region), []).append(prefix)
     out = {}
     for service, prefixes in sorted(by_service.items()):
-        slug = "aws-" + slugify(service)
-        out[slug] = ("AWS", f"AWS {service.replace('_', ' ').title()}",
-                     f"Amazon Web Services {service} ranges, all regions.",
-                     prefixes)
+        out["aws-" + slugify(service)] = (
+            "AWS", f"AWS {_aws_name(service)}",
+            f"Amazon Web Services {service} ranges, all regions.", prefixes, ALL_REGIONS)
+    for (service, region), prefixes in sorted(by_region.items()):
+        out[slugify(f"aws-{service}-{region}")] = (
+            "AWS", f"AWS {_aws_name(service)} ({region})",
+            f"Amazon Web Services {service} ranges in {region}.", prefixes, PER_REGION)
     return out
 
 
-# source name -> (cloud label, slug prefix)
+# source name -> (vendor, slug prefix)
 _M365_CLOUDS = {
-    "m365_endpoints": ("Worldwide", "m365"),
-    "m365_gcc_high": ("US Gov GCC High", "m365-gcchigh"),
-    "m365_dod": ("US Gov DoD", "m365-dod"),
-    "m365_china": ("21Vianet (China)", "m365-china"),
+    "m365_endpoints": ("Microsoft 365 Worldwide", "m365"),
+    "m365_gcc_high": ("Microsoft 365 US Gov GCC High", "m365-gcchigh"),
+    "m365_dod": ("Microsoft 365 US Gov DoD", "m365-dod"),
+    "m365_china": ("Microsoft 365 China (21Vianet)", "m365-china"),
 }
+_M365_AREAS = {"Exchange": "Exchange Online",
+               "SharePoint": "SharePoint Online and OneDrive",
+               "Skype": "Microsoft Teams",
+               "Common": "Microsoft 365 Common and Office Online"}
 
 
 def slice_m365(source: str, entries: list[str]) -> dict[str, CatalogList]:
-    cloud, prefix = _M365_CLOUDS[source]
-    groups: dict[tuple[str, str], list[str]] = {}
+    """Per service area and form (IPs vs URLs), once with every category
+    and once per category. The all-categories slugs are the 2.7 ones."""
+    vendor, prefix = _M365_CLOUDS[source]
+    groups: dict[tuple[str, str, str], list[str]] = {}
     for e in entries:
         parts = e.split("|")
         if len(parts) != 4:
             continue
-        kind, area, _cat, value = parts
-        groups.setdefault((area, kind), []).append(value)
+        kind, area, cat, value = parts
+        groups.setdefault((area, kind, ""), []).append(value)
+        if cat in M365_CATEGORIES:
+            groups.setdefault((area, kind, cat), []).append(value)
     out = {}
-    for (area, kind), values in sorted(groups.items()):
+    for (area, kind, cat), values in sorted(groups.items()):
         form = "ips" if kind == "ip" else "urls"
-        slug = f"{prefix}-{slugify(area)}-{form}"
+        label = _M365_AREAS.get(area, area)
+        what = "IPs" if kind == "ip" else "URLs"
+        slug = f"{prefix}-{slugify(area)}-{form}" + (f"-{slugify(cat)}" if cat else "")
         out[slug] = (
-            "Microsoft 365",
-            f"Microsoft 365 {cloud} {area} {'IPs' if kind == 'ip' else 'URLs'}",
-            f"{area} endpoints for Microsoft 365 {cloud}: "
-            + ("IP ranges." if kind == "ip" else "URLs and domains."),
-            values)
+            vendor, f"{label} {what}" + (f" ({cat})" if cat else ""),
+            f"{label} endpoints"
+            + (f" in Microsoft's {cat} category" if cat else ", every category")
+            + (": IP ranges." if kind == "ip" else ": URLs and domains."),
+            values, cat or ALL_CATEGORIES)
     return out
 
 
-def slice_azure(entries: list[str]) -> tuple[dict[str, CatalogList], int]:
-    """Per-tag lists. Entries whose tag name is empty come from snapshots
-    written before the normalizer fix; they cannot be sliced honestly, so
-    they are skipped (and counted for the build log), never shipped as one
-    giant undifferentiated Azure list."""
+def slice_azure(entries: list[str]) -> tuple[dict[str, CatalogList], int, int]:
+    """One list per service tag across all regions (Storage, AzureCloud):
+    about a hundred. Regional tags (Storage.EastUS) are skipped and counted:
+    they are some 2,900 more, which would multiply the published files,
+    the manifest and the page for a need nobody has asked for yet; the
+    global tag already covers every region. Entries whose tag name is empty
+    come from snapshots written before the normalizer fix; they cannot be
+    sliced honestly, so they are skipped too, never shipped as one giant
+    undifferentiated Azure list. Returns (lists, unnamed, regional)."""
     by_tag: dict[str, list[str]] = {}
-    skipped = 0
+    unnamed = regional = 0
     for e in entries:
         parts = e.split("|")
         if len(parts) != 4:
             continue
         tag = parts[1]
         if not tag:
-            skipped += 1
+            unnamed += 1
+            continue
+        if "." in tag:
+            regional += 1
             continue
         by_tag.setdefault(tag, []).append(parts[3])
     out = {}
     for tag, prefixes in sorted(by_tag.items()):
-        slug = "azure-" + slugify(tag)
-        out[slug] = ("Microsoft Azure", f"Azure {tag}",
-                     f"Azure service tag {tag} address prefixes.", prefixes)
-    return out, skipped
+        out["azure-" + slugify(tag)] = (
+            "Microsoft Azure", f"Azure {tag}",
+            f"Azure service tag {tag} address prefixes, all regions.", prefixes,
+            ALL_REGIONS)
+    return out, unnamed, regional
 
 
 def slice_single(slug: str, vendor: str, name: str, description: str,
                  entries: Iterable[str]) -> dict[str, CatalogList]:
-    return {slug: (vendor, name, description, [_value(e) for e in entries])}
+    return {slug: (vendor, name, description, [_value(e) for e in entries], "")}
 
 
 def slice_github_meta(entries: list[str]) -> dict[str, CatalogList]:
@@ -145,7 +224,7 @@ def slice_github_meta(entries: list[str]) -> dict[str, CatalogList]:
         by_key.setdefault(parts[1], []).append(value)
     return {f"github-{slugify(key)}":
             ("GitHub", f"GitHub {key}",
-             f"GitHub {key} address ranges from the GitHub meta API.", values)
+             f"GitHub {key} address ranges from the GitHub meta API.", values, "")
             for key, values in sorted(by_key.items())}
 
 
@@ -218,11 +297,14 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
         if source in _M365_CLOUDS:
             produced = slice_m365(source, entries)
         elif source == "azure_service_tags":
-            produced, skipped = slice_azure(entries)
-            if skipped:
+            produced, unnamed, regional = slice_azure(entries)
+            if unnamed:
                 warnings.append(
-                    f"azure_service_tags: {skipped} entries have no tag "
+                    f"azure_service_tags: {unnamed} entries have no tag "
                     "name (pre-fix snapshot) and were not catalogued")
+            if regional:
+                print(f"azure_service_tags: {regional} regional-tag entries left "
+                      "to their all-regions tags", file=sys.stderr)
         else:
             produced = SLICERS[source](entries)
         for slug, item in produced.items():
@@ -234,27 +316,40 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_lists = []
     for slug in sorted(catalog):
-        vendor, name, description, values = catalog[slug]
+        vendor, name, description, values, group = catalog[slug]
         values = sorted(set(values))
         body = "".join(v + "\n" for v in values)
         _write_if_changed(out_dir / f"{slug}.txt", body)
         manifest_lists.append({
-            "slug": slug, "name": name, "vendor": vendor,
+            "slug": slug, "name": name, "vendor": vendor, "group": group,
             "description": description, "format": "list",
             "entries": len(values), "bytes": len(body.encode("utf-8")),
             "url": base_url.rstrip("/") + f"/catalog/{slug}.txt",
         })
-    manifest_lists.sort(key=lambda m: (m["vendor"], m["name"]))
+    manifest_lists.sort(key=lambda m: (m["vendor"], m["group"], m["name"]))
+    vendors = {v: {"description": VENDORS[v][0], "docs": VENDORS[v][1]}
+               for v in sorted({m["vendor"] for m in manifest_lists}) if v in VENDORS}
+
+    # Retired lists: delete their files so installs that had one switched on
+    # get an error, not a silently frozen allow-list. Never when nothing was
+    # produced (every snapshot missing must not wipe the published catalog).
+    if manifest_lists:
+        for stale in out_dir.glob("*.txt"):
+            if stale.stem not in catalog:
+                stale.unlink()
+                warnings.append(f"{stale.stem}: no longer produced, file removed")
+
     # The stamp alone must not dirty the output: with a fresh generated_at
     # every run, catalog.json changes daily even when no list did, and the
     # workflow's commit step pushes a no-op snapshot commit. When the lists
     # are unchanged, keep the previous manifest, stamp included.
     previous = _existing_manifest(out_dir / "catalog.json")
-    if previous.get("lists") == manifest_lists:
+    if previous.get("lists") == manifest_lists and previous.get("vendors") == vendors:
         manifest = {"generated_at": previous.get("generated_at") or generated_at,
-                    "lists": manifest_lists}
+                    "vendors": vendors, "lists": manifest_lists}
     else:
-        manifest = {"generated_at": generated_at, "lists": manifest_lists}
+        manifest = {"generated_at": generated_at, "vendors": vendors,
+                    "lists": manifest_lists}
         _write_if_changed(out_dir / "catalog.json",
                           json.dumps(manifest, indent=1) + "\n")
     for w in warnings:
