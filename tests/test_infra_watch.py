@@ -64,6 +64,51 @@ def test_normalize_azure_handles_properties_nesting():
     assert "cidr|OldShape|Global|203.0.113.0/24" in out
 
 
+def test_normalize_azure_live_shape_keeps_tag_name():
+    # The real ServiceTags shape: the tag name sits on the value and the
+    # prefixes inside properties. Reading the name out of properties (the
+    # old code) yielded "" for every entry, which made per-tag catalog
+    # slicing impossible (issue #28).
+    data = {"values": [
+        {"name": "Storage.EastUS", "id": "/subscriptions/x",
+         "properties": {"region": "eastus", "platform": "Azure",
+                        "addressPrefixes": ["192.0.2.0/27"]}},
+        {"name": "Sql", "properties": {"region": "",
+                                        "addressPrefixes": ["198.51.100.0/27"]}},
+    ]}
+    out = iw.normalize_azure(data)
+    assert "cidr|Storage.EastUS|eastus|192.0.2.0/27" in out
+    assert "cidr|Sql|Global|198.51.100.0/27" in out
+
+
+def test_normalize_adobe_extracts_domains_and_drops_junk():
+    text = """
+    - *.adobe.com
+    - lm.licenses.adobe.com
+    - https://cc-api-data.adobe.io/some/path
+    - wss://speech.platform.bing.com
+    - firebase*.googleapis.com
+    - network-endpoints.html and app.js are page furniture
+    - s3.amazonaws.com/tron-ffc-icons-prod/
+    """
+    out = iw.normalize_adobe(text)
+    assert "domain|||*.adobe.com" in out
+    assert "domain|||lm.licenses.adobe.com" in out
+    assert "domain|||cc-api-data.adobe.io" in out
+    assert "domain|||speech.platform.bing.com" in out
+    assert "domain|||s3.amazonaws.com" in out
+    assert not any("firebase" in e and "*" in e.split("|")[-1][1:] for e in out)
+    # The mid-string wildcard's parent must not leak in as a broader entry.
+    assert "domain|||googleapis.com" not in out
+    assert not any(e.endswith(".html") or e.endswith(".js") for e in out)
+
+
+def test_adobe_source_is_optional():
+    src = next(s for s in iw.SOURCES if s.name == "adobe_endpoints")
+    assert src.optional is True
+    assert all(not s.optional for s in iw.SOURCES if s.name != "adobe_endpoints")
+
+
 def test_normalize_cloudflare_dict_of_lists():
     data = {"result": {"ipv4_cidrs": ["192.0.2.0/24"], "ipv6_cidrs": ["2001:db8::/48"]}}
     assert iw.normalize_cloudflare(data) == {"v4|192.0.2.0/24", "v6|2001:db8::/48"}
