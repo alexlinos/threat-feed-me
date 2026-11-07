@@ -38,12 +38,10 @@ def test_aws_slices_per_service(tmp_path):
         "v4|us-east-1|EC2|192.0.2.0/24", "v6|GLOBAL|S3|2001:db8::/40",
         "v4|GLOBAL|S3|198.51.100.0/24"]})
     by_slug = {m["slug"]: m for m in manifest["lists"]}
-    # Per service across all regions, plus per service and region (the
-    # GLOBAL pseudo-region only feeds the all-regions lists).
-    assert set(by_slug) == {"aws-ec2", "aws-s3", "aws-ec2-us-east-1"}
+    # Per service across all regions only; no per-region lists for now.
+    assert set(by_slug) == {"aws-ec2", "aws-s3"}
     assert by_slug["aws-s3"]["entries"] == 2
     assert by_slug["aws-ec2"]["group"] == "All regions"
-    assert by_slug["aws-ec2-us-east-1"]["group"] == "Per region"
     assert by_slug["aws-ec2"]["url"] == \
         "https://factory.example/catalog/aws-ec2.txt"
     assert (out / "aws-ec2.txt").read_text() == "192.0.2.0/24\n"

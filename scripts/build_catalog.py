@@ -21,10 +21,10 @@ Input entries are the canonical strings infra_watch writes
   * ``catalog.json``: {generated_at, vendors: {name: {description, docs}},
     lists: [{slug, name, vendor, group, description, format, entries,
     bytes, url}]}. ``url`` is --base-url joined with the file name;
-    ``group`` is the tab a list sits under on the Applications page (all
-    regions vs per region, Microsoft's endpoint categories; empty for a
-    vendor with one view); ``docs`` links each vendor's own documentation
-    on what to allow.
+    ``group`` is the tab a list sits under on the Applications page
+    (Microsoft's endpoint categories; a vendor with one view has one group
+    or none); ``docs`` links each vendor's own documentation on what to
+    allow.
 
 Slicers are pure functions over the snapshot entry lists so tests can
 exercise them offline against fixtures (repo rule: no network in tests).
@@ -48,7 +48,6 @@ DEFAULT_BASE_URL = ("https://raw.githubusercontent.com/alexlinos/"
 CatalogList = tuple[str, str, str, list[str], str]
 
 ALL_REGIONS = "All regions"
-PER_REGION = "Per region"
 ALL_CATEGORIES = "All categories"
 M365_CATEGORIES = ("Optimize", "Allow", "Default")
 
@@ -62,8 +61,7 @@ _M365_DOCS = "https://learn.microsoft.com/microsoft-365/enterprise/"
 
 # Vendor -> (description, the vendor's own page on what to allow).
 VENDORS: dict[str, tuple[str, str]] = {
-    "AWS": ("Amazon Web Services address ranges per service. Most sites want a"
-            " service across all regions; per-region lists suit narrower rules."
+    "AWS": ("Amazon Web Services address ranges per service, across all regions."
             " AMAZON and EC2 are rentable space." + _RENTABLE,
             "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html"),
     "Microsoft Azure": ("Azure service tags, one list per service across all"
@@ -108,28 +106,19 @@ def _aws_name(service: str) -> str:
 
 
 def slice_aws(entries: list[str]) -> dict[str, CatalogList]:
-    """Per service across all regions, and per service and region (the
-    GLOBAL pseudo-region only appears in the all-regions lists)."""
+    """Per service across all regions. Per service and region was 347 more
+    lists from one snapshot; left out until someone needs a region (maintainer,
+    2026-11-07), like Azure's regional tags."""
     by_service: dict[str, list[str]] = {}
-    by_region: dict[tuple[str, str], list[str]] = {}
     for e in entries:
         parts = e.split("|")
         if len(parts) != 4:
             continue
-        _kind, region, service, prefix = parts
-        by_service.setdefault(service, []).append(prefix)
-        if region and region != "GLOBAL":
-            by_region.setdefault((service, region), []).append(prefix)
-    out = {}
-    for service, prefixes in sorted(by_service.items()):
-        out["aws-" + slugify(service)] = (
-            "AWS", f"AWS {_aws_name(service)}",
-            f"Amazon Web Services {service} ranges, all regions.", prefixes, ALL_REGIONS)
-    for (service, region), prefixes in sorted(by_region.items()):
-        out[slugify(f"aws-{service}-{region}")] = (
-            "AWS", f"AWS {_aws_name(service)} ({region})",
-            f"Amazon Web Services {service} ranges in {region}.", prefixes, PER_REGION)
-    return out
+        by_service.setdefault(parts[2], []).append(parts[3])
+    return {"aws-" + slugify(service): (
+                "AWS", f"AWS {_aws_name(service)}",
+                f"Amazon Web Services {service} ranges, all regions.", prefixes, ALL_REGIONS)
+            for service, prefixes in sorted(by_service.items())}
 
 
 # source name -> (vendor, slug prefix)

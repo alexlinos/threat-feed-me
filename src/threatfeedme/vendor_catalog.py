@@ -8,7 +8,7 @@ This module is the client half:
   * fetch the manifest only (never list data) to render the Applications
     page's catalog: vendors, each with a description and a link to the
     vendor's own documentation on what to allow, and each list in a group
-    (all regions vs per region, Microsoft's endpoint categories);
+    (Microsoft's endpoint categories, for one);
   * a list downloads nothing until the operator toggles it on. Toggling
     on creates the slice 1 application list pointing at the published
     list URL and refreshes it through the ordinary machinery (local
