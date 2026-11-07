@@ -13,6 +13,7 @@ import sys
 import time
 
 import pytest
+import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
@@ -35,15 +36,23 @@ class FakeResp:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
 
+    def iter_content(self, chunk_size=1, decode_unicode=False):
+        for i in range(0, len(self.content), chunk_size):
+            yield self.content[i:i + chunk_size]
+
+    def close(self):
+        pass
+
 
 def transport(bodies: dict, fail_urls=()):
-    """bodies: url -> text. fail_urls raise like a network error."""
+    """bodies: url -> text. fail_urls raise like a network error. Accepts the
+    stream/proxies keywords feed_ingestor.guarded_get passes."""
     calls = []
 
-    def get(url, headers=None, timeout=None):
+    def get(url, headers=None, timeout=None, **kwargs):
         calls.append(url)
         if url in fail_urls:
-            raise RuntimeError("connection refused")
+            raise requests.ConnectionError("connection refused")
         return FakeResp(bodies[url])
 
     get.calls = calls
@@ -59,16 +68,10 @@ def manifest_json(lists):
 
 
 @pytest.fixture(autouse=True)
-def _no_ssrf_dns(monkeypatch):
-    # The guard's own tests live in test_ssrf.py; here the hosts are fake.
-    monkeypatch.setattr(vendor_catalog, "_require_public_url", lambda url: None)
-
-
-@pytest.fixture(autouse=True)
 def _fresh_cache():
-    vendor_catalog._cache.update(at=0.0, doc=None, error=None)
+    vendor_catalog._cache.update(at=0.0, doc=None, error=None, next_try=0.0)
     yield
-    vendor_catalog._cache.update(at=0.0, doc=None, error=None)
+    vendor_catalog._cache.update(at=0.0, doc=None, error=None, next_try=0.0)
 
 
 @pytest.fixture
@@ -86,12 +89,16 @@ def rtr(db, monkeypatch):
     # patching the test's own core silently misses the router's.
     from threatfeedme.routers import applications as r
     monkeypatch.setitem(r.__dict__["core"].__dict__, "db", db)
+    # Seams, not core.config (reading it lazily initializes core).
+    monkeypatch.setitem(r.__dict__, "_allow_private", lambda: False)
+    monkeypatch.setitem(r.__dict__, "_catalog_enabled", lambda: True)
     return r
 
 
 class FakeRequest:
     def __init__(self, headers=None):
         self.headers = headers or {}
+        self.query_params = {}
 
 
 def _small_setup():
@@ -257,3 +264,47 @@ def test_toggle_off_a_factory_retired_list(db):
     out = vendor_catalog.set_enabled(db, "old-list", False, get=transport(bodies))
     assert out["outcome"] == "disabled"
     assert db.get_application_list("old-list")["enabled"] == 0
+
+
+# ------------------------------------------------- 2.7 catalog hardening --
+
+def test_list_urls_must_sit_beside_the_manifest(db):
+    # Whoever controls the manifest still can't point installs elsewhere.
+    doc = json.loads(manifest_json([("aws-ec2", 2)]))
+    doc["lists"].append({"slug": "evil", "name": "evil", "vendor": "v",
+                         "url": "https://elsewhere.example/catalog/evil.txt"})
+    doc["lists"].append({"slug": "sneaky", "name": "sneaky", "vendor": "v",
+                         "url": "https://factory.example/other/sneaky.txt"})
+    got = vendor_catalog.get_catalog(db, get=transport({MANIFEST_URL: json.dumps(doc)}))
+    assert [e["slug"] for e in got["lists"]] == ["aws-ec2"]
+
+
+def test_a_failed_fetch_is_remembered_not_retried_per_page_load(db):
+    # A network that can't reach GitHub costs one timeout, not one per load.
+    get = transport({}, fail_urls={MANIFEST_URL})
+    first = vendor_catalog.get_catalog(db, get=get)
+    second = vendor_catalog.get_catalog(db, get=get)
+    assert get.calls.count(MANIFEST_URL) == 1
+    assert first["error"] == second["error"] == "GitHub couldn't be reached from this server"
+
+
+def test_switched_off_catalog_fetches_nothing(db):
+    get = transport({})
+    view = vendor_catalog.catalog_view(db, get=get, enabled=False)
+    assert view["disabled"] and view["catalog"] == [] and get.calls == []
+    with pytest.raises(ValueError):
+        vendor_catalog.set_enabled(db, "aws-ec2", True, get=get, catalog_enabled=False)
+
+
+def test_vendor_docs_and_groups_survive_cleaning(db):
+    doc = json.loads(manifest_json([("aws-ec2", 2)]))
+    doc["lists"][0]["group"] = "All regions"
+    doc["vendors"] = {
+        "TestVendor": {"description": "Ranges for the test cloud.",
+                       "docs": "https://docs.vendor.example/ip-ranges"},
+        "Sneaky": {"description": "x", "docs": "javascript:alert(1)"},
+    }
+    view = vendor_catalog.catalog_view(db, get=transport({MANIFEST_URL: json.dumps(doc)}))
+    assert view["catalog"][0]["group"] == "All regions"
+    assert view["vendors"]["TestVendor"]["docs"] == "https://docs.vendor.example/ip-ranges"
+    assert view["vendors"]["Sneaky"]["docs"] == ""     # only https links are kept

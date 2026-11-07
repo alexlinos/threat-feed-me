@@ -46,6 +46,12 @@ def _allow_private() -> bool:
     return bool((core.config.get('safety', {}) or {}).get('allow_private_feed_urls', False))
 
 
+def _catalog_enabled() -> bool:
+    """app_catalog.enabled (default on): off stops the manifest fetch, for
+    air-gapped installs and anyone who doesn't want the GitHub request."""
+    return bool((core.config.get('app_catalog', {}) or {}).get('enabled', True))
+
+
 def _validate(req: ApplicationListRequest) -> None:
     if not applications.valid_name(req.name):
         raise HTTPException(status_code=400,
@@ -175,14 +181,16 @@ def get_catalog(_=Depends(require_auth)):
     # Declared before /api/applications/{name} so "catalog" is not read as
     # a list name. Renders from the published manifest only; no list data
     # is downloaded to answer this.
-    return vendor_catalog.catalog_view(core.db)
+    return vendor_catalog.catalog_view(core.db, enabled=_catalog_enabled())
 
 
 @router.post("/api/applications/catalog/{slug}/toggle")
 def toggle_catalog(slug: str, req: CatalogToggleRequest,
                    _=Depends(require_auth), _csrf=Depends(csrf_check)):
     try:
-        summary = vendor_catalog.set_enabled(core.db, slug, req.enabled)
+        summary = vendor_catalog.set_enabled(core.db, slug, req.enabled,
+                                             allow_private=_allow_private(),
+                                             catalog_enabled=_catalog_enabled())
     except KeyError:
         raise HTTPException(status_code=404, detail="Not in the catalog")
     except ValueError as exc:
