@@ -620,14 +620,22 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
 .cat-tab:hover { color:var(--ink); }
 .cat-tab.active { color:var(--accent-hi); border-bottom-color:var(--accent-hi); }
 .cat-filter { width:100%; max-width:320px; padding:8px 10px; margin-bottom:10px; box-sizing:border-box; font-size:13.5px; }
-.cat-table th:nth-child(2), .cat-table td:nth-child(2) { text-align:right; white-space:nowrap; font-family:var(--mono); font-size:13px; }
-.cat-table th:last-child, .cat-table td:last-child { width:60px; text-align:center; }
+/* fixed layout: a URL box's intrinsic width must not push the table past
+   its panel (it did, and the page scrolled sideways at ~820px) */
+.cat-table { table-layout:fixed; }
+.cat-table th:nth-child(2), .cat-table td:nth-child(2) { width:84px; text-align:right; white-space:nowrap; font-family:var(--mono); font-size:13px; }
+.cat-table th:last-child, .cat-table td:last-child { width:56px; text-align:center; }
+.cat-table td:first-child { overflow-wrap:anywhere; }
+.cat-detail .url-row { min-width:0; }
+.cat-detail .url-box { min-width:0; width:100%; }
 .cat-desc { color:var(--dim); font-size:12.5px; margin-top:2px; font-weight:400; }
 .cat-table tr.cat-on td { border-bottom:0; }
 .cat-table tr.cat-detail td { padding-top:0; text-align:left; width:auto; }
 .cat-status { margin:6px 0 0; font-size:12.5px; }
 .cat-detail .ub { max-width:640px; }
-@media (max-width:760px) {
+/* Below ~1000px the panel beside a 230px vendor column gets too narrow for
+   URL rows; the vendor list becomes a dropdown above the panel instead. */
+@media (max-width:1000px) {
   .cat { grid-template-columns:1fr; gap:10px; }
   .cat-nav ul { display:none; }
   .cat-select { display:block; }

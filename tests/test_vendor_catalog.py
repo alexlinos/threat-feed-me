@@ -303,6 +303,22 @@ def test_manifest_fetch_follows_the_private_url_policy(db):
     assert seen == [{"http": None, "https": None, "all": None}, None]
 
 
+def test_own_list_with_a_catalog_name_is_not_taken_over(db):
+    # Found switching every catalog list on: a custom list already called
+    # "aws-ec2" was silently reused, so the switch showed "on" while the
+    # operator's own source was being served under the catalog's name.
+    db.add_application_list("aws-ec2", "https://mine.example/ranges.txt",
+                            "list", "", 3600, 8, 20, 50.0)
+    _, bodies = _small_setup()
+    get = transport(bodies)
+    row = next(r for r in vendor_catalog.catalog_view(db, get=get)["catalog"]
+               if r["slug"] == "aws-ec2")
+    assert row["conflict"] and not row["adopted"] and not row["enabled"]
+    with pytest.raises(vendor_catalog.NameTakenError):
+        vendor_catalog.set_enabled(db, "aws-ec2", True, get=get)
+    assert db.get_application_list("aws-ec2")["source_url"] == "https://mine.example/ranges.txt"
+
+
 def test_switched_off_catalog_fetches_nothing(db):
     get = transport({})
     view = vendor_catalog.catalog_view(db, get=get, enabled=False)

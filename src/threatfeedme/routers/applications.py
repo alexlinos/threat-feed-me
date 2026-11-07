@@ -194,6 +194,8 @@ def toggle_catalog(slug: str, req: CatalogToggleRequest,
                                              catalog_enabled=_catalog_enabled())
     except KeyError:
         raise HTTPException(status_code=404, detail="Not in the catalog")
+    except vendor_catalog.NameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return {"success": summary.get("outcome") != "error", **summary}

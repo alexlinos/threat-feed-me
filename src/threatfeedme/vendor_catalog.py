@@ -54,6 +54,11 @@ _cache: Dict = {"at": 0.0, "doc": None, "error": None, "next_try": 0.0}
 _EMPTY = {"generated_at": "", "lists": [], "vendors": {}}
 
 
+class NameTakenError(Exception):
+    """A catalog list's name is already used by one of the operator's own
+    lists (a different source URL)."""
+
+
 def _text(value) -> str:
     return value[:_MAX_TEXT] if isinstance(value, str) else ""
 
@@ -168,13 +173,19 @@ def catalog_view(db, get: Callable = requests.get, enabled: bool = True,
     rows = []
     for entry in doc["lists"]:
         local = db.get_application_list(entry["slug"])
+        # A list of the operator's own under the same name is not this
+        # catalog list: it must not show as "on" for it (found switching
+        # every list on, 2026-11-07).
+        conflict = bool(local and local["source_url"] != entry["url"])
+        mine = None if conflict else local
         rows.append({
             **entry,
-            "adopted": local is not None,
-            "enabled": bool(local and local["enabled"]),
-            "local_entries": local["entry_count"] if local else None,
-            "last_status": local["last_status"] if local else None,
-            "pending": bool(local and db.get_pending(entry["slug"])),
+            "conflict": conflict,
+            "adopted": mine is not None,
+            "enabled": bool(mine and mine["enabled"]),
+            "local_entries": mine["entry_count"] if mine else None,
+            "last_status": mine["last_status"] if mine else None,
+            "pending": bool(mine and db.get_pending(entry["slug"])),
         })
     return {"generated_at": doc["generated_at"], "error": doc["error"],
             "disabled": bool(doc.get("disabled")), "vendors": doc.get("vendors", {}),
@@ -202,7 +213,13 @@ def set_enabled(db, slug: str, enabled: bool, get: Callable = requests.get,
         if doc["error"] and not doc["lists"]:
             raise ValueError(f"catalog unavailable: {doc['error']}")
         raise KeyError(slug)
-    if db.get_application_list(slug) is None:
+    existing = db.get_application_list(slug)
+    if existing is not None and existing["source_url"] != entry["url"]:
+        # Switching it on would silently serve the operator's own source
+        # under the catalog's name.
+        raise NameTakenError(f"one of your lists is already called '{slug}'; "
+                             "rename or delete it to use the catalog's list")
+    if existing is None:
         db.add_application_list(
             slug, entry["url"], "list", "",
             applications.DEFAULT_UPDATE_INTERVAL,

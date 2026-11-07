@@ -1702,9 +1702,12 @@ function catRows(rows) {
         let html = '<tr' + (r.enabled ? ' class="cat-on"' : '') + '><td><b>' + esc(r.name) + '</b>' +
             (r.description ? '<div class="cat-desc">' + esc(r.description) + '</div>' : '') + '</td>' +
             '<td>' + (count ? count.toLocaleString() : '—') + '</td>' +
-            '<td><label class="switch" title="' + (r.enabled ? 'Switch off: stop fetching and serving' : 'Switch on: fetch and serve this list') + '">' +
-            '<input type="checkbox" data-slug="' + esc(r.slug) + '"' + (r.enabled ? ' checked' : '') +
-            ' aria-label="' + esc(r.name) + '"><span></span></label></td></tr>';
+            (r.conflict
+                ? '<td><span class="muted" title="One of your lists is already called ' + esc(r.slug) +
+                  '; rename or delete it to use this one">name in use</span></td></tr>'
+                : '<td><label class="switch" title="' + (r.enabled ? 'Switch off: stop fetching and serving' : 'Switch on: fetch and serve this list') + '">' +
+                  '<input type="checkbox" data-slug="' + esc(r.slug) + '"' + (r.enabled ? ' checked' : '') +
+                  ' aria-label="' + esc(r.name) + '"><span></span></label></td></tr>');
         if (r.enabled) {
             html += '<tr class="cat-detail"><td colspan="3">' + appUrlCell(r.slug) +
                 '<p class="cat-status">' + appStatus(r) + '</p>' +
@@ -1767,7 +1770,9 @@ function renderApplications(rows) {
     }
     // Catalog lists live in the catalog above (switch, URL, builder); this
     // table is the operator's own. Until the catalog loads, show everything.
-    const catalogSlugs = new Set(((catData && catData.catalog) || []).map(r => r.slug));
+    // Only lists that really are the catalog's (same source); a list of the
+    // operator's own that merely shares a name stays here.
+    const catalogSlugs = new Set(((catData && catData.catalog) || []).filter(r => r.adopted).map(r => r.slug));
     const own = rows.filter(r => !catalogSlugs.has(r.name));
     if (!own.length) {
         tb.innerHTML = '<tr><td colspan="6" class="muted">None yet. Add one below: any URL that serves a plain list or JSON.</td></tr>';
