@@ -22,6 +22,12 @@ def _epoch(tick: str) -> int:
     return int((t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp())
 
 
+def _utcnow_iso_days_ago(days: int) -> str:
+    """ISO stamp `days` in the past, for retention cutoffs."""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
 def _utcnow_iso() -> str:
     """Timezone-aware UTC timestamp as an ISO string."""
     return datetime.now(timezone.utc).isoformat()
@@ -253,6 +259,67 @@ class Database:
                     reason TEXT NOT NULL DEFAULT '',
                     added_by TEXT NOT NULL DEFAULT 'dashboard',
                     added_at TEXT NOT NULL
+                )
+            """)
+
+            # Application lists (issue #26, 2.6 slice 1): vendor allow-lists
+            # served at /lists/*, POLICY NOT INTEL. Own tables keep them
+            # structurally out of the indicator corpus, votes, telemetry and
+            # the predictor — no query in those modules joins these names.
+            # Idempotent CREATEs, so upgrades pick them up with no stamp.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS application_lists (
+                    name TEXT PRIMARY KEY,
+                    source_url TEXT NOT NULL,
+                    format TEXT NOT NULL DEFAULT 'list',
+                    filter_expr TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    update_interval INTEGER NOT NULL DEFAULT 21600,
+                    min_v4_prefix INTEGER NOT NULL DEFAULT 8,
+                    min_v6_prefix INTEGER NOT NULL DEFAULT 20,
+                    change_threshold_pct REAL NOT NULL DEFAULT 50.0,
+                    last_refresh_at TEXT,
+                    last_status TEXT,
+                    http_etag TEXT,
+                    entry_count INTEGER NOT NULL DEFAULT 0,
+                    entry_version INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS application_list_entries (
+                    list_name TEXT NOT NULL,
+                    entry TEXT NOT NULL,
+                    PRIMARY KEY (list_name, entry)
+                ) WITHOUT ROWID
+            """)
+            # Per-refresh +/- diff, kept 30 days (prune_application_history):
+            # "why did Teams break yesterday" is the first question anyone
+            # asks of an allow-list, and it is unanswerable without a diff.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS application_list_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    list_name TEXT NOT NULL,
+                    refreshed_at TEXT NOT NULL,
+                    added INTEGER NOT NULL,
+                    removed INTEGER NOT NULL,
+                    count_after INTEGER NOT NULL,
+                    added_sample TEXT NOT NULL DEFAULT '[]',
+                    removed_sample TEXT NOT NULL DEFAULT '[]'
+                )
+            """)
+            # A refresh the change guard held: last approved version keeps
+            # serving until the operator approves or discards this blob.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS application_list_pending (
+                    list_name TEXT PRIMARY KEY,
+                    received_at TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    added INTEGER NOT NULL,
+                    removed INTEGER NOT NULL,
+                    added_sample TEXT NOT NULL DEFAULT '[]',
+                    removed_sample TEXT NOT NULL DEFAULT '[]',
+                    entries TEXT NOT NULL
                 )
             """)
 
@@ -1402,6 +1469,178 @@ class Database:
                 value=row['value'], kind=row['kind'], reason=row['reason'],
                 added_by=row['added_by'], added_at=row['added_at'],
             ) for row in cur.fetchall()]
+
+    # ---- Application lists (issue #26). Deliberately no coupling to the
+    # indicator/vote/telemetry side: these methods only touch application_*
+    # tables, and nothing outside applications.py and its router calls them.
+
+    def add_application_list(self, name: str, source_url: str, fmt: str = "list",
+                             filter_expr: str = "", update_interval: int = 21600,
+                             min_v4_prefix: int = 8, min_v6_prefix: int = 20,
+                             change_threshold_pct: float = 50.0) -> None:
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO application_lists (name, source_url, format, filter_expr,"
+                " enabled, update_interval, min_v4_prefix, min_v6_prefix,"
+                                " change_threshold_pct, created_at) VALUES (?,?,?,?,1,?,?,?,?,?)",
+                (name, source_url, fmt, filter_expr, int(update_interval),
+                 int(min_v4_prefix), int(min_v6_prefix),
+                 float(change_threshold_pct), _utcnow_iso()))
+
+    def update_application_list(self, name: str, fields: Dict) -> bool:
+        """Partial update of the operator-settable columns only."""
+        allowed = {"source_url", "format", "filter_expr", "enabled",
+                   "update_interval", "min_v4_prefix", "min_v6_prefix",
+                   "change_threshold_pct"}
+        cols = {k: v for k, v in fields.items() if k in allowed}
+        if not cols:
+            return False
+        sets = ", ".join(f"{k} = ?" for k in cols)  # keys are from `allowed`, not input
+        with self._cursor() as cur:
+            cur.execute(
+                f"UPDATE application_lists SET {sets} WHERE name = ?",
+                (*cols.values(), name))
+            return cur.rowcount > 0
+
+    def delete_application_list(self, name: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM application_lists WHERE name = ?", (name,))
+            cur.execute("DELETE FROM application_list_entries WHERE list_name = ?", (name,))
+            cur.execute("DELETE FROM application_list_history WHERE list_name = ?", (name,))
+            cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+            return cur.rowcount > 0
+
+    def get_application_list(self, name: str) -> Optional[Dict]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM application_lists WHERE name = ?", (name,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def get_application_lists(self, enabled_only: bool = False) -> List[Dict]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM application_lists"
+                        + (" WHERE enabled = 1" if enabled_only else "")
+                        + " ORDER BY name")
+            return [dict(r) for r in cur.fetchall()]
+
+    def set_application_list_state(self, name: str, status: str,
+                                   etag: Optional[str] = None) -> None:
+        with self._cursor() as cur:
+            if etag is not None:
+                cur.execute(
+                    "UPDATE application_lists SET last_status=?, last_refresh_at=?,"
+                    " http_etag=? WHERE name=?",
+                    (status, _utcnow_iso(), etag, name))
+            else:
+                cur.execute(
+                    "UPDATE application_lists SET last_status=?, last_refresh_at=?"
+                    " WHERE name=?", (status, _utcnow_iso(), name))
+
+    def get_entries(self, name: str) -> List[str]:
+        with self._cursor() as cur:
+            cur.execute("SELECT entry FROM application_list_entries WHERE list_name = ?"
+                        " ORDER BY entry", (name,))
+            return [r["entry"] for r in cur.fetchall()]
+
+    def replace_entries(self, name: str, entries: List[str], added: int, removed: int,
+                        added_sample: List[str], removed_sample: List[str]) -> None:
+        """Swap the served set and record the diff, atomically. A half-swapped
+        set would serve a mix of two vendor versions, so the entries write,
+        the counter, the version bump and the history row share one txn."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM application_list_entries WHERE list_name = ?", (name,))
+            cur.executemany(
+                "INSERT OR IGNORE INTO application_list_entries (list_name, entry)"
+                " VALUES (?,?)", [(name, e) for e in entries])
+            cur.execute(
+                "UPDATE application_lists SET entry_count=?, entry_version=entry_version+1"
+                " WHERE name=?", (len(entries), name))
+            cur.execute(
+                "INSERT INTO application_list_history (list_name, refreshed_at, added,"
+                " removed, count_after, added_sample, removed_sample)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (name, _utcnow_iso(), added, removed, len(entries),
+                 json.dumps(added_sample), json.dumps(removed_sample)))
+
+    def get_history(self, name: str, limit: int = 50) -> List[Dict]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM application_list_history WHERE list_name = ?"
+                        " ORDER BY refreshed_at DESC, id DESC LIMIT ?", (name, limit))
+            rows = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["added_sample"] = json.loads(d["added_sample"])
+                d["removed_sample"] = json.loads(d["removed_sample"])
+                rows.append(d)
+            return rows
+
+    def prune_application_history(self, days: int, keep_rows: int) -> int:
+        """Drop history older than `days`, but never the newest `keep_rows`
+        per list (audit stays useful on a vendor that never changes)."""
+        cutoff = _utcnow_iso_days_ago(days)
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM application_list_history WHERE refreshed_at < ?"
+                " AND id NOT IN (SELECT id FROM ("
+                "   SELECT id, ROW_NUMBER() OVER (PARTITION BY list_name"
+                "     ORDER BY refreshed_at DESC, id DESC) rn FROM application_list_history"
+                " ) WHERE rn <= ?)", (cutoff, keep_rows))
+            return cur.rowcount
+
+    def add_pending(self, name: str, entries: List[str], added_sample: List[Dict],
+                    removed_sample: List[Dict], reason: str,
+                    added_count: Optional[int] = None,
+                    removed_count: Optional[int] = None) -> None:
+        # The counts are the diff's true size; the samples are capped for
+        # display. Defaulting to the sample length would record the cap
+        # (500) as the count on any larger diff, and approve_pending writes
+        # these numbers into the permanent history.
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO application_list_pending"
+                " (list_name, received_at, reason, added, removed,"
+                "  added_sample, removed_sample, entries) VALUES (?,?,?,?,?,?,?,?)",
+                (name, _utcnow_iso(), reason,
+                 len(added_sample) if added_count is None else added_count,
+                 len(removed_sample) if removed_count is None else removed_count,
+                 json.dumps(added_sample), json.dumps(removed_sample),
+                 json.dumps(entries)))
+
+    def get_pending(self, name: str) -> Optional[Dict]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM application_list_pending WHERE list_name = ?", (name,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["entries"] = json.loads(d["entries"])
+            d["added_sample"] = json.loads(d["added_sample"])
+            d["removed_sample"] = json.loads(d["removed_sample"])
+            return d
+
+    def approve_pending(self, name: str) -> Optional[Dict]:
+        """Serve the held version. The approved swap records history like a
+        normal refresh so the 30-day diff stays complete."""
+        pending = self.get_pending(name)
+        if pending is None:
+            return None
+        self.replace_entries(name, pending["entries"], pending["added"],
+                             pending["removed"],
+                             [s["e"] for s in pending["added_sample"]],
+                             [s["e"] for s in pending["removed_sample"]])
+        with self._cursor() as cur:
+            cur.execute("UPDATE application_lists SET last_status='approved held refresh'"
+                        " WHERE name=?", (name,))
+            cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+        return pending
+
+    def reject_pending(self, name: str) -> bool:
+        """Discard the held version and stop re-holding on every poll: the
+        baseline stays the last approved set and the next refresh diffs
+        against it again."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+            return cur.rowcount > 0
 
     def touch_serve_stamp(self) -> None:
         """Bump the serve stamp so cached feed bodies (and their ETags) rebuild

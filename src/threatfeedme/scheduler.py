@@ -241,6 +241,16 @@ def _scheduler_loop():
             _maybe_check_updates()
         except Exception as e:
             logger.debug(f"[updates] check skipped: {e}")
+        # Application lists (issue #26): their own cadence per list, their
+        # own tables; deliberately outside the feed refresh lock because
+        # they cannot touch the corpus, the votes or the served threat
+        # lists. A vendor error is per-list status, never a dead tick.
+        try:
+            from threatfeedme import applications as _apps
+            _apps.refresh_due(core.db)
+        except Exception as e:
+            logger.error(f"Scheduler application-list pass failed: {e}")
+
         try:
             due = pipeline.due_feeds(core.db, _refresh_interval_minutes() * 60)
         except Exception as e:  # never let a bad tick kill the scheduler thread
