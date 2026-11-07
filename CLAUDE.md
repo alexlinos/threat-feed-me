@@ -1008,12 +1008,15 @@ A review of v2.7.0 (PR #27, application lists) found two holes, both fixed:
   is thread-local and only `FeedIngestor.fetch_feed` arms it; 2.7.0's
   `applications.fetch` assumed a "process-wide" guard and armed nothing, so
   a list URL could read cloud metadata or a LAN host, and the refresh
-  response echoed rejected values back. Any new fetch path must do what
-  `applications.fetch` now does: `_require_public_url` early, arm
-  `_ssrf_guard` for the request, pass `_NO_PROXIES`, stream under a byte
-  cap, all keyed on `safety.allow_private_feed_urls`. SSRF refusals are now
-  `UnsafeURLError` (a RuntimeError subclass), so a caller that treats
-  RuntimeError as a bug can still record a refusal as status.
+  response echoed rejected values back. Any new fetch path outside
+  FeedIngestor calls `feed_ingestor.guarded_get(url, allow_private=...)`
+  (arms the guard, drops env proxies, streams) and reads the body with
+  `_read_capped_bytes(resp, label, max_bytes)`; `allow_private` is
+  `safety.allow_private_feed_urls`. SSRF refusals are `UnsafeURLError` and
+  oversized bodies `ResponseTooLargeError` (both RuntimeError subclasses),
+  so a caller that treats RuntimeError as a bug can record them as status.
+  Tests: `test_real_fetch_*` drive the real urllib3 connect with the socket
+  stubbed, the pattern for proving a guard without touching the network.
 - **The allow-list gate repeated the 2.4.19 supernet bypass**: `is_private`
   on a network needs both ends private, so `172.0.0.0/8` passed. `_net_ok`
   now overlaps `safety._SPECIAL_V4/_V6`, like the threat-side filter.

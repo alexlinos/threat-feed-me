@@ -52,7 +52,7 @@ class FakeResp:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
 
-    def iter_content(self, chunk_size=1):
+    def iter_content(self, chunk_size=1, decode_unicode=False):
         for i in range(0, len(self.content), chunk_size):
             yield self.content[i:i + chunk_size]
 
@@ -273,13 +273,34 @@ def test_fetch_arms_ssrf_guard_and_drops_env_proxies(db):
     assert not getattr(feed_ingestor._ssrf_guard, "active", False)   # restored
 
 
-def test_refresh_refuses_private_url_before_any_request(db, monkeypatch):
+def _no_socket(monkeypatch):
+    """The real requests/urllib3 path down to the connect, with the connect
+    itself stubbed: the guard must refuse before it, and if it doesn't the
+    test fails loudly instead of touching the network."""
+    def connect(address, *a, **kw):
+        raise AssertionError(f"would have connected to {address}")
+    monkeypatch.setattr(feed_ingestor, "_original_create_connection", connect)
+
+
+def test_real_fetch_to_private_address_is_refused_at_connect(db, monkeypatch):
+    # End to end through requests and urllib3 (no injected get): this is the
+    # check that also covers every redirect hop.
+    _no_socket(monkeypatch)
     monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda h: ["169.254.169.254"])
-    get = fake_get_factory("secret\n")
-    s = applications.refresh_list(db, "acme", get=get)
+    db.update_application_list("acme", {"source_url": "http://metadata.example/latest/"})
+    s = applications.refresh_list(db, "acme")
     assert s["outcome"] == "error" and "non-public" in s["error"]
-    assert get.calls == []                       # nothing was requested
     assert not getattr(feed_ingestor._ssrf_guard, "active", False)
+
+
+def test_real_fetch_reaches_connect_when_private_is_allowed(db, monkeypatch):
+    # The control for the test above: with the guard off the same request
+    # gets as far as the (stubbed) connect, so that test can't pass by luck.
+    _no_socket(monkeypatch)
+    monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda h: ["10.0.0.5"])
+    db.update_application_list("acme", {"source_url": "http://intranet.example/list"})
+    with pytest.raises(AssertionError, match="would have connected"):
+        applications.refresh_list(db, "acme", allow_private=True)
 
 
 def test_refresh_allow_private_leaves_guard_off(db, monkeypatch):
@@ -295,8 +316,21 @@ def test_refresh_size_cap_is_enforced_while_streaming(db, monkeypatch):
     monkeypatch.setattr(applications, "MAX_BODY_BYTES", 64)
     get = fake_get_factory("198.51.100.1\n" * 20)        # 260 bytes
     s = applications.refresh_list(db, "acme", get=get)
-    assert s["outcome"] == "error" and "size cap" in s["error"]
+    assert s["outcome"] == "error" and "exceeded 64 bytes" in s["error"]
     assert db.get_entries("acme") == []
+
+
+def test_scheduler_passes_the_ssrf_policy(db, monkeypatch):
+    from threatfeedme import scheduler
+    seen = []
+    monkeypatch.setitem(core.__dict__, "db", db)
+    monkeypatch.setattr(applications, "refresh_due",
+                        lambda d, allow_private=False: seen.append(allow_private))
+    for flag in (False, True):
+        monkeypatch.setitem(core.__dict__, "config",
+                            {"safety": {"allow_private_feed_urls": flag}})
+        scheduler._refresh_application_lists()
+    assert seen == [False, True]
 
 
 def test_prune_keeps_recent_rows(db):
@@ -401,6 +435,21 @@ def test_api_add_refuses_internal_url(rtr, db, monkeypatch):
             name="meta", url="http://metadata.example/latest/"), _=None, _csrf=None)
     assert e.value.status_code == 400 and "non-public" in e.value.detail
     assert db.get_application_list("meta") is None
+
+
+def test_api_add_malformed_host_is_saved_not_500(rtr, db, monkeypatch):
+    # Only an SSRF refusal is a 400; a host that can't be resolved or parsed
+    # is stored and reports its error at fetch time, as on the feeds page.
+    from threatfeedme.schemas import ApplicationListRequest
+
+    def idna_fail(host):
+        raise UnicodeError("encoding with 'idna' codec failed (label empty)")
+    monkeypatch.setattr(feed_ingestor, "_host_addresses", idna_fail)
+    rtr.add_application(ApplicationListRequest(name="dots", url="http://a..b/x"),
+                        _=None, _csrf=None)
+    rtr.add_application(ApplicationListRequest(name="v6", url="http://[::1/x"),
+                        _=None, _csrf=None)   # urlsplit raises ValueError
+    assert db.get_application_list("dots") and db.get_application_list("v6")
 
 
 def test_csrf_enforced_over_http(db, monkeypatch):  # setitem, see rtr

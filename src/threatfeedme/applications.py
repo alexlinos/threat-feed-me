@@ -36,8 +36,8 @@ from urllib.parse import urlparse
 import requests
 
 from threatfeedme.domains import is_valid_domain
-from threatfeedme.feed_ingestor import (_NO_PROXIES, UnsafeURLError,
-                                        _require_public_url, _ssrf_guard)
+from threatfeedme.feed_ingestor import (ResponseTooLargeError, UnsafeURLError,
+                                        _read_capped_bytes, guarded_get)
 from threatfeedme.safety import _SPECIAL_V4, _SPECIAL_V6
 
 logger = logging.getLogger(__name__)
@@ -236,41 +236,26 @@ def fetch(url: str, etag: Optional[str] = None,
           allow_private: bool = False) -> Tuple[Optional[str], Optional[str]]:
     """Conditional GET. Returns (body, new_etag), or (None, etag) on 304.
 
-    SSRF policy, same as a feed fetch (safety.allow_private_feed_urls): an
-    early public-URL check for a clear error, then feed_ingestor's
-    connect-time guard armed for this thread, which is the enforcing check
-    and covers every redirect hop. The guard is thread-local and only
-    FeedIngestor arms it, so a fetch that does not arm it itself is not
-    guarded at all: 2.7.0 shipped exactly that, and a list URL could read
-    cloud metadata or any LAN host. Env proxies are off while guarded (the
-    guard would otherwise pin the proxy's address), and the body is read
-    under a running byte cap instead of buffered whole first.
+    SSRF policy, same as a feed fetch (safety.allow_private_feed_urls),
+    through feed_ingestor.guarded_get: the connect-time guard armed for the
+    request, env proxies off, the body streamed under a running byte cap.
+    2.7.0 called requests.get directly and assumed a process-wide guard;
+    the guard is thread-local and only armed on request, so list URLs could
+    read cloud metadata or any LAN host.
     """
     headers = {"User-Agent": USER_AGENT}
     if etag:
         headers["If-None-Match"] = etag
-    if not allow_private:
-        _require_public_url(url)
-    guard_was = getattr(_ssrf_guard, "active", False)
-    _ssrf_guard.active = not allow_private
+    resp = guarded_get(url, allow_private=allow_private, get=get,
+                       headers=headers, timeout=60)
     try:
-        resp = get(url, headers=headers, timeout=60, stream=True,
-                   proxies=None if allow_private else _NO_PROXIES)
-        try:
-            resp.raise_for_status()
-            if resp.status_code == 304:
-                return None, etag
-            chunks, total = [], 0
-            for chunk in resp.iter_content(chunk_size=65536):
-                total += len(chunk)
-                if total > MAX_BODY_BYTES:
-                    raise ValueError("response over size cap")
-                chunks.append(chunk)
-        finally:
-            resp.close()
+        resp.raise_for_status()
+        if resp.status_code == 304:
+            return None, etag
+        raw = _read_capped_bytes(resp, url, MAX_BODY_BYTES)
     finally:
-        _ssrf_guard.active = guard_was
-    return b"".join(chunks).decode("utf-8", errors="replace"), resp.headers.get("ETag")
+        resp.close()
+    return raw.decode("utf-8", errors="replace"), resp.headers.get("ETag")
 
 
 # --------------------------------------------------------------------------
@@ -345,11 +330,11 @@ def refresh_list(db, name: str, get: Callable = requests.get,
             summary["status_note"] = f"{len(rejected)} rejected ({sample})"
             db.set_application_list_state(name, status=f"ok ({len(rejected)} rejected)")
         return summary
-    # An SSRF refusal (early check or the connect-time guard) is a per-list
-    # status like any other vendor error, not a 500. Other RuntimeErrors are
-    # bugs and stay loud.
+    # An SSRF refusal or an oversized body is a per-list status like any
+    # other vendor error, not a 500. Other RuntimeErrors are bugs and stay
+    # loud.
     except (requests.RequestException, ValueError, KeyError, TypeError, OSError,
-            UnsafeURLError) as exc:
+            UnsafeURLError, ResponseTooLargeError) as exc:
         logger.warning("[applications] refresh of %s failed: %s", name, exc)
         db.set_application_list_state(name, status=f"error: {str(exc)[:200]}")
         summary.update(outcome="error", error=str(exc)[:300])

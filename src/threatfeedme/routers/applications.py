@@ -18,7 +18,6 @@ import hashlib
 import logging
 from typing import Optional
 
-import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
@@ -56,13 +55,15 @@ def _validate(req: ApplicationListRequest) -> None:
     # Early SSRF feedback, as on the feeds page: an internal or metadata URL
     # is refused with a clear reason instead of being stored. Not the
     # enforcing check (applications.fetch arms the connect-time guard); an
-    # unresolvable host is accepted and reports its error when fetched.
+    # unresolvable or malformed host (DNS failure, an IDNA-invalid label, a
+    # bad IPv6 literal) is accepted and reports its error when fetched, as
+    # on the feeds page; only a refusal is a 400.
     if not _allow_private():
         try:
             _require_public_url(req.url)
         except UnsafeURLError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        except requests.exceptions.ConnectionError:
+        except Exception:
             pass
     if req.format not in ("list", "json"):
         raise HTTPException(status_code=400, detail="Format is 'list' or 'json'")

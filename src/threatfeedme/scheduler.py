@@ -208,6 +208,16 @@ def start_refresh_async(only: Optional[List[str]] = None) -> bool:
     return True
 
 
+def _refresh_application_lists() -> None:
+    """The application-list pass, under the same SSRF policy as feeds
+    (safety.allow_private_feed_urls). Its own function so a test can check
+    the policy reaches refresh_due without running the loop."""
+    from threatfeedme import applications as _apps
+    safety_cfg = core.config.get('safety', {}) or {}
+    _apps.refresh_due(core.db, allow_private=bool(
+        safety_cfg.get('allow_private_feed_urls', False)))
+
+
 def _scheduler_loop():
     """Background loop: on each short tick, refresh only the feeds that are due
     per their individual update_interval (Emerging Threats every 12h, hourly
@@ -246,10 +256,7 @@ def _scheduler_loop():
         # they cannot touch the corpus, the votes or the served threat
         # lists. A vendor error is per-list status, never a dead tick.
         try:
-            from threatfeedme import applications as _apps
-            safety_cfg = core.config.get('safety', {}) or {}
-            _apps.refresh_due(core.db, allow_private=bool(
-                safety_cfg.get('allow_private_feed_urls', False)))
+            _refresh_application_lists()
         except Exception as e:
             logger.error(f"Scheduler application-list pass failed: {e}")
 
