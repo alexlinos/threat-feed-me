@@ -1617,7 +1617,9 @@ function renderApplications(rows) {
             '<td>' + esc(r.last_refresh_at || '—') + '</td>' +
             '<td>' + statusCell + '</td>' +
             '<td><input class="url-box" type="text" readonly value="' + esc(url) + '" onclick="this.select()"></td>' +
-            '<td>' + actions + '</td></tr>';
+            '<td>' + actions + '</td></tr>' +
+            '<tr class="ub-tr"><td colspan="6">' +
+            ubBody(location.origin + '/lists/' + encodeURIComponent(r.name), 'app') + '</td></tr>';
     }).join('');
 }
 async function appRefresh(name) {
@@ -1643,6 +1645,215 @@ function appMsg(t) {
     const el = document.getElementById('apps-msg');
     if (el) el.textContent = t;
 }
+
+// ---- URL builder: "which firewall?" -> the exact list URL --------------------
+// One component under every block-list card and every application list
+// (<details class="ub" data-ub="ip|domain|app" data-base="…/feeds/high">).
+// A preset sets the options a firewall object needs; touching any option
+// afterwards makes it Custom. It only composes options the server accepts
+// (/feeds: family, hosts, limit; /lists: also kind and wildcards) and reads
+// the live size from X-Entry-Count with ?limit=1, sending X-TFM-Probe so the
+// probe is not recorded as a poll (that line must only ever show firewalls).
+const UB_FORTIGATE_CAP = 131000;   // entries per connector on mid-range models
+const UB_PRESETS = {
+    ip: [
+        {id: 'any', label: 'Any firewall: every entry', opts: {}},
+        {id: 'fortigate', label: 'FortiGate: IP address threat feed', opts: {}, cap: UB_FORTIGATE_CAP,
+         where: 'Security Fabric › External Connectors › Threat Feeds › IP Address'},
+        {id: 'paloalto', label: 'Palo Alto: External Dynamic List (IP)', opts: {},
+         where: 'Objects › External Dynamic Lists, type IP List'},
+        {id: 'checkpoint', label: 'Check Point: Network Feed', opts: {},
+         where: 'a Network Feed object (R81.10 and later), flat list format'},
+        {id: 'cisco', label: 'Cisco FMC: Security Intelligence feed', opts: {},
+         where: 'Objects › Security Intelligence › Network Lists and Feeds'},
+        {id: 'sophos', label: 'Sophos Firewall: third-party threat feed', opts: {family: '4', hosts: true},
+         where: 'Active threat response › Third-party threat feeds (single IPv4 addresses; networks and IPv6 are left out)'},
+        {id: 'pf4', label: 'pfSense / pfBlockerNG: IPv4', opts: {family: '4'},
+         where: 'pfBlockerNG › IP › IPv4, or a URL Table (IPs) alias'},
+        {id: 'pf6', label: 'pfSense / pfBlockerNG: IPv6', opts: {family: '6'},
+         where: 'pfBlockerNG › IP › IPv6'},
+    ],
+    domain: [
+        {id: 'any', label: 'Any DNS filter: every entry', opts: {}},
+        {id: 'fortigate', label: 'FortiGate: domain threat feed', opts: {}, cap: UB_FORTIGATE_CAP,
+         where: 'External Connectors › Threat Feeds › Domain Name, then a DNS Filter profile'},
+        {id: 'paloalto', label: 'Palo Alto: External Dynamic List (domain)', opts: {},
+         where: 'Objects › External Dynamic Lists, type Domain List'},
+        {id: 'cisco', label: 'Cisco FMC: DNS Security Intelligence feed', opts: {},
+         where: 'Objects › Security Intelligence › DNS Lists and Feeds'},
+        {id: 'pihole', label: 'Pi-hole / AdGuard Home: blocklist', opts: {},
+         where: 'the blocklist (adlist) settings'},
+    ],
+    app: [
+        {id: 'any', label: 'Any firewall: every entry', opts: {}},
+        {id: 'fortigate-ip', label: 'FortiGate: IP address feed', opts: {kind: 'ip'}, cap: UB_FORTIGATE_CAP,
+         where: 'External Connectors › Threat Feeds › IP Address, used as an address in a policy'},
+        {id: 'fortigate-dns', label: 'FortiGate: domain feed (DNS filter)', opts: {kind: 'domain'}, cap: UB_FORTIGATE_CAP,
+         where: 'External Connectors › Threat Feeds › Domain Name, allowed in a DNS Filter profile'},
+        {id: 'paloalto-ip', label: 'Palo Alto: External Dynamic List (IP)', opts: {kind: 'ip'},
+         where: 'Objects › External Dynamic Lists, type IP List'},
+        {id: 'paloalto-domain', label: 'Palo Alto: External Dynamic List (domain)', opts: {kind: 'domain'},
+         where: 'Objects › External Dynamic Lists, type Domain List'},
+        {id: 'checkpoint', label: 'Check Point: Network Feed', opts: {kind: 'ip'},
+         where: 'a Network Feed object (R81.10 and later), flat list format'},
+        {id: 'pf4', label: 'pfSense / OPNsense: IPv4 alias', opts: {kind: 'ip', family: '4'},
+         where: 'a URL Table (IPs) alias'},
+        {id: 'pf6', label: 'pfSense / OPNsense: IPv6 alias', opts: {kind: 'ip', family: '6'},
+         where: 'a URL Table (IPs) alias'},
+    ],
+};
+const UB_DEFAULTS = {preset: 'any', kind: '', family: '', hosts: false, wildcards: 'keep', limit: '', fmt: 'txt'};
+let ubSeq = 0;
+
+function ubSeg(name, label, current, choices) {
+    return '<div class="ub-field"><span>' + label + '</span><div class="ub-seg" role="radiogroup" aria-label="' + label + '">' +
+        choices.map(([v, t]) => '<label><input type="radio" name="' + name + '" data-k="' + name.split('-')[0] +
+            '" value="' + v + '"' + (v === current ? ' checked' : '') + '>' + t + '</label>').join('') +
+        '</div></div>';
+}
+
+function ubRender(box) {
+    const mode = box.dataset.ub;
+    const s = box._ub;
+    const id = box._ubId;
+    const presets = UB_PRESETS[mode];
+    let html = '<div class="ub-field"><label for="ubp-' + id + '">Firewall</label><select id="ubp-' + id + '" data-k="preset">' +
+        presets.map(p => '<option value="' + p.id + '"' + (p.id === s.preset ? ' selected' : '') + '>' + esc(p.label) + '</option>').join('') +
+        '<option value="custom"' + (s.preset === 'custom' ? ' selected' : '') + '>Custom</option></select></div>';
+    if (mode === 'app') {
+        html += ubSeg('kind-' + id, 'Entries', s.kind,
+                      [['', 'All'], ['ip', 'IPs'], ['domain', 'Domains'], ['url', 'URLs']]);
+    }
+    if (mode !== 'domain') {
+        html += ubSeg('family-' + id, 'IP version', s.family, [['', 'Both'], ['4', 'IPv4'], ['6', 'IPv6']]);
+        html += '<label class="ub-check"><input type="checkbox" data-k="hosts"' + (s.hosts ? ' checked' : '') +
+            '> Single addresses only (leave out networks)</label>';
+    }
+    html += '<div class="ub-row2">';
+    if (mode === 'app') {
+        html += '<div class="ub-field"><label for="ubw-' + id + '">Wildcards</label><select id="ubw-' + id + '" data-k="wildcards">' +
+            [['keep', 'Keep as *.example.com'], ['strip', 'Strip to example.com'], ['drop', 'Leave out']]
+                .map(([v, t]) => '<option value="' + v + '"' + (v === s.wildcards ? ' selected' : '') + '>' + t + '</option>').join('') +
+            '</select></div>';
+    }
+    html += '<div class="ub-field"><label for="ubl-' + id + '">Max entries</label><input id="ubl-' + id +
+        '" type="number" min="1" step="1" inputmode="numeric" placeholder="all" data-k="limit" value="' + esc(s.limit) + '"></div>';
+    html += '<div class="ub-field"><label for="ubf-' + id + '">Format</label><select id="ubf-' + id + '" data-k="fmt">' +
+        ['txt', 'csv', 'json'].map(f => '<option value="' + f + '"' + (f === s.fmt ? ' selected' : '') + '>.' + f + '</option>').join('') +
+        '</select></div></div>';
+    html += '<div class="url-row"><input class="url-box" type="text" readonly onclick="this.select()" aria-label="Built URL">' +
+        '<button class="copy-btn" type="button" onclick="copyUrl(this)">Copy</button></div>' +
+        '<p class="ub-note" aria-live="polite"></p><p class="ub-where"></p>';
+    box.querySelector('.ub-body').innerHTML = html;
+    ubUpdate(box);
+}
+
+function ubUrl(box, forCount) {
+    const mode = box.dataset.ub;
+    const s = box._ub;
+    const q = new URLSearchParams();
+    if (mode === 'app' && s.kind) q.set('kind', s.kind);
+    if (mode !== 'domain' && s.family) q.set('family', s.family);
+    if (mode !== 'domain' && s.hosts) q.set('hosts', '1');
+    if (mode === 'app' && s.wildcards !== 'keep') q.set('wildcards', s.wildcards);
+    if (forCount) q.set('limit', '1');
+    else if (s.limit) q.set('limit', s.limit);
+    const qs = q.toString();
+    return box.dataset.base + '.' + (forCount ? 'txt' : s.fmt) + (qs ? '?' + qs : '');
+}
+
+function ubUpdate(box) {
+    box.querySelector('.url-box').value = ubUrl(box, false);
+    const preset = UB_PRESETS[box.dataset.ub].find(p => p.id === box._ub.preset);
+    box.querySelector('.ub-where').textContent = preset && preset.where ? 'Goes in: ' + preset.where : '';
+    clearTimeout(box._ubTimer);
+    box._ubTimer = setTimeout(() => ubCount(box, preset), 250);
+}
+
+async function ubCount(box, preset) {
+    const note = box.querySelector('.ub-note');
+    const probe = ubUrl(box, true);
+    // Same-origin path: the card's URL may name the LAN address while this
+    // page was loaded by hostname, and a cross-origin probe would fail.
+    const u = new URL(probe, location.href);
+    let n = null;
+    try {
+        const r = await fetch(u.pathname + u.search, {headers: {'X-TFM-Probe': '1'}});
+        if (probe !== ubUrl(box, true)) return;          // options moved on meanwhile
+        if (r.ok) n = parseInt(r.headers.get('X-Entry-Count'), 10);
+        else if (r.status === 404) { note.textContent = 'This list is not being served (unknown or switched off).'; note.className = 'ub-note warn'; return; }
+    } catch (e) { /* offline: leave the count out, the URL is still right */ }
+    if (n === null || Number.isNaN(n)) { note.textContent = ''; return; }
+    const s = box._ub;
+    const limit = s.limit ? parseInt(s.limit, 10) : 0;
+    const app = box.dataset.ub === 'app';
+    let msg = 'This URL serves ' + n.toLocaleString() + ' entr' + (n === 1 ? 'y' : 'ies') + '.';
+    let warn = false;
+    const filtered = s.kind || s.family || s.hosts || s.wildcards !== 'keep';
+    if (n === 0) {
+        // Only blame the options when there are some; an empty tier is just empty.
+        msg = filtered ? 'This URL serves no entries with these options.' : 'This list has no entries right now.';
+        warn = !!filtered;
+    } else if (limit && n > limit) {
+        if (app) {
+            msg += ' Max entries leaves out ' + (n - limit).toLocaleString() +
+                ': this is an allow-list, so whatever is left out stops being allowed.';
+            warn = true;
+        } else {
+            msg += ' The ' + limit.toLocaleString() + ' strongest are served.';
+        }
+    } else if (preset && preset.cap && n > preset.cap) {
+        msg += app
+            ? ' That is more than a mid-range FortiGate holds in one list (about ' + preset.cap.toLocaleString() + '); narrow it with the options above.'
+            : ' A mid-range FortiGate holds about ' + preset.cap.toLocaleString() + ' per list: set Max entries so it keeps the strongest.';
+        warn = true;
+    }
+    note.textContent = msg;
+    note.className = 'ub-note' + (warn ? ' warn' : '');
+}
+
+function ubChange(box, el) {
+    const k = el.dataset.k;
+    if (!k) return;
+    if (k === 'preset') {
+        const p = UB_PRESETS[box.dataset.ub].find(x => x.id === el.value);
+        // A preset is a whole configuration: start from the defaults, keep
+        // the operator's size and format choices.
+        if (p) box._ub = Object.assign({}, UB_DEFAULTS, {limit: box._ub.limit, fmt: box._ub.fmt}, p.opts, {preset: p.id});
+        else box._ub.preset = 'custom';
+        ubRender(box);
+        return;
+    }
+    box._ub[k] = el.type === 'checkbox' ? el.checked : el.value;
+    if (k !== 'limit' && k !== 'fmt' && box._ub.preset !== 'custom') {
+        box._ub.preset = 'custom';
+        box.querySelector('[data-k="preset"]').value = 'custom';
+    }
+    ubUpdate(box);
+}
+
+function ubBody(base, mode) {
+    // Markup for one builder; base is escaped because it lands in an attribute.
+    return '<details class="ub" data-ub="' + mode + '" data-base="' + esc(base) + '">' +
+        '<summary>Build a URL for your firewall</summary><div class="ub-body"></div></details>';
+}
+
+// <details> toggle does not bubble; a capturing listener still sees it.
+document.addEventListener('toggle', (ev) => {
+    const box = ev.target;
+    if (!(box instanceof HTMLDetailsElement) || !box.classList.contains('ub') || !box.open || box._ub) return;
+    box._ub = Object.assign({}, UB_DEFAULTS);
+    box._ubId = ++ubSeq;
+    ubRender(box);
+}, true);
+document.addEventListener('change', (ev) => {
+    const box = ev.target.closest && ev.target.closest('details.ub');
+    if (box && box._ub) ubChange(box, ev.target);
+});
+document.addEventListener('input', (ev) => {
+    const box = ev.target.closest && ev.target.closest('details.ub');
+    if (box && box._ub && ev.target.dataset.k === 'limit') ubChange(box, ev.target);
+});
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('apps-add-form');
     if (!form) return;

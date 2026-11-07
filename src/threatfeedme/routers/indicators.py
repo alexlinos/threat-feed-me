@@ -48,7 +48,12 @@ def _known(name: str) -> None:
 
 def _polled(request: Request, name: str, kind: str, ext: str) -> None:
     """Note the poll for the dashboard's "last polled" line. The key is built
-    from the validated route name, never from the raw path."""
+    from the validated route name, never from the raw path. The dashboard's
+    URL builder sends X-TFM-Probe on its count requests: recording those
+    would show the operator's browser as the poller, and that line is the
+    only proof a firewall really pulls the list."""
+    if request.headers.get("x-tfm-probe"):
+        return
     from threatfeedme import polls
     polls.record(core.db, f"{'domains/' if kind == 'domain' else ''}{name}.{ext}",
                  request.headers.get("user-agent", ""))

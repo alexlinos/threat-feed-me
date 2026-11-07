@@ -112,8 +112,9 @@ def _served(request: Request, name: str, ext: str, limit: Optional[int],
     total = len(entries)
     if limit is not None:
         entries = entries[:limit]
-    from threatfeedme import polls
-    polls.record(core.db, f"lists/{name}.{ext}", request.headers.get("user-agent", ""))
+    if not request.headers.get("x-tfm-probe"):   # the URL builder's count probe
+        from threatfeedme import polls
+        polls.record(core.db, f"lists/{name}.{ext}", request.headers.get("user-agent", ""))
     return entries, total
 
 
