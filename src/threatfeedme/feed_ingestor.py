@@ -10,7 +10,7 @@ import threading
 import time
 import ipaddress
 import json
-from typing import List, Dict, Optional, Set, Tuple, Union
+from typing import Callable, List, Dict, Optional, Set, Tuple, Union
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 import logging
 
@@ -68,23 +68,38 @@ def _scrub_exception(exc: Exception, secrets) -> Exception:
         return RuntimeError(scrubbed)
 
 
-def _read_capped(response, label: str) -> str:
+class ResponseTooLargeError(RuntimeError):
+    """A body over its byte cap. A RuntimeError subclass so existing feed
+    handlers keep working, but distinct, so a caller that treats RuntimeError
+    as a bug (applications.refresh_list) can still record it as status."""
+
+
+def _read_capped_bytes(response, label: str, max_bytes: int = _MAX_FETCH_BYTES) -> bytes:
     """Read a streamed response body with a running byte counter, so a hostile
-    or broken feed can't exhaust memory. Every fetch path uses this — reading
-    `response.text` on a stream=True response bypassed the cap entirely (the
-    HoneyDB scraper and OTX pagination did, until the 2026-09-22 review)."""
+    or broken source can't exhaust memory. Every fetch path uses this (or
+    _read_capped) — reading `response.text` on a stream=True response
+    bypassed the cap entirely (the HoneyDB scraper and OTX pagination did,
+    until the 2026-09-22 review)."""
     total = 0
     chunks = []
     for chunk in response.iter_content(chunk_size=65536, decode_unicode=False):
         total += len(chunk)
-        if total > _MAX_FETCH_BYTES:
+        if total > max_bytes:
             response.close()
-            raise RuntimeError(
-                f"Feed '{label}' response exceeded {_MAX_FETCH_BYTES // (1024*1024)} MB "
-                f"({total // (1024*1024)} MB received) — download aborted"
+            mb = 1024 * 1024
+            cap = f"{max_bytes // mb} MB" if max_bytes >= mb else f"{max_bytes} bytes"
+            raise ResponseTooLargeError(
+                f"Feed '{label}' response exceeded {cap} "
+                f"({total // mb} MB received) — download aborted"
             )
         chunks.append(chunk)
-    return b''.join(chunks).decode(response.encoding or 'utf-8', errors='replace')
+    return b''.join(chunks)
+
+
+def _read_capped(response, label: str) -> str:
+    """_read_capped_bytes at the feed cap, decoded."""
+    return _read_capped_bytes(response, label).decode(response.encoding or 'utf-8',
+                                                      errors='replace')
 
 
 from threatfeedme.credentials import (CROSS_ORIGIN_SAFE_HEADERS, KeyPolicy,
@@ -116,13 +131,19 @@ def _host_addresses(host: str) -> List[str]:
     return [info[4][0] for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
 
 
+class UnsafeURLError(RuntimeError):
+    """An SSRF refusal. A RuntimeError subclass so existing handlers keep
+    working, but distinct, so a caller that treats RuntimeError as a bug
+    (applications.refresh_list) can still record a refusal as status."""
+
+
 def _assert_public(host: str, addresses: List[str]) -> None:
     """The SSRF rule, shared by the early URL check and the connect-time
     guard so the two can never disagree."""
     for addr in addresses:
         ip = ipaddress.ip_address(addr.split('%', 1)[0])
         if not ip.is_global:
-            raise RuntimeError(
+            raise UnsafeURLError(
                 f"feed URL host '{host}' resolves to non-public address {ip}; "
                 "refusing to fetch (set safety.allow_private_feed_urls: true "
                 "to permit internal feed URLs)"
@@ -147,7 +168,7 @@ def _require_public_url(url: str) -> None:
     connect-time guard below closes that gap."""
     host = urlsplit(url).hostname
     if not host:
-        raise RuntimeError(f"feed URL has no host: {url!r}")
+        raise UnsafeURLError(f"feed URL has no host: {url!r}")
     try:
         addresses = _host_addresses(host)
     except socket.gaierror as e:
@@ -186,6 +207,29 @@ def _guarded_create_connection(address, *args, **kwargs):
 
 
 _u3_connection.create_connection = _guarded_create_connection
+
+
+def guarded_get(url: str, *, allow_private: bool = False,
+                get: Callable = requests.get, **kwargs) -> requests.Response:
+    """One GET under the feed SSRF policy, for fetch paths outside
+    FeedIngestor. The guard is thread-local and does nothing unless armed,
+    which is how 2.7.0's application lists shipped unguarded, so a new
+    fetch path should call this rather than requests.get.
+
+    Arms the connect-time guard for the request (it validates the address
+    it connects to, on every redirect hop, with one DNS lookup), ignores
+    env proxies while guarded (through a proxy the guard would pin the
+    proxy's address), and always streams: read the body with
+    _read_capped_bytes. allow_private is safety.allow_private_feed_urls.
+    The guard can be released when this returns: with stream=True the
+    connection is already open and the body arrives on it."""
+    guard_was = getattr(_ssrf_guard, "active", False)
+    _ssrf_guard.active = not allow_private
+    try:
+        return get(url, stream=True, proxies=None if allow_private else _NO_PROXIES,
+                   **kwargs)
+    finally:
+        _ssrf_guard.active = guard_was
 
 
 class _NotModified:

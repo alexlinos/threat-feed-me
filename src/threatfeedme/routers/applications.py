@@ -23,6 +23,7 @@ from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
 from threatfeedme import applications, core
 from threatfeedme.auth import csrf_check, require_auth
+from threatfeedme.feed_ingestor import UnsafeURLError, _require_public_url
 from threatfeedme.schemas import ApplicationListRequest
 
 logger = logging.getLogger(__name__)
@@ -40,12 +41,30 @@ def _row_or_404(name: str) -> dict:
     return row
 
 
+def _allow_private() -> bool:
+    """The feed URL policy (safety.allow_private_feed_urls) governs list URLs too."""
+    return bool((core.config.get('safety', {}) or {}).get('allow_private_feed_urls', False))
+
+
 def _validate(req: ApplicationListRequest) -> None:
     if not applications.valid_name(req.name):
         raise HTTPException(status_code=400,
                             detail="Name must be lowercase letters, digits and dashes (2-64)")
     if not req.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must be http(s)")
+    # Early SSRF feedback, as on the feeds page: an internal or metadata URL
+    # is refused with a clear reason instead of being stored. Not the
+    # enforcing check (applications.fetch arms the connect-time guard); an
+    # unresolvable or malformed host (DNS failure, an IDNA-invalid label, a
+    # bad IPv6 literal) is accepted and reports its error when fetched, as
+    # on the feeds page; only a refusal is a 400.
+    if not _allow_private():
+        try:
+            _require_public_url(req.url)
+        except UnsafeURLError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception:
+            pass
     if req.format not in ("list", "json"):
         raise HTTPException(status_code=400, detail="Format is 'list' or 'json'")
     if req.format == "json" and not req.filter_expr:
@@ -170,7 +189,7 @@ def refresh_application(name: str, _=Depends(require_auth), _csrf=Depends(csrf_c
     # cannot block the event loop. Manual refresh bypasses the schedule's
     # due check but not the change guard — the guard is a property of the
     # write path, not of the scheduler.
-    summary = applications.refresh_list(core.db, name)
+    summary = applications.refresh_list(core.db, name, allow_private=_allow_private())
     return {"success": summary["outcome"] != "error", **summary}
 
 

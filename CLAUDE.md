@@ -1000,6 +1000,33 @@ and traps that aren't obvious from the code:
   the no-attribution rule; left in history (rewriting main + v2.6.2 needs a
   force-push). Check trailers before pushing.
 
+## v2.7.1 (2026-11-07): application lists were not SSRF-guarded
+
+A review of v2.7.0 (PR #27, application lists) found two holes, both fixed:
+
+- **The connect-time SSRF guard does nothing unless armed.** `_ssrf_guard`
+  is thread-local and only `FeedIngestor.fetch_feed` arms it; 2.7.0's
+  `applications.fetch` assumed a "process-wide" guard and armed nothing, so
+  a list URL could read cloud metadata or a LAN host, and the refresh
+  response echoed rejected values back. Any new fetch path outside
+  FeedIngestor calls `feed_ingestor.guarded_get(url, allow_private=...)`
+  (arms the guard, drops env proxies, streams) and reads the body with
+  `_read_capped_bytes(resp, label, max_bytes)`; `allow_private` is
+  `safety.allow_private_feed_urls`. SSRF refusals are `UnsafeURLError` and
+  oversized bodies `ResponseTooLargeError` (both RuntimeError subclasses),
+  so a caller that treats RuntimeError as a bug can record them as status.
+  Tests: `test_real_fetch_*` drive the real urllib3 connect with the socket
+  stubbed, the pattern for proving a guard without touching the network.
+- **The allow-list gate repeated the 2.4.19 supernet bypass**: `is_private`
+  on a network needs both ends private, so `172.0.0.0/8` passed. `_net_ok`
+  now overlaps `safety._SPECIAL_V4/_V6`, like the threat-side filter.
+- Not fixed in 2.7.1 (from the same review): a slow-drip vendor can stall
+  the scheduler thread (the app-list pass runs inline before due_feeds);
+  approving a held refresh can overwrite a newer served version;
+  `domains.reserved_reason` is not applied to app-list domains.
+- PR #29 (catalog) predates this and needs rebasing onto it: its manifest
+  fetch and every catalog list go through the same paths.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
