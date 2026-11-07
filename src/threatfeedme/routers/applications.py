@@ -93,8 +93,8 @@ _Family = Annotated[Optional[str], Query(pattern="^[46]$",
                                          description="Drop IP entries of the other version")]
 _Hosts = Annotated[Optional[int], Query(ge=0, le=1,
                                         description="1 = single addresses only, no networks")]
-_Wildcards = Annotated[Optional[str], Query(pattern="^(keep|strip|drop)$",
-                                            description="What to do with *.example.com")]
+_Wildcards = Annotated[Optional[str], Query(pattern="^(keep|drop)$",
+                                            description="drop = leave *.example.com entries out")]
 # Unlike /feeds (where unknown parameters were always ignored and a 400 would
 # break polls that already work), these URLs are new in 2.7 and composed by
 # the dashboard's builder: an unknown or misspelt option is an error, never a
