@@ -21,9 +21,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
-from threatfeedme import applications, core
+from threatfeedme import applications, core, vendor_catalog
 from threatfeedme.auth import csrf_check, require_auth
-from threatfeedme.schemas import ApplicationListRequest
+from threatfeedme.schemas import ApplicationListRequest, CatalogToggleRequest
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,11 @@ def _served(request: Request, name: str, ext: str, limit: Optional[int]):
     """Entries + ETag for one list. The ETag mixes body digest and the row's
     entry_version, so a swap bustes caches even through a proxy that hashes
     bodies."""
-    _row_or_404(name)
+    row = _row_or_404(name)
+    if not row["enabled"]:
+        # A switched-off list (catalog toggle, issue #28) is not served:
+        # its URL 404s exactly like an unknown list's.
+        raise HTTPException(status_code=404, detail="Unknown application list")
     entries = core.db.get_entries(name)
     if limit is not None:
         entries = entries[:limit]
@@ -107,6 +111,26 @@ def list_applications(_=Depends(require_auth)):
     for row in rows:
         row["pending"] = core.db.get_pending(row["name"]) is not None
     return {"applications": rows}
+
+
+@router.get("/api/applications/catalog")
+def get_catalog(_=Depends(require_auth)):
+    # Declared before /api/applications/{name} so "catalog" is not read as
+    # a list name. Renders from the published manifest only; no list data
+    # is downloaded to answer this.
+    return vendor_catalog.catalog_view(core.db)
+
+
+@router.post("/api/applications/catalog/{slug}/toggle")
+def toggle_catalog(slug: str, req: CatalogToggleRequest,
+                   _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    try:
+        summary = vendor_catalog.set_enabled(core.db, slug, req.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Not in the catalog")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"success": summary.get("outcome") != "error", **summary}
 
 
 @router.get("/api/applications/{name}")
