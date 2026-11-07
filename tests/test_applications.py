@@ -362,6 +362,53 @@ def test_api_detail_shows_pending_without_payload(rtr, db):
     assert "entries" not in detail["pending"]      # full blob stays server-side
 
 
+def test_change_guard_pending_keeps_true_counts_above_sample_cap(db):
+    # 600 entries move; the stored/displayed sample is capped at 500, but
+    # the pending counts and the history written on approval must be 600.
+    _seed(db, [f"198.51.{i // 250}.{i % 250}" for i in range(600)])
+    body = "\n".join(f"203.0.{i // 250}.{i % 250}" for i in range(600)) + "\n"
+    s = applications.refresh_list(db, "acme", get=fake_get_factory(body))
+    assert s["outcome"] == "held" and s["added"] == 600 and s["removed"] == 600
+    pending = db.get_pending("acme")
+    assert pending["added"] == 600 and pending["removed"] == 600
+    assert len(pending["added_sample"]) == applications.DIFF_SAMPLE_CAP
+    db.approve_pending("acme")
+    hist = db.get_history("acme")[0]
+    assert hist["added"] == 600 and hist["removed"] == 600
+
+
+# --------------------------------------------------------- refresh pacing --
+
+def test_refresh_due_honours_update_interval(db, monkeypatch):
+    # Regression: last_refresh_at is written by database._utcnow_iso
+    # (offset form, e.g. 2026-11-06T13:45:52+00:00). refresh_due parsed it
+    # with a "%Y-%m-%dT%H:%M:%SZ" format, the parse always failed, and
+    # every enabled list polled on every scheduler tick.
+    calls = []
+    monkeypatch.setattr(
+        applications, "refresh_list",
+        lambda d, name, **kw: calls.append(name) or {"name": name, "outcome": "ok"})
+    db.set_application_list_state("acme", "ok")   # refreshed just now
+    assert applications.refresh_due(db) == [] and calls == []
+    with db._cursor() as cur:                     # interval long past
+        cur.execute("UPDATE application_lists SET last_refresh_at = ?"
+                    " WHERE name = 'acme'", ("2020-01-01T00:00:00+00:00",))
+    applications.refresh_due(db)
+    assert calls == ["acme"]
+
+
+def test_refresh_due_unparseable_stamp_is_due(db, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        applications, "refresh_list",
+        lambda d, name, **kw: calls.append(name) or {"name": name, "outcome": "ok"})
+    with db._cursor() as cur:
+        cur.execute("UPDATE application_lists SET last_refresh_at = 'junk'"
+                    " WHERE name = 'acme'")
+    applications.refresh_due(db)
+    assert calls == ["acme"]
+
+
 def test_api_approve_reject_round_trip(rtr, db):
     from fastapi import HTTPException
     _serve_db(db)

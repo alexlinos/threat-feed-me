@@ -1588,13 +1588,21 @@ class Database:
             return cur.rowcount
 
     def add_pending(self, name: str, entries: List[str], added_sample: List[Dict],
-                    removed_sample: List[Dict], reason: str) -> None:
+                    removed_sample: List[Dict], reason: str,
+                    added_count: Optional[int] = None,
+                    removed_count: Optional[int] = None) -> None:
+        # The counts are the diff's true size; the samples are capped for
+        # display. Defaulting to the sample length would record the cap
+        # (500) as the count on any larger diff, and approve_pending writes
+        # these numbers into the permanent history.
         with self._cursor() as cur:
             cur.execute(
                 "INSERT OR REPLACE INTO application_list_pending"
                 " (list_name, received_at, reason, added, removed,"
                 "  added_sample, removed_sample, entries) VALUES (?,?,?,?,?,?,?,?)",
-                (name, _utcnow_iso(), reason, len(added_sample), len(removed_sample),
+                (name, _utcnow_iso(), reason,
+                 len(added_sample) if added_count is None else added_count,
+                 len(removed_sample) if removed_count is None else removed_count,
                  json.dumps(added_sample), json.dumps(removed_sample),
                  json.dumps(entries)))
 

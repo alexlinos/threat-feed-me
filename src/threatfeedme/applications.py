@@ -253,6 +253,24 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _stamp_epoch(stamp: str) -> float:
+    """Epoch seconds for a stored timestamp.
+
+    The database stamps rows with ``_utcnow_iso()`` (offset form, e.g.
+    ``2026-11-06T13:45:52.050315+00:00``); a ``Z`` suffix and naive stamps
+    are read as UTC too. Parsing must accept what the writer emits: a
+    format mismatch here makes every list look permanently due.
+    """
+    from datetime import datetime, timezone
+    text = stamp.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    dt = datetime.fromisoformat(text)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
 def refresh_list(db, name: str, get: Callable = requests.get) -> Dict[str, Any]:
     """One list, one poll. Never raises for a vendor error: the per-list
     status is what the dashboard shows, and one dead vendor must not stop
@@ -283,7 +301,8 @@ def refresh_list(db, name: str, get: Callable = requests.get) -> Dict[str, Any]:
                            [{"e": e} for e in sorted(added)][:DIFF_SAMPLE_CAP],
                            [{"e": e} for e in sorted(removed)][:DIFF_SAMPLE_CAP],
                            reason=(f"refresh moves {pct:.1f}% of the list "
-                                   f"(threshold {row['change_threshold_pct']:g}%)"))
+                                   f"(threshold {row['change_threshold_pct']:g}%)"),
+                           added_count=len(added), removed_count=len(removed))
             db.set_application_list_state(name, status=f"held: {pct:.1f}% change",
                                           etag=new_etag)
             summary["outcome"] = "held"
@@ -314,8 +333,7 @@ def refresh_due(db) -> List[Dict[str, Any]]:
         last = row.get("last_refresh_at")
         if last:
             try:
-                age = time.time() - time.mktime(time.strptime(last, "%Y-%m-%dT%H:%M:%SZ"))
-                if age < interval:
+                if time.time() - _stamp_epoch(last) < interval:
                     continue
             except ValueError:
                 pass  # unparseable stamp: treat as due
