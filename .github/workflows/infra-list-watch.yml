@@ -59,10 +59,17 @@ jobs:
           echo "exit=$?" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
+      - name: Build application catalog
+        # Slice the snapshots into finished lists + catalog.json (issue
+        # #28). Runs even when the watch alerted: a big upstream change is
+        # exactly when the published catalog should still be coherent.
+        run: |
+          python scripts/build_catalog.py --snapshots .snaps/snapshots --out .snaps/catalog
+
       - name: Commit changed snapshots
         run: |
           cd .snaps
-          git add -A snapshots
+          git add -A snapshots catalog
           if ! git diff --cached --quiet; then
             git commit -m "infra-watch: $(date -u +%F) snapshot refresh"
             git push origin HEAD:infra-snapshots
