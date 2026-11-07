@@ -232,3 +232,28 @@ def test_all_on_storm(db, rtr, monkeypatch):
     view = vendor_catalog.catalog_view(db, get=get)
     assert len(view["catalog"]) == len(slugs)
     assert all(r["enabled"] for r in view["catalog"])
+
+
+def test_manifest_malformed_counts_drop_one_entry(db):
+    # Regression: a non-numeric entries/bytes field raised ValueError out
+    # of the manifest cleaner and condemned the whole catalog. _clean's
+    # contract is drop-the-entry: the bad list goes, the rest stay.
+    doc = json.loads(manifest_json([("aws-ec2", 2)]))
+    doc["lists"].append({"slug": "gcp-cloud", "name": "gcp-cloud",
+                         "vendor": "TestVendor", "description": "x",
+                         "format": "list", "entries": "many", "bytes": 0,
+                         "url": BASE + "gcp-cloud.txt"})
+    got = vendor_catalog.get_catalog(db, get=transport({MANIFEST_URL: json.dumps(doc)}))
+    assert [e["slug"] for e in got["lists"]] == ["aws-ec2"]
+
+
+def test_toggle_off_a_factory_retired_list(db):
+    # Regression: the manifest lookup ran before the disable branch, so a
+    # list the factory had retired from the manifest raised KeyError on
+    # toggle-off and could never be shut off from the catalog.
+    db.add_application_list("old-list", "https://factory.example/old.txt",
+                            "list", "", 3600, 8, 20, 50.0)
+    _, bodies = _small_setup()
+    out = vendor_catalog.set_enabled(db, "old-list", False, get=transport(bodies))
+    assert out["outcome"] == "disabled"
+    assert db.get_application_list("old-list")["enabled"] == 0
