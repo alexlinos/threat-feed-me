@@ -183,6 +183,25 @@ def load_snapshot(snapshots_dir: Path, source: str) -> list[str] | None:
         return None
 
 
+def _write_if_changed(path: Path, body: str) -> None:
+    """Write only on a real change, so an unchanged rebuild leaves the
+    output tree byte-identical and a commit step sees no diff."""
+    try:
+        if path.read_text(encoding="utf-8") == body:
+            return
+    except OSError:
+        pass
+    path.write_text(body, encoding="utf-8", newline="\n")
+
+
+def _existing_manifest(path: Path) -> dict:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
 def build(snapshots_dir: Path, out_dir: Path, base_url: str,
           generated_at: str) -> dict:
     """Slice every known snapshot into catalog files + the manifest.
@@ -218,7 +237,7 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
         vendor, name, description, values = catalog[slug]
         values = sorted(set(values))
         body = "".join(v + "\n" for v in values)
-        (out_dir / f"{slug}.txt").write_text(body, encoding="utf-8", newline="\n")
+        _write_if_changed(out_dir / f"{slug}.txt", body)
         manifest_lists.append({
             "slug": slug, "name": name, "vendor": vendor,
             "description": description, "format": "list",
@@ -226,9 +245,18 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
             "url": base_url.rstrip("/") + f"/catalog/{slug}.txt",
         })
     manifest_lists.sort(key=lambda m: (m["vendor"], m["name"]))
-    manifest = {"generated_at": generated_at, "lists": manifest_lists}
-    (out_dir / "catalog.json").write_text(
-        json.dumps(manifest, indent=1) + "\n", encoding="utf-8", newline="\n")
+    # The stamp alone must not dirty the output: with a fresh generated_at
+    # every run, catalog.json changes daily even when no list did, and the
+    # workflow's commit step pushes a no-op snapshot commit. When the lists
+    # are unchanged, keep the previous manifest, stamp included.
+    previous = _existing_manifest(out_dir / "catalog.json")
+    if previous.get("lists") == manifest_lists:
+        manifest = {"generated_at": previous.get("generated_at") or generated_at,
+                    "lists": manifest_lists}
+    else:
+        manifest = {"generated_at": generated_at, "lists": manifest_lists}
+        _write_if_changed(out_dir / "catalog.json",
+                          json.dumps(manifest, indent=1) + "\n")
     for w in warnings:
         print(f"WARN {w}", file=sys.stderr)
     return manifest
