@@ -47,6 +47,12 @@ class ApplicationListRequest(BaseModel):
     change_threshold_pct: float = 50.0
 
 
+class CatalogToggleRequest(BaseModel):
+    """The Applications catalog toggle (issue #28): on creates/starts the
+    built-in list, off stops its fetching and serving."""
+    enabled: bool
+
+
 class FeedRequest(BaseModel):
     name: str = Field(max_length=64)
     # Bounded like the whitelist fields: a 900 KB URL was accepted and sat in
