@@ -60,12 +60,17 @@ def _clean(doc) -> Optional[Dict]:
         if not all(isinstance(e.get(k), str) and e[k]
                    for k in ("name", "vendor", "url")):
             continue
+        try:
+            entries = int(e.get("entries") or 0)
+            nbytes = int(e.get("bytes") or 0)
+        except (TypeError, ValueError):
+            continue  # malformed counts: drop this entry, keep the rest
         lists.append({
             "slug": slug, "name": e["name"], "vendor": e["vendor"],
             "description": e.get("description") or "",
             "format": "list",
-            "entries": int(e.get("entries") or 0),
-            "bytes": int(e.get("bytes") or 0),
+            "entries": entries,
+            "bytes": nbytes,
             "url": e["url"],
         })
     return {"generated_at": doc.get("generated_at") or "", "lists": lists}
@@ -129,16 +134,18 @@ def set_enabled(db, slug: str, enabled: bool,
     enable it, and refresh now through the slice 1 machinery. Off:
     disable; entries stay stored so toggling back on is instant, but
     nothing fetches and nothing serves while off."""
+    if not enabled:
+        # Off needs no manifest definition: if the factory retires a list,
+        # its toggle must still be able to shut it off.
+        if db.get_application_list(slug) is not None:
+            db.update_application_list(slug, {"enabled": 0})
+        return {"name": slug, "outcome": "disabled"}
     doc = get_catalog(db, get=get)
     entry = next((e for e in doc["lists"] if e["slug"] == slug), None)
     if entry is None:
         if doc["error"] and not doc["lists"]:
             raise ValueError(f"catalog unavailable: {doc['error']}")
         raise KeyError(slug)
-    if not enabled:
-        if db.get_application_list(slug) is not None:
-            db.update_application_list(slug, {"enabled": 0})
-        return {"name": slug, "outcome": "disabled"}
     if db.get_application_list(slug) is None:
         db.add_application_list(
             slug, entry["url"], "list", "",
