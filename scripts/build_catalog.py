@@ -218,7 +218,7 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
         vendor, name, description, values = catalog[slug]
         values = sorted(set(values))
         body = "".join(v + "\n" for v in values)
-        (out_dir / f"{slug}.txt").write_text(body, encoding="utf-8")
+        (out_dir / f"{slug}.txt").write_text(body, encoding="utf-8", newline="\n")
         manifest_lists.append({
             "slug": slug, "name": name, "vendor": vendor,
             "description": description, "format": "list",
@@ -228,7 +228,7 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
     manifest_lists.sort(key=lambda m: (m["vendor"], m["name"]))
     manifest = {"generated_at": generated_at, "lists": manifest_lists}
     (out_dir / "catalog.json").write_text(
-        json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+        json.dumps(manifest, indent=1) + "\n", encoding="utf-8", newline="\n")
     for w in warnings:
         print(f"WARN {w}", file=sys.stderr)
     return manifest
