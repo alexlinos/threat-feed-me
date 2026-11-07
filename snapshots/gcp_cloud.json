@@ -603,9 +603,11 @@
   "v4|northamerica-northeast1|Google Cloud|34.128.58.0/23",
   "v4|northamerica-northeast1|Google Cloud|34.152.0.0/18",
   "v4|northamerica-northeast1|Google Cloud|34.183.118.0/24",
+  "v4|northamerica-northeast1|Google Cloud|34.183.174.0/24",
   "v4|northamerica-northeast1|Google Cloud|34.183.21.0/24",
   "v4|northamerica-northeast1|Google Cloud|34.183.75.0/24",
   "v4|northamerica-northeast1|Google Cloud|34.184.117.0/24",
+  "v4|northamerica-northeast1|Google Cloud|34.184.171.0/24",
   "v4|northamerica-northeast1|Google Cloud|34.184.22.0/24",
   "v4|northamerica-northeast1|Google Cloud|34.184.74.0/24",
   "v4|northamerica-northeast1|Google Cloud|34.186.192.0/19",
@@ -1152,6 +1154,6 @@
   "v6|us-west8|Google Cloud|2600:1900:4280::/44",
   "v6|us-west8|Google Cloud|2600:1902:2d0::/44"
  ],
- "fetched_at": "2026-11-06T14:23:25Z",
+ "fetched_at": "2026-11-07T13:13:44Z",
  "source": "gcp_cloud"
 }

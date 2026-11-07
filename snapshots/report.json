@@ -1,15 +1,21 @@
 {
- "fetched_at": "2026-11-06 14:23 UTC",
+ "fetched_at": "2026-11-07 13:13 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 7055,
+   "count": 7060,
    "baseline": false,
-   "added": 0,
+   "added": 5,
    "removed": 0,
-   "added_sample": [],
+   "added_sample": [
+    "v6|ap-east-2|AMAZON|2600:f0f3:f010:2e00::/56",
+    "v6|ap-east-2|EC2|2600:f0f3:f010:2e00::/56",
+    "v6|ap-southeast-6|AMAZON|2600:f0f3:f010:500::/56",
+    "v6|ap-southeast-6|EC2|2600:f0f3:f010:500::/56",
+    "v6|sa-east-1|AMAZON|2600:1f01:4952::/47"
+   ],
    "removed_sample": [],
-   "pct_change": 0.0,
+   "pct_change": 0.07,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
@@ -31,13 +37,16 @@
   },
   "gcp_cloud": {
    "status": "ok",
-   "count": 1151,
+   "count": 1153,
    "baseline": false,
-   "added": 0,
+   "added": 2,
    "removed": 0,
-   "added_sample": [],
+   "added_sample": [
+    "v4|northamerica-northeast1|Google Cloud|34.183.174.0/24",
+    "v4|northamerica-northeast1|Google Cloud|34.184.171.0/24"
+   ],
    "removed_sample": [],
-   "pct_change": 0.0,
+   "pct_change": 0.17,
    "min_v4_prefix": 14,
    "min_v6_prefix": 44,
    "alert": false,
@@ -89,17 +98,11 @@
    "status": "ok",
    "count": 8497,
    "baseline": false,
-   "added": 25,
+   "added": 0,
    "removed": 0,
-   "added_sample": [
-    "meta|packages|4.207.215.240/28",
-    "meta|web|135.235.149.144/28",
-    "meta|web|172.130.153.16/28",
-    "meta|web|172.130.201.80/28",
-    "meta|web|172.194.155.208/28"
-   ],
+   "added_sample": [],
    "removed_sample": [],
-   "pct_change": 0.3,
+   "pct_change": 0.0,
    "min_v4_prefix": 15,
    "min_v6_prefix": 29,
    "alert": false,
