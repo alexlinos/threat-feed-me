@@ -242,6 +242,14 @@
 
     <div id="apps-pending-callout" hidden class="callout" role="status"></div>
 
+    <h2 class="apps-subhead">Catalog</h2>
+    <p class="hint">Built-in vendor lists, sliced and published by the project from the
+        vendors' own files. The page reads only the catalog index; a list downloads
+        nothing until you switch it on. Switching one on creates it under Your lists
+        and starts it refreshing; switching it off stops fetching and serving.</p>
+    <div id="apps-catalog"><p class="muted">Loading the catalog…</p></div>
+
+    <h2 class="apps-subhead">Your lists</h2>
     <table class="feed-table" id="apps-table" aria-label="Application lists">
         <thead><tr><th>List</th><th>Entries</th><th>Last refresh</th><th>Status</th><th>URL</th><th></th></tr></thead>
         <tbody></tbody>
@@ -263,8 +271,9 @@
             <button type="submit">Add list</button>
         </form>
         <p class="muted">Fetched URLs obey the same SSRF / private-address policy as feeds.
-            A JSON filter is a small expression, <code>$.a.b[*].c</code>; the dedicated
-            vendor fetchers (Microsoft 365, Azure) are a follow-up slice.</p>
+            A JSON filter is a small expression, <code>$.a.b[*].c</code>. Catalog lists
+            above are plain lists served from the project's published snapshots;
+            a custom list can point at any URL you maintain yourself.</p>
     </details>
     <p id="apps-msg" class="hint" role="status" aria-live="polite"></p>
 </section>
