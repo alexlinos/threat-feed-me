@@ -1589,6 +1589,62 @@ async function loadApplications() {
         renderApplications(j.applications || []);
         appsLoaded = true;
     } catch (e) { /* offline / auth: the view stays empty, message row says it */ }
+    try {
+        const c = await (await apiFetch('/api/applications/catalog')).json();
+        renderCatalog(c);
+    } catch (e) { /* catalog is an offer; the custom lists below still work */ }
+}
+function fmtBytes(n) {
+    if (!n && n !== 0) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function renderCatalog(c) {
+    const host = document.getElementById('apps-catalog');
+    if (!host) return;
+    const rows = (c && c.catalog) || [];
+    if (!rows.length) {
+        host.innerHTML = '<p class="muted">' + (c && c.error
+            ? 'The catalog could not be loaded (' + esc(c.error) + '); your lists below are unaffected.'
+            : 'No catalog lists published yet.') + '</p>';
+        return;
+    }
+    const vendors = [];
+    const byVendor = {};
+    rows.forEach(r => {
+        if (!byVendor[r.vendor]) { byVendor[r.vendor] = []; vendors.push(r.vendor); }
+        byVendor[r.vendor].push(r);
+    });
+    host.innerHTML = vendors.map(v =>
+        '<h3 class="apps-vendor">' + esc(v) + '</h3>' +
+        '<table class="feed-table"><thead><tr><th>List</th><th>Entries</th><th>Size</th>' +
+        '<th>Status</th><th>On</th></tr></thead><tbody>' +
+        byVendor[v].map(r => {
+            const status = r.pending ? '<span class="warn">held for approval</span>'
+                : r.enabled ? esc(r.last_status || 'on')
+                : r.adopted ? 'off' : 'not added';
+            const count = r.enabled && r.local_entries != null ? r.local_entries : r.entries;
+            return '<tr><td><b>' + esc(r.name) + '</b><br><span class="muted">' +
+                esc(r.description) + '</span></td>' +
+                '<td>' + (count ? count.toLocaleString() : '—') + '</td>' +
+                '<td>' + fmtBytes(r.bytes) + '</td>' +
+                '<td>' + status + '</td>' +
+                '<td><label class="switch"><input type="checkbox"' +
+                (r.enabled ? ' checked' : '') +
+                ' onchange="catalogToggle(this,\'' + esc(r.slug) + '\')"><span></span></label></td></tr>';
+        }).join('') + '</tbody></table>').join('') +
+        (c.error ? '<p class="muted">Showing the last loaded catalog (' +
+            esc(c.error) + ').</p>' : '');
+}
+async function catalogToggle(el, slug) {
+    const res = await apiFetch('/api/applications/catalog/' + encodeURIComponent(slug) + '/toggle',
+        {method: 'POST', headers: {'Content-Type': 'application/json'},
+         body: JSON.stringify({enabled: el.checked})});
+    const j = await res.json().catch(() => ({}));
+    appMsg(slug + ': ' + (j.outcome || j.detail || (res.ok ? 'saved' : 'failed')) +
+           (j.error ? ' (' + j.error + ')' : ''));
+    loadApplications();
 }
 function renderApplications(rows) {
     const tb = document.querySelector('#apps-table tbody');
