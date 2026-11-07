@@ -16,7 +16,9 @@ the maintainer, not silently pass through a production change guard.
 Parsers are pure functions over already-parsed JSON so the test suite can
 exercise them offline against fixtures (repo rule: no network in tests).
 
-Exit codes: 0 = ok, 1 = alert-worthy change, 2 = at least one fetch failed.
+Exit codes: 0 = ok, 1 = alert-worthy change, 2 = at least one non-optional
+fetch failed. (A source marked optional, currently Adobe's bot-walled KB
+page, reports its failure in the report without failing the run.)
 """
 
 from __future__ import annotations
@@ -69,12 +71,16 @@ def fetch_aws():
     return get_json("https://ip-ranges.amazonaws.com/ip-ranges.json")
 
 
-def fetch_m365():
+def fetch_m365_instance(instance: str):
     # The endpoints API wants a per-request GUID; a per-run GUID keeps
     # vendor-side request logging honest without identifying anyone.
     guid = str(uuid.uuid4())
-    url = "https://endpoints.office.com/endpoints/Worldwide?clientrequestid=" + guid
+    url = f"https://endpoints.office.com/endpoints/{instance}?clientrequestid=" + guid
     return get_json(url, headers={"X-MSEdge-ClientID": guid})
+
+
+def fetch_m365():
+    return fetch_m365_instance("Worldwide")
 
 
 def fetch_gcp_cloud():
@@ -98,6 +104,64 @@ def fetch_azure():
     if not candidates:
         raise ValueError("no ServiceTags_Public blob link found on the Azure details page")
     return get_json(candidates[-1])  # date-stamped names sort newest-last
+
+
+ADOBE_PAGE_URL = "https://helpx.adobe.com/enterprise/kb/network-endpoints.html"
+# Adobe offers the allowlist as a downloadable file linked from the KB page;
+# the file name carries a timestamp, so match the shape, not a fixed name.
+ADOBE_FILE_RE = re.compile(r"""https?://[^\s\"'<>]+?\.(?:txt|csv)(?:\?[^\s\"'<>]*)?""")
+
+
+def fetch_adobe() -> str:
+    """Adobe's endpoints live on a bot-walled help page, with a downloadable
+    allowlist file linked from it. Same pattern as Azure: fetch the page,
+    prefer the linked file, otherwise use the page itself, whose exhaustive
+    lists are inline. Returns raw text; normalize_adobe extracts. The
+    source is optional in SOURCES: an Akamai 403 must not fail the watch.
+    """
+    page = get(ADOBE_PAGE_URL).decode("utf-8", errors="replace")
+    for link in sorted(set(ADOBE_FILE_RE.findall(page))):
+        if "allowlist" in link.lower() or "endpoint" in link.lower():
+            try:
+                return get(link).decode("utf-8", errors="replace")
+            except (requests.RequestException, ValueError):
+                break
+    return page
+
+
+# Host-shaped tokens in prose: optional scheme, optional leading wildcard,
+# then a dotted host. Paths are cut by only capturing the host part.
+_ADOBE_HOST_RE = re.compile(
+    r"(?:https?://|wss://)?(\*\.)?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)", re.IGNORECASE)
+# Dotted tokens whose last label is a file extension are page furniture,
+# not endpoints ("network-endpoints.html" is not an allow-list entry).
+_ADOBE_JUNK_TLDS = {"html", "htm", "aspx", "php", "jsp", "js", "css", "json",
+                    "xml", "png", "jpg", "jpeg", "gif", "svg", "pdf", "xlsx",
+                    "txt", "csv", "zip"}
+
+
+def normalize_adobe(text: str) -> set[str]:
+    """Extract domain material from Adobe's allowlist text (file or page).
+
+    Keeps fully qualified domains and leading-wildcard domains. Mid-string
+    wildcards (firebase*.googleapis.com) are not expressible in the served
+    list format and fall out on their own: the regex only matches a
+    wildcard at the start, and the remainder parses as a different host.
+    """
+    out = set()
+    for m in _ADOBE_HOST_RE.finditer(text):
+        if m.start() > 0 and (text[m.start() - 1].isalnum()
+                              or text[m.start() - 1] in "*._-"):
+            continue  # fragment of a larger token (a mid-string wildcard's
+            # parent domain is broader than what Adobe published; skip it)
+        host = m.group(2).lower().rstrip(".")
+        tld = host.rsplit(".", 1)[-1]
+        if len(host) > 253 or len(tld) < 2 or not tld.isalpha() \
+                or tld in _ADOBE_JUNK_TLDS:
+            continue
+        out.add(f"domain|||{('*.' if m.group(1) else '') + host}")
+    return out
 
 
 def fetch_cloudflare():
@@ -148,8 +212,13 @@ def normalize_gcp(data: dict) -> set[str]:
 def normalize_azure(data: dict) -> set[str]:
     out = set()
     for pl in data.get("values", []):
+        # Live shape: {"name": "Storage.EastUS", "properties": {"region": ...,
+        # "addressPrefixes": [...]}}. The tag name lives on the value, NOT
+        # inside properties; reading it from properties yielded "" for every
+        # entry and made per-tag slicing impossible (found while building
+        # the application catalog, issue #28).
         props = pl.get("properties", pl)
-        name = props.get("name", "")
+        name = pl.get("name") or props.get("name", "")
         region = props.get("regionName") or props.get("region") or "Global"
         for prefix in props.get("addressPrefixes", []):
             out.add(f"cidr|{name}|{region}|{prefix}")
@@ -186,18 +255,28 @@ class Source:
     fetch: Callable[[], Any]      # () -> parsed JSON
     normalize: Callable[[Any], set[str]]  # (parsed) -> set[str]
     note: str = ""
+    optional: bool = False        # a failed optional fetch never fails the run
     data: Any = field(default=None, repr=False)
 
 
 SOURCES = [
     Source("aws_ip_ranges", fetch_aws, normalize_aws),
     Source("m365_endpoints", fetch_m365, normalize_m365),
+    Source("m365_gcc_high", lambda: fetch_m365_instance("USGovGCCHigh"),
+           normalize_m365, note="sovereign cloud instance"),
+    Source("m365_dod", lambda: fetch_m365_instance("USGovDoD"),
+           normalize_m365, note="sovereign cloud instance"),
+    Source("m365_china", lambda: fetch_m365_instance("China"),
+           normalize_m365, note="sovereign cloud instance (21Vianet)"),
     Source("gcp_cloud", fetch_gcp_cloud, normalize_gcp),
     Source("gcp_goog", fetch_gcp_goog, normalize_gcp),
     Source("azure_service_tags", fetch_azure, normalize_azure,
            note="blob URL found via the download page weekly"),
     Source("cloudflare_ips", fetch_cloudflare, normalize_cloudflare),
     Source("github_meta", fetch_github_meta, normalize_github_meta),
+    Source("adobe_endpoints", fetch_adobe, normalize_adobe,
+           note="bot-walled KB page with a downloadable allowlist; best-effort",
+           optional=True),
 ]
 
 
@@ -320,7 +399,8 @@ def main(argv: list[str] | None = None) -> int:
             src.data = src.fetch()
             entries = src.normalize(src.data)
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-            fetch_failed = True
+            if not src.optional:
+                fetch_failed = True
             results[src.name] = {"status": f"fetch failed: {exc}", "count": None,
                                  "alert": False, "baseline": False}
             print(f"FAIL {src.name}: {exc}", file=sys.stderr)
