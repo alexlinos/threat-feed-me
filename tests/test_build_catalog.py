@@ -95,3 +95,29 @@ def test_manifest_counts_match_files(tmp_path):
     (entry,) = manifest["lists"]
     body = (out / "aws-ec2.txt").read_bytes()
     assert entry["entries"] == 1 and entry["bytes"] == len(body)
+
+
+def test_rebuild_with_unchanged_snapshots_rewrites_nothing(tmp_path):
+    # Regression: a fresh generated_at every run changed catalog.json
+    # daily even when no list did, and the workflow's commit step pushed
+    # a no-op snapshot commit. An unchanged rebuild must leave the whole
+    # output tree byte-identical, stamp included.
+    data = {"aws_ip_ranges": ["v4|us-east-1|EC2|192.0.2.0/24"]}
+    manifest, out = _build(tmp_path, data)
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    snaps = tmp_path / "snapshots"
+    again = bc.build(snaps, out, "https://factory.example/",
+                     "2026-11-08T00:00:00Z")
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+    assert again["generated_at"] == manifest["generated_at"]
+
+    # A real change still rewrites the manifest, with the new stamp.
+    (snaps / "aws_ip_ranges.json").write_text(json.dumps(
+        {"source": "aws_ip_ranges",
+         "entries": ["v4|us-east-1|EC2|192.0.2.0/24",
+                     "v4|us-east-1|EC2|198.51.100.0/24"]}), encoding="utf-8")
+    changed = bc.build(snaps, out, "https://factory.example/",
+                       "2026-11-08T00:00:00Z")
+    assert changed["generated_at"] == "2026-11-08T00:00:00Z"
+    assert json.loads((out / "catalog.json").read_text())["generated_at"] == \
+        "2026-11-08T00:00:00Z"
