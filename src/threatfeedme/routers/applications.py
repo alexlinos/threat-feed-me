@@ -181,7 +181,8 @@ def get_catalog(_=Depends(require_auth)):
     # Declared before /api/applications/{name} so "catalog" is not read as
     # a list name. Renders from the published manifest only; no list data
     # is downloaded to answer this.
-    return vendor_catalog.catalog_view(core.db, enabled=_catalog_enabled())
+    return vendor_catalog.catalog_view(core.db, enabled=_catalog_enabled(),
+                                       allow_private=_allow_private())
 
 
 @router.post("/api/applications/catalog/{slug}/toggle")

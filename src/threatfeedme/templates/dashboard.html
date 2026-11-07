@@ -246,39 +246,43 @@
 
     <div id="apps-pending-callout" hidden class="callout" role="status"></div>
 
+    {# Catalog: vendors on the left, the chosen vendor's lists on the right, each
+       with an on/off switch; a list that is on shows its URL and the URL
+       builder. Rendered by app.js (renderCatalog) from the published manifest. #}
     <h2 class="apps-subhead">Catalog</h2>
-    <p class="hint">Built-in vendor lists, sliced and published by the project from the
-        vendors' own files. The page reads only the catalog index; a list downloads
-        nothing until you switch it on. Switching one on creates it under Your lists
-        and starts it refreshing; switching it off stops fetching and serving.</p>
-    <div id="apps-catalog"><p class="muted">Loading the catalog…</p></div>
+    <p class="hint">Vendor lists the project builds from each vendor's own published files.
+        Nothing downloads until you switch a list on; switching it off stops fetching and serving.</p>
+    <div id="apps-catalog" class="cat"><p class="muted">Loading the catalog…</p></div>
 
     <h2 class="apps-subhead">Your lists</h2>
-    <table class="feed-table" id="apps-table" aria-label="Application lists">
-        <thead><tr><th>List</th><th>Entries</th><th>Last refresh</th><th>Status</th><th>URL</th><th></th></tr></thead>
+    <p class="hint">Lists you point at a URL yourself.</p>
+    <div class="table-scroll">
+    <table class="feed-table" id="apps-table" aria-label="Your application lists">
+        <thead><tr><th>List</th><th>Entries</th><th>Refreshed</th><th>Status</th><th>URL</th><th></th></tr></thead>
         <tbody></tbody>
     </table>
+    </div>
 
-    <details class="feed-add" id="apps-add">
-        <summary>Add an application list</summary>
-        <form id="apps-add-form" class="row-form">
-            <label>Name <input name="name" required pattern="[a-z0-9][a-z0-9-]{0,62}[a-z0-9]"
-                               title="lowercase letters, digits and dashes" maxlength="64"></label>
-            <label>URL <input name="url" required type="url" maxlength="2048"
-                              placeholder="https://vendor.example/ip-ranges.txt"></label>
-            <label>Format
-                <select name="format"><option value="list">plain list</option><option value="json">JSON</option></select>
-            </label>
-            <label>Filter (JSON only) <input name="filter_expr" maxlength="512"
-                                             placeholder="$.prefixes[*].ipv4Prefix"></label>
-            <label>Every (s) <input name="update_interval" type="number" value="21600" min="300" max="604800"></label>
-            <button type="submit">Add list</button>
-        </form>
-        <p class="muted">Fetched URLs obey the same SSRF / private-address policy as feeds.
-            A JSON filter is a small expression, <code>$.a.b[*].c</code>. Catalog lists
-            above are plain lists served from the project's published snapshots;
-            a custom list can point at any URL you maintain yourself.</p>
-    </details>
+    <form id="apps-add-form" class="wl-form apps-add" aria-label="Add an application list">
+        <input class="ip" name="name" required pattern="[a-z0-9][a-z0-9-]{0,62}[a-z0-9]" maxlength="64"
+               placeholder="list name" title="Lowercase letters, digits and dashes" aria-label="List name">
+        <input class="reason" name="url" required type="url" maxlength="2048"
+               placeholder="https://vendor.example/ip-ranges.txt" aria-label="Source URL">
+        <select name="format" aria-label="Format">
+            <option value="list">Plain list</option><option value="json">JSON</option>
+        </select>
+        <input name="filter_expr" maxlength="512" placeholder="JSON filter, e.g. $.prefixes[*].ipv4Prefix"
+               aria-label="JSON filter (JSON format only)">
+        <select name="update_interval" aria-label="Refresh every">
+            <option value="3600">Refresh hourly</option>
+            <option value="21600" selected>Every 6 hours</option>
+            <option value="43200">Every 12 hours</option>
+            <option value="86400">Daily</option>
+        </select>
+        <button type="submit">Add list</button>
+    </form>
+    <p class="hint">Fetched URLs follow the same private-address rules as feeds. A JSON filter is a small
+        expression, <code>$.a.b[*].c</code>.</p>
     <p id="apps-msg" class="hint" role="status" aria-live="polite"></p>
 </section>
 

@@ -1583,69 +1583,177 @@ document.addEventListener('DOMContentLoaded', loadHostCheck);
 // Rows are re-fetched on every visit to the view; there are a handful of
 // lists and the pending/approve state must never be stale when clicked.
 let appsLoaded = false;
+// Catalog view state survives the re-render after every toggle or refresh.
+const catState = {vendor: null, group: null, filter: ''};
+let catData = null;
+let appRows = [];
+
 async function loadApplications() {
     try {
         const j = await (await apiFetch('/api/applications')).json();
-        renderApplications(j.applications || []);
+        appRows = j.applications || [];
         appsLoaded = true;
     } catch (e) { /* offline / auth: the view stays empty, message row says it */ }
     try {
-        const c = await (await apiFetch('/api/applications/catalog')).json();
-        renderCatalog(c);
-    } catch (e) { /* catalog is an offer; the custom lists below still work */ }
+        catData = await (await apiFetch('/api/applications/catalog')).json();
+    } catch (e) { catData = null; /* catalog is an offer; your own lists still work */ }
+    renderCatalog();
+    renderApplications(appRows);
 }
-function fmtBytes(n) {
-    if (!n && n !== 0) return '—';
-    if (n < 1024) return n + ' B';
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+
+// "12m ago" from a stored ISO stamp (the table used to print it raw).
+function appAgo(iso) {
+    const t = Date.parse(iso || '');
+    if (Number.isNaN(t)) return '—';
+    const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (m < 1) return 'just now';
+    if (m < 120) return m + 'm ago';
+    if (m < 48 * 60) return Math.round(m / 60) + 'h ago';
+    return Math.round(m / 1440) + 'd ago';
 }
-function renderCatalog(c) {
+
+// A per-list status as the Feeds table shows one: problems in amber.
+function appStatus(r) {
+    if (r.pending) return '<span class="warn">held for approval</span>';
+    const s = r.last_status || '';
+    if (!s) return '<span class="muted">never fetched</span>';
+    if (/^(error|held)/.test(s)) return '<span class="warn">' + esc(s) + '</span>';
+    if (s === 'not-modified') return '<span class="ok-text">ok</span> <span class="muted">(unchanged)</span>';
+    return '<span class="ok-text">' + esc(s) + '</span>';
+}
+
+function appUrlCell(name) {
+    return '<div class="url-row"><input class="url-box" type="text" readonly value="' +
+        esc(location.origin + '/lists/' + encodeURIComponent(name) + '.txt') +
+        '" onclick="this.select()" aria-label="' + esc(name) + ' list URL">' +
+        '<button class="copy-btn" type="button" onclick="copyUrl(this)">Copy</button></div>';
+}
+
+// Tab order inside a vendor: the "all" view first, then as published.
+function catGroups(rows) {
+    const seen = [];
+    rows.forEach(r => { if (!seen.includes(r.group || '')) seen.push(r.group || ''); });
+    return seen.sort((a, b) => (/^All /.test(b) ? 1 : 0) - (/^All /.test(a) ? 1 : 0));
+}
+
+function renderCatalog() {
     const host = document.getElementById('apps-catalog');
     if (!host) return;
-    const rows = (c && c.catalog) || [];
-    if (!rows.length) {
-        host.innerHTML = '<p class="muted">' + (c && c.error
-            ? 'The catalog could not be loaded (' + esc(c.error) + '); your lists below are unaffected.'
-            : 'No catalog lists published yet.') + '</p>';
+    const c = catData;
+    if (!c) { host.innerHTML = '<p class="muted">The catalog couldn\'t be loaded. Your own lists below still work.</p>'; return; }
+    if (c.disabled) {
+        host.innerHTML = '<p class="muted">The catalog is switched off on this server (<code>app_catalog.enabled</code>). ' +
+            'Your own lists below still work.</p>';
         return;
     }
-    const vendors = [];
-    const byVendor = {};
-    rows.forEach(r => {
-        if (!byVendor[r.vendor]) { byVendor[r.vendor] = []; vendors.push(r.vendor); }
-        byVendor[r.vendor].push(r);
-    });
-    host.innerHTML = vendors.map(v =>
-        '<h3 class="apps-vendor">' + esc(v) + '</h3>' +
-        '<table class="feed-table"><thead><tr><th>List</th><th>Entries</th><th>Size</th>' +
-        '<th>Status</th><th>On</th></tr></thead><tbody>' +
-        byVendor[v].map(r => {
-            const status = r.pending ? '<span class="warn">held for approval</span>'
-                : r.enabled ? esc(r.last_status || 'on')
-                : r.adopted ? 'off' : 'not added';
-            const count = r.enabled && r.local_entries != null ? r.local_entries : r.entries;
-            return '<tr><td><b>' + esc(r.name) + '</b><br><span class="muted">' +
-                esc(r.description) + '</span></td>' +
-                '<td>' + (count ? count.toLocaleString() : '—') + '</td>' +
-                '<td>' + fmtBytes(r.bytes) + '</td>' +
-                '<td>' + status + '</td>' +
-                '<td><label class="switch"><input type="checkbox"' +
-                (r.enabled ? ' checked' : '') +
-                ' onchange="catalogToggle(this,\'' + esc(r.slug) + '\')"><span></span></label></td></tr>';
-        }).join('') + '</tbody></table>').join('') +
-        (c.error ? '<p class="muted">Showing the last loaded catalog (' +
-            esc(c.error) + ').</p>' : '');
+    const rows = c.catalog || [];
+    if (!rows.length) {
+        host.innerHTML = '<p class="muted">' + (c.error
+            ? 'The catalog isn\'t available: ' + esc(c.error) + '. Your own lists below still work.'
+            : 'No catalog lists have been published yet.') + '</p>';
+        return;
+    }
+    const vendors = [...new Set(rows.map(r => r.vendor))].sort((a, b) => a.localeCompare(b));
+    if (!vendors.includes(catState.vendor)) catState.vendor = vendors[0];
+    const onCount = v => rows.filter(r => r.vendor === v && r.enabled).length;
+    const nav = '<nav class="cat-nav" aria-label="Vendors">' +
+        '<select class="cat-select" aria-label="Vendor">' + vendors.map(v =>
+            '<option value="' + esc(v) + '"' + (v === catState.vendor ? ' selected' : '') + '>' + esc(v) +
+            (onCount(v) ? ' (' + onCount(v) + ' on)' : '') + '</option>').join('') + '</select>' +
+        '<ul>' + vendors.map(v =>
+            '<li><button type="button" class="cat-v' + (v === catState.vendor ? ' active' : '') +
+            '" data-vendor="' + esc(v) + '"' + (v === catState.vendor ? ' aria-current="true"' : '') + '>' +
+            '<span>' + esc(v) + '</span>' + (onCount(v) ? '<span class="cat-count">' + onCount(v) + ' on</span>' : '') +
+            '</button></li>').join('') + '</ul></nav>';
+    const vrows = rows.filter(r => r.vendor === catState.vendor);
+    const groups = catGroups(vrows);
+    if (!groups.includes(catState.group)) catState.group = groups[0];
+    const info = (c.vendors || {})[catState.vendor] || {};
+    let panel = '<div class="cat-panel"><h3>' + esc(catState.vendor) + '</h3>' +
+        (info.description ? '<p class="hint">' + esc(info.description) + '</p>' : '') +
+        (info.docs ? '<p class="cat-docs"><a href="' + esc(info.docs) + '" target="_blank" rel="noopener noreferrer">' +
+            esc(catState.vendor) + ' documentation: what to allow ↗</a></p>' : '');
+    if (groups.length > 1) {
+        panel += '<div class="cat-tabs" role="tablist">' + groups.map(g =>
+            '<button type="button" role="tab" class="cat-tab' + (g === catState.group ? ' active' : '') +
+            '" aria-selected="' + (g === catState.group) + '" data-group="' + esc(g) + '">' + esc(g) + '</button>').join('') + '</div>';
+    }
+    const grows = vrows.filter(r => (r.group || '') === catState.group);
+    if (grows.length > 12) {
+        panel += '<input class="cat-filter" type="search" placeholder="Filter ' + grows.length + ' lists" aria-label="Filter lists" value="' +
+            esc(catState.filter) + '">';
+    }
+    panel += '<table class="feed-table cat-table"><thead><tr><th>List</th><th>Entries</th><th>On</th></tr></thead>' +
+        '<tbody>' + catRows(grows) + '</tbody></table>' +
+        (c.error ? '<p class="muted">Showing the last catalog loaded; the latest couldn\'t be read (' + esc(c.error) + ').</p>' : '') +
+        '</div>';
+    // Keep an open URL builder open across the re-render a toggle causes.
+    const openUb = [...host.querySelectorAll('details.ub[open]')].map(d => d.dataset.base);
+    host.innerHTML = nav + panel;
+    host.querySelectorAll('details.ub').forEach(d => { if (openUb.includes(d.dataset.base)) d.open = true; });
 }
-async function catalogToggle(el, slug) {
+
+function catRows(rows) {
+    const f = catState.filter.trim().toLowerCase();
+    const shown = f ? rows.filter(r => (r.name + ' ' + r.description).toLowerCase().includes(f)) : rows;
+    if (!shown.length) return '<tr><td colspan="3" class="muted">No lists match.</td></tr>';
+    return shown.map(r => {
+        const count = r.enabled && r.local_entries != null ? r.local_entries : r.entries;
+        let html = '<tr' + (r.enabled ? ' class="cat-on"' : '') + '><td><b>' + esc(r.name) + '</b>' +
+            (r.description ? '<div class="cat-desc">' + esc(r.description) + '</div>' : '') + '</td>' +
+            '<td>' + (count ? count.toLocaleString() : '—') + '</td>' +
+            '<td><label class="switch" title="' + (r.enabled ? 'Switch off: stop fetching and serving' : 'Switch on: fetch and serve this list') + '">' +
+            '<input type="checkbox" data-slug="' + esc(r.slug) + '"' + (r.enabled ? ' checked' : '') +
+            ' aria-label="' + esc(r.name) + '"><span></span></label></td></tr>';
+        if (r.enabled) {
+            html += '<tr class="cat-detail"><td colspan="3">' + appUrlCell(r.slug) +
+                '<p class="cat-status">' + appStatus(r) + '</p>' +
+                ubBody(location.origin + '/lists/' + encodeURIComponent(r.slug), 'app') + '</td></tr>';
+        }
+        return html;
+    }).join('');
+}
+
+async function catalogToggle(el) {
+    const slug = el.dataset.slug;
+    const on = el.checked;
+    el.disabled = true;
     const res = await apiFetch('/api/applications/catalog/' + encodeURIComponent(slug) + '/toggle',
-        {method: 'POST', headers: {'Content-Type': 'application/json'},
-         body: JSON.stringify({enabled: el.checked})});
+        {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: on})});
     const j = await res.json().catch(() => ({}));
-    appMsg(slug + ': ' + (j.outcome || j.detail || (res.ok ? 'saved' : 'failed')) +
-           (j.error ? ' (' + j.error + ')' : ''));
+    if (!res.ok) {
+        el.checked = !on;           // the switch shows what is true, not what was asked
+        el.disabled = false;
+        appMsg(slug + ': ' + detailText(j.detail || 'failed (' + res.status + ')'));
+        return;
+    }
+    appMsg(slug + ': ' + (on ? (j.outcome === 'error' ? 'on, but the first fetch failed' + (j.error ? ' (' + j.error + ')' : '')
+                                 : 'on, ' + (j.count != null ? j.count.toLocaleString() + ' entries serving' : j.outcome))
+                              : 'off; its URL no longer serves'));
     loadApplications();
 }
+
+(function wireCatalog() {
+    const host = document.getElementById('apps-catalog');
+    if (!host) return;
+    host.addEventListener('click', ev => {
+        const v = ev.target.closest('.cat-v');
+        const t = ev.target.closest('.cat-tab');
+        if (v) { catState.vendor = v.dataset.vendor; catState.group = null; catState.filter = ''; renderCatalog(); }
+        else if (t) { catState.group = t.dataset.group; catState.filter = ''; renderCatalog(); }
+    });
+    host.addEventListener('change', ev => {
+        if (ev.target.matches('.cat-select')) { catState.vendor = ev.target.value; catState.group = null; catState.filter = ''; renderCatalog(); }
+        else if (ev.target.matches('input[data-slug]')) catalogToggle(ev.target);
+    });
+    host.addEventListener('input', ev => {
+        if (!ev.target.matches('.cat-filter')) return;
+        catState.filter = ev.target.value;
+        const vrows = (catData.catalog || []).filter(r => r.vendor === catState.vendor && (r.group || '') === catState.group);
+        host.querySelector('.cat-table tbody').innerHTML = catRows(vrows);
+    });
+})();
+
 function renderApplications(rows) {
     const tb = document.querySelector('#apps-table tbody');
     const callout = document.getElementById('apps-pending-callout');
@@ -1655,25 +1763,32 @@ function renderApplications(rows) {
         callout.hidden = held.length === 0;
         callout.innerHTML = held.map(r =>
             '<b>' + esc(r.name) + '</b> is holding a refresh that moved too much of ' +
-            'the list. Review and approve or discard it in the row below.').join('<br>');
+            'the list. Review and approve or discard it in its row.').join('<br>');
     }
-    tb.innerHTML = rows.map(r => {
-        const url = location.origin + '/lists/' + encodeURIComponent(r.name) + '.txt';
-        const statusCell = (r.pending ? '<span class="warn">held for approval</span>' : esc(r.last_status || 'never fetched')) +
-            (r.enabled ? '' : ' <span class="muted">(disabled)</span>');
+    // Catalog lists live in the catalog above (switch, URL, builder); this
+    // table is the operator's own. Until the catalog loads, show everything.
+    const catalogSlugs = new Set(((catData && catData.catalog) || []).map(r => r.slug));
+    const own = rows.filter(r => !catalogSlugs.has(r.name));
+    if (!own.length) {
+        tb.innerHTML = '<tr><td colspan="6" class="muted">None yet. Add one below: any URL that serves a plain list or JSON.</td></tr>';
+        return;
+    }
+    tb.innerHTML = own.map(r => {
+        const n = esc(r.name);
         const actions =
-            '<button onclick="appRefresh(\'' + esc(r.name) + '\')">Refresh now</button> ' +
+            '<button class="mini-btn" type="button" onclick="appRefresh(\'' + n + '\')">Refresh</button> ' +
             (r.pending
-                ? '<button onclick="appPending(\'' + esc(r.name) + '\',\'approve\')">Approve</button> ' +
-                  '<button onclick="appPending(\'' + esc(r.name) + '\',\'reject\')">Discard</button> '
+                ? '<button class="mini-btn" type="button" onclick="appPending(\'' + n + '\',\'approve\')">Approve</button> ' +
+                  '<button class="mini-btn" type="button" onclick="appPending(\'' + n + '\',\'reject\')">Discard</button> '
                 : '') +
-            '<button onclick="appDelete(\'' + esc(r.name) + '\')">Delete</button>';
-        return '<tr><td><a href="#applications/' + esc(r.name) + '">' + esc(r.name) + '</a></td>' +
+            '<button class="rm-btn" type="button" onclick="appDelete(\'' + n + '\')">Delete</button>';
+        return '<tr><td><b>' + n + '</b><div class="cat-desc"><a href="' + esc(r.source_url || '#') +
+            '" target="_blank" rel="noopener noreferrer">source ↗</a></div></td>' +
             '<td>' + (r.entry_count ? r.entry_count.toLocaleString() : '—') + '</td>' +
-            '<td>' + esc(r.last_refresh_at || '—') + '</td>' +
-            '<td>' + statusCell + '</td>' +
-            '<td><input class="url-box" type="text" readonly value="' + esc(url) + '" onclick="this.select()"></td>' +
-            '<td>' + actions + '</td></tr>' +
+            '<td title="' + esc(r.last_refresh_at || '') + '">' + appAgo(r.last_refresh_at) + '</td>' +
+            '<td>' + appStatus(r) + (r.enabled ? '' : ' <span class="muted">(off)</span>') + '</td>' +
+            '<td>' + appUrlCell(r.name) + '</td>' +
+            '<td class="app-actions">' + actions + '</td></tr>' +
             '<tr class="ub-tr"><td colspan="6">' +
             ubBody(location.origin + '/lists/' + encodeURIComponent(r.name), 'app') + '</td></tr>';
     }).join('');

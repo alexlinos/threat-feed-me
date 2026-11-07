@@ -288,6 +288,21 @@ def test_a_failed_fetch_is_remembered_not_retried_per_page_load(db):
     assert first["error"] == second["error"] == "GitHub couldn't be reached from this server"
 
 
+def test_manifest_fetch_follows_the_private_url_policy(db):
+    # Guarded by default (env proxies off), like every fetch; an install that
+    # allows private feed URLs can mirror the catalog on its own network.
+    seen = []
+    bodies = {MANIFEST_URL: manifest_json([("aws-ec2", 2)])}
+    base = transport(bodies)
+
+    def get(url, **kw):
+        seen.append(kw.get("proxies"))
+        return base(url, **kw)
+    vendor_catalog.get_catalog(db, get=get)
+    vendor_catalog.get_catalog(db, get=get, force=True, allow_private=True)
+    assert seen == [{"http": None, "https": None, "all": None}, None]
+
+
 def test_switched_off_catalog_fetches_nothing(db):
     get = transport({})
     view = vendor_catalog.catalog_view(db, get=get, enabled=False)

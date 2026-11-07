@@ -110,9 +110,9 @@ def _clean(doc, base: str) -> Optional[Dict]:
             "vendors": vendors}
 
 
-def _fetch(url: str, get: Callable) -> Dict:
-    resp = guarded_get(url, get=get, headers={"User-Agent": USER_AGENT},
-                       timeout=_FETCH_TIMEOUT)
+def _fetch(url: str, get: Callable, allow_private: bool = False) -> Dict:
+    resp = guarded_get(url, allow_private=allow_private, get=get,
+                       headers={"User-Agent": USER_AGENT}, timeout=_FETCH_TIMEOUT)
     try:
         resp.raise_for_status()
         raw = _read_capped_bytes(resp, "catalog manifest", MAX_MANIFEST_BYTES)
@@ -126,9 +126,11 @@ def _fetch(url: str, get: Callable) -> Dict:
 
 
 def get_catalog(db, get: Callable = requests.get, force: bool = False,
-                enabled: bool = True) -> Dict:
+                enabled: bool = True, allow_private: bool = False) -> Dict:
     """The manifest, cached. Never raises: on failure the result carries
-    the last good lists (possibly none) plus an ``error`` string."""
+    the last good lists (possibly none) plus an ``error`` string.
+    allow_private is safety.allow_private_feed_urls, as for every fetch: an
+    install mirroring the catalog on its own network needs it."""
     if not enabled:
         return {**_EMPTY, "error": None, "disabled": True}
     with _cache_lock:
@@ -136,7 +138,7 @@ def get_catalog(db, get: Callable = requests.get, force: bool = False,
             return {**(_cache["doc"] or _EMPTY), "error": _cache["error"]}
         url = db.get_setting(CATALOG_URL_SETTING) or DEFAULT_CATALOG_URL
         try:
-            doc = _fetch(url, get)
+            doc = _fetch(url, get, allow_private)
             _cache.update(at=time.time(), doc=doc, error=None,
                           next_try=time.time() + CACHE_TTL_SECONDS)
         except Exception as exc:  # fetch/parse failure: keep last state
@@ -159,9 +161,10 @@ def _friendly(exc: Exception) -> str:
     return "the published catalog couldn't be read"
 
 
-def catalog_view(db, get: Callable = requests.get, enabled: bool = True) -> Dict:
+def catalog_view(db, get: Callable = requests.get, enabled: bool = True,
+                 allow_private: bool = False) -> Dict:
     """Manifest entries merged with local state for the Apps page."""
-    doc = get_catalog(db, get=get, enabled=enabled)
+    doc = get_catalog(db, get=get, enabled=enabled, allow_private=allow_private)
     rows = []
     for entry in doc["lists"]:
         local = db.get_application_list(entry["slug"])
@@ -193,7 +196,7 @@ def set_enabled(db, slug: str, enabled: bool, get: Callable = requests.get,
         return {"name": slug, "outcome": "disabled"}
     if not catalog_enabled:
         raise ValueError("the application catalog is switched off (app_catalog.enabled)")
-    doc = get_catalog(db, get=get)
+    doc = get_catalog(db, get=get, allow_private=allow_private)
     entry = next((e for e in doc["lists"] if e["slug"] == slug), None)
     if entry is None:
         if doc["error"] and not doc["lists"]:
