@@ -1020,12 +1020,60 @@ A review of v2.7.0 (PR #27, application lists) found two holes, both fixed:
 - **The allow-list gate repeated the 2.4.19 supernet bypass**: `is_private`
   on a network needs both ends private, so `172.0.0.0/8` passed. `_net_ok`
   now overlaps `safety._SPECIAL_V4/_V6`, like the threat-side filter.
-- Not fixed in 2.7.1 (from the same review): a slow-drip vendor can stall
-  the scheduler thread (the app-list pass runs inline before due_feeds);
-  approving a held refresh can overwrite a newer served version;
-  `domains.reserved_reason` is not applied to app-list domains.
+- Not fixed in 2.7.1 (from the same review): approving a held refresh can
+  overwrite a newer served version; `domains.reserved_reason` is not applied
+  to app-list domains. (The slow-drip scheduler stall is fixed on 2.7: see
+  below.)
 - PR #29 (catalog) predates this and needs rebasing onto it: its manifest
-  fetch and every catalog list go through the same paths.
+  fetch and every catalog list go through the same paths. (Done: carried
+  onto `feat/2.7-catalog`, see below.)
+
+## v2.7.2 (2026-11-08): list URL options, URL builder, catalog
+
+Built on the `2.7` branch and shipped as one release, so installs see one
+update notice, not one per change (maintainer, 2026-11-07); keep using a
+batch branch for future work, main stays the released version. After the
+release, the infra-list-watch workflow must run once to publish
+`catalog.json` (until then installs say the catalog isn't published yet);
+that first run also rewrites the Azure snapshot in the tag-name format, so
+expect one all-entries-changed Azure alert.
+
+- **Applications serve strictly what the vendor publishes** (maintainer).
+  URL options only select entries; nothing converts a domain into
+  addresses or rewrites a wildcard (`wildcards=strip` existed briefly and
+  was removed). Vendors move addresses behind names (Microsoft has,
+  repeatedly); a derived list goes stale silently. A test pins that every
+  option combination is a subset of the stored entries.
+- **URL options**: `/feeds` gained `?family=4|6` (unknown params still
+  ignored there: a 400 would break firewalls already polling). `/lists`
+  takes `kind`, `family`, `hosts`, `wildcards=keep|drop`, `limit`, and an
+  unknown option is a 400. `X-Entry-Count` (size before limit) on every
+  `.txt` and every `/lists` format. The dashboard's URL builder probes with
+  `X-TFM-Probe`, which the routes never record as a poll.
+- **Catalog page design** is modelled on a reference "source templates"
+  page the maintainer chose: vendors listed on the left; per vendor a
+  description, a link to the vendor's own docs on what to allow, tabs where
+  the vendor publishes categories, a table of lists with entry counts and
+  on/off switches. Do not name or link the reference anywhere in the repo.
+- **The application-list pass runs on its own thread**
+  (`scheduler.start_application_lists_pass`): it used to run inline on the
+  scheduler tick before the threat-feed due check, so one vendor dribbling
+  bytes under the read timeout could stall every threat-feed refresh, and
+  the catalog makes 200+ lists plausible. A tick that finds the previous
+  pass still running skips it.
+- **No per-region lists** (maintainer): AWS per service across all regions;
+  Azure global service tags only (regional would be ~2,900 lists, AWS
+  per-region 347). Microsoft 365 keeps its category tabs (not regions).
+- Catalog client: `guarded_get` + capped read, failures remembered 5 min,
+  `app_catalog.enabled: false` off switch, list URLs must sit beside the
+  manifest, follows `safety.allow_private_feed_urls`. Factory deletes the
+  files of retired lists (never when a run produced nothing); Adobe uses
+  only the linked file on an Adobe host, never page text.
+- **Previewing the catalog locally**: build it from snapshots with
+  `scripts/build_catalog.py --base-url http://127.0.0.1:<port>/`, serve the
+  output with `python -m http.server`, set the scratch DB's
+  `app_catalog_url` to the local `catalog/catalog.json`, and allow private
+  feed URLs in the scratch config only (the guard refuses 127.0.0.1).
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 

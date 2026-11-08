@@ -64,6 +64,14 @@ requests below). 2.7.0 did not enforce this for application lists; 2.7.1
 does. The vendor sees your server's public IP address, the User-Agent and
 the request time.
 
+**To the project's catalog (issue #28).** Opening the Applications page
+GETs a small catalog manifest from the project's own GitHub repository
+(the lists the project builds from vendor files, with names and counts
+only, no list data). A catalog list you switch on is then fetched from
+its published URL in the same repository on the schedule above. GitHub
+sees your server's public IP address, the User-Agent
+`threat-feed-me (application catalog)` and the request time.
+
 **To the threat feed providers you enable.** On every refresh the ingestor
 makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent
 `ThreatFeedMe/1.0` and, where the provider supports it, conditional request

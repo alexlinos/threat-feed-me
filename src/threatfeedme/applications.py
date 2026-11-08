@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from threatfeedme.domains import is_valid_domain
+from threatfeedme.domains import is_valid_domain, reserved_reason
 from threatfeedme.feed_ingestor import (ResponseTooLargeError, UnsafeURLError,
                                         _read_capped_bytes, guarded_get)
 from threatfeedme.safety import _SPECIAL_V4, _SPECIAL_V6
@@ -143,10 +143,72 @@ def _domain_ok(host: str) -> Tuple[bool, str]:
     if bare.count("*") > 1 or (host.startswith("*") and not host.startswith("*.")):
         return False, "malformed wildcard"
     if is_valid_domain(bare):
+        # An allow-list entry for a .local / .test name is a bug or a poison
+        # attempt: reserved and special-use TLDs are never served, the same
+        # rule the threat side applies.
+        reason = reserved_reason(bare.lower().rstrip("."))
+        if reason:
+            return False, reason
         return True, ""
     # A bare IPv4 slipped past ip_network (e.g. a malformed octet string);
     # anything that is neither a valid domain nor an IP is junk.
     return False, "not an IP, CIDR, domain, wildcard or URL"
+
+
+def entry_kind(entry: str) -> str:
+    """'url', 'ip' (address or network) or 'domain' (wildcards included) for
+    an entry that already passed guard_entry."""
+    if "://" in entry:
+        return "url"
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return "ip"
+    except ValueError:
+        return "domain"
+
+
+def select_entries(entries: List[str], kind: Optional[str] = None,
+                   family: Optional[int] = None, hosts: bool = False,
+                   wildcards: str = "keep") -> List[str]:
+    """The /lists/ URL options, so one stored list can feed every kind of
+    firewall object. Each option only selects which of the vendor's own
+    entries are served; they combine freely and are applied before ?limit.
+
+    Nothing here turns one kind of entry into another or rewrites what a
+    vendor published: no resolving domains to addresses, no widening or
+    narrowing a wildcard. Vendors move addresses behind their names (Microsoft
+    has, several times), and a derived list goes stale silently; the
+    maintainer's rule is to serve strictly what the vendor publishes.
+
+      kind      ip | domain | url: only that kind of entry (a FortiGate IP
+                feed fails its whole import on one hostname line);
+      family    4 | 6: drop IP entries of the other version (domains and
+                URLs are untouched; add kind=ip for a pure address list);
+      hosts     drop networks wider than one address and serve /32 and /128
+                entries as bare addresses, the same address written without
+                its prefix (Sophos takes no CIDR at all);
+      wildcards keep | drop: leave *.example.com entries out for consumers
+                that reject them. Never stripped to example.com: on an
+                exact-match firewall that silently narrows what the vendor
+                listed.
+    """
+    out: List[str] = []
+    for e in entries:
+        k = entry_kind(e)
+        if kind and k != kind:
+            continue
+        if k == "ip":
+            net = ipaddress.ip_network(e, strict=False)
+            if family and net.version != family:
+                continue
+            if hosts:
+                if net.num_addresses > 1:
+                    continue
+                e = str(net.network_address)
+        elif k == "domain" and e.startswith("*.") and wildcards == "drop":
+            continue
+        out.append(e)
+    return out
 
 
 def filter_entries(entries: List[str], v4_floor: int, v6_floor: int
@@ -176,8 +238,10 @@ def extract_json_paths(data: Any, expr: str) -> List[str]:
     not code (the 2.6 engine decision). Dots descend, ``[*]`` expands one
     level, a leaf may be a string, a number, or a list of strings. Anything
     richer belongs in a dedicated fetcher, not in a parser a vendor file
-    can steer.
+    can steer. A leading ``[*]`` expands a top-level array, which is the
+    Microsoft 365 endpoints shape.
     """
+    original_expr = expr
     if expr.startswith("$."):
         expr = expr[2:]
     elif expr.startswith("$"):
@@ -190,11 +254,25 @@ def extract_json_paths(data: Any, expr: str) -> List[str]:
         key, _, index = token.partition("[")
         expand = index == "*]"
         nxt: List[Any] = []
+        if not key:
+            if expand:
+                # A bare ``[*]`` is a level, not a field: expand the current
+                # list(s) only; non-list nodes contribute nothing here.
+                for node in nodes:
+                    if isinstance(node, list):
+                        nxt.extend(node)
+                nodes = nxt
+            # No name to descend by; leave the current nodes untouched.
+            continue
         for node in nodes:
             if isinstance(node, dict) and key in node:
                 nxt.append(node[key])
         if not nxt:
-            raise ValueError(f"filter expression found nothing at '{key}'")
+            # Name the whole expression and the failing segment so operators
+            # can fix the filter against the vendor shape.
+            raise ValueError(
+                f"filter expression '{original_expr}' matched nothing at '{key}'"
+            )
         if expand:
             expanded: List[Any] = []
             for node in nxt:
@@ -324,6 +402,9 @@ def refresh_list(db, name: str, get: Callable = requests.get,
             return summary
         db.replace_entries(name, accepted, len(added), len(removed),
                            sorted(added)[:DIFF_SAMPLE_CAP], sorted(removed)[:DIFF_SAMPLE_CAP])
+        # A held version is stale once a newer one is served; approving it
+        # would roll the list back.
+        db.reject_pending(name)
         db.set_application_list_state(name, status="ok", etag=new_etag)
         if rejected:
             sample = "; ".join(f"{e}: {r}" for e, r in rejected[:5])

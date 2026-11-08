@@ -16,15 +16,15 @@ strip these entries by design.
 """
 import hashlib
 import logging
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response
 
-from threatfeedme import applications, core
+from threatfeedme import applications, core, vendor_catalog
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme.feed_ingestor import UnsafeURLError, _require_public_url
-from threatfeedme.schemas import ApplicationListRequest
+from threatfeedme.schemas import ApplicationListRequest, CatalogToggleRequest
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,12 @@ def _row_or_404(name: str) -> dict:
 def _allow_private() -> bool:
     """The feed URL policy (safety.allow_private_feed_urls) governs list URLs too."""
     return bool((core.config.get('safety', {}) or {}).get('allow_private_feed_urls', False))
+
+
+def _catalog_enabled() -> bool:
+    """app_catalog.enabled (default on): off stops the manifest fetch, for
+    air-gapped installs and anyone who doesn't want the GitHub request."""
+    return bool((core.config.get('app_catalog', {}) or {}).get('enabled', True))
 
 
 def _validate(req: ApplicationListRequest) -> None:
@@ -79,43 +85,85 @@ def _validate(req: ApplicationListRequest) -> None:
 
 # ---------------------------------------------------------------- serving --
 
-def _served(request: Request, name: str, ext: str, limit: Optional[int]):
-    """Entries + ETag for one list. The ETag mixes body digest and the row's
-    entry_version, so a swap bustes caches even through a proxy that hashes
-    bodies."""
-    _row_or_404(name)
-    entries = core.db.get_entries(name)
+# URL options (applications.select_entries has the semantics). Annotated, not
+# Query-object defaults, so a direct call in a test gets None.
+_Kind = Annotated[Optional[str], Query(pattern="^(ip|domain|url)$",
+                                       description="Only IPs, domains or URLs")]
+_Family = Annotated[Optional[str], Query(pattern="^[46]$",
+                                         description="Drop IP entries of the other version")]
+_Hosts = Annotated[Optional[int], Query(ge=0, le=1,
+                                        description="1 = single addresses only, no networks")]
+_Wildcards = Annotated[Optional[str], Query(pattern="^(keep|drop)$",
+                                            description="drop = leave *.example.com entries out")]
+# Unlike /feeds (where unknown parameters were always ignored and a 400 would
+# break polls that already work), these URLs are new in 2.7 and composed by
+# the dashboard's builder: an unknown or misspelt option is an error, never a
+# silently different list.
+_OPTIONS = frozenset({"limit", "kind", "family", "hosts", "wildcards"})
+
+
+def _served(request: Request, name: str, ext: str, limit: Optional[int],
+            kind: Optional[str] = None, family: Optional[str] = None,
+            hosts: Optional[int] = None, wildcards: Optional[str] = None):
+    """The entries one list URL serves, plus the count before ?limit."""
+    unknown = set(getattr(request, "query_params", {}) or {}) - _OPTIONS
+    if unknown:
+        raise HTTPException(status_code=400, detail=(
+            f"Unknown option(s): {', '.join(sorted(unknown))}; "
+            f"list URLs take {', '.join(sorted(_OPTIONS))}"))
+    row = _row_or_404(name)
+    if not row["enabled"]:
+        # A switched-off list (catalog toggle, issue #28) is not served:
+        # its URL 404s exactly like an unknown list's.
+        raise HTTPException(status_code=404, detail="Unknown application list")
+    entries = applications.select_entries(
+        core.db.get_entries(name), kind=kind, family=int(family) if family else None,
+        hosts=bool(hosts), wildcards=wildcards or "keep")
+    total = len(entries)
     if limit is not None:
         entries = entries[:limit]
-    from threatfeedme import polls
-    polls.record(core.db, f"lists/{name}.{ext}", request.headers.get("user-agent", ""))
-    return entries
+    if not request.headers.get("x-tfm-probe"):   # the URL builder's count probe
+        from threatfeedme import polls
+        polls.record(core.db, f"lists/{name}.{ext}", request.headers.get("user-agent", ""))
+    return entries, total
+
+
+def _respond(request: Request, body: str, media_type: str, total: int) -> Response:
+    """Every format gets an ETag (from the body, so each option combination
+    has its own) and X-Entry-Count, the size before ?limit: ?limit=1 reads a
+    list's size without downloading it."""
+    etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag, "X-Entry-Count": str(total)}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type=media_type, headers=headers)
 
 
 @router.get("/lists/{name}.txt", response_class=PlainTextResponse)
-def list_txt(name: str, request: Request, limit: Optional[int] = _LIMIT):
-    entries = _served(request, name, "txt", limit)
+def list_txt(name: str, request: Request, limit: Optional[int] = _LIMIT,
+             kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
+             wildcards: _Wildcards = None):
+    entries, total = _served(request, name, "txt", limit, kind, family, hosts, wildcards)
     body = "\n".join(entries) + ("\n" if entries else "")
-    etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
-    headers = {"Cache-Control": "no-cache", "ETag": etag}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
-    return Response(body, media_type="text/plain; charset=utf-8", headers=headers)
+    return _respond(request, body, "text/plain; charset=utf-8", total)
 
 
 @router.get("/lists/{name}.csv")
-def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT):
-    entries = _served(request, name, "csv", limit)
-    return StreamingResponse((f"{e}\r\n" for e in entries),
-                             media_type="text/csv; charset=utf-8")
+def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
+             kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
+             wildcards: _Wildcards = None):
+    entries, total = _served(request, name, "csv", limit, kind, family, hosts, wildcards)
+    return _respond(request, "".join(f"{e}\r\n" for e in entries),
+                    "text/csv; charset=utf-8", total)
 
 
 @router.get("/lists/{name}.json")
-def list_json(name: str, request: Request, limit: Optional[int] = _LIMIT):
-    entries = _served(request, name, "json", limit)
+def list_json(name: str, request: Request, limit: Optional[int] = _LIMIT,
+              kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
+              wildcards: _Wildcards = None):
+    entries, total = _served(request, name, "json", limit, kind, family, hosts, wildcards)
     import json as _json
-    return StreamingResponse(iter([_json.dumps({"entries": entries})]),
-                             media_type="application/json")
+    return _respond(request, _json.dumps({"entries": entries}), "application/json", total)
 
 
 # ------------------------------------------------------------------- API --
@@ -126,6 +174,31 @@ def list_applications(_=Depends(require_auth)):
     for row in rows:
         row["pending"] = core.db.get_pending(row["name"]) is not None
     return {"applications": rows}
+
+
+@router.get("/api/applications/catalog")
+def get_catalog(_=Depends(require_auth)):
+    # Declared before /api/applications/{name} so "catalog" is not read as
+    # a list name. Renders from the published manifest only; no list data
+    # is downloaded to answer this.
+    return vendor_catalog.catalog_view(core.db, enabled=_catalog_enabled(),
+                                       allow_private=_allow_private())
+
+
+@router.post("/api/applications/catalog/{slug}/toggle")
+def toggle_catalog(slug: str, req: CatalogToggleRequest,
+                   _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    try:
+        summary = vendor_catalog.set_enabled(core.db, slug, req.enabled,
+                                             allow_private=_allow_private(),
+                                             catalog_enabled=_catalog_enabled())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Not in the catalog")
+    except vendor_catalog.NameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"success": summary.get("outcome") != "error", **summary}
 
 
 @router.get("/api/applications/{name}")
@@ -165,13 +238,26 @@ def add_application(req: ApplicationListRequest, _=Depends(require_auth),
 @router.put("/api/applications/{name}")
 def update_application(name: str, req: ApplicationListRequest,
                        _=Depends(require_auth), _csrf=Depends(csrf_check)):
-    _row_or_404(name)
+    old = _row_or_404(name)
     _validate(req)
     core.db.update_application_list(name, {
         "source_url": req.url, "format": req.format, "filter_expr": req.filter_expr,
         "enabled": 1 if req.enabled else 0, "update_interval": req.update_interval,
         "min_v4_prefix": req.min_v4_prefix, "min_v6_prefix": req.min_v6_prefix,
         "change_threshold_pct": req.change_threshold_pct})
+    # A fetch-affecting edit invalidates the stored ETag and any held refresh:
+    # tightening a prefix floor must not be skipped by a 304, and a pending row
+    # produced under the old source/settings must not survive an approval.
+    # Enabled/interval/threshold edits are scheduling policy, not the shape of
+    # the served data, so they keep the validator and the pending row.
+    if (old["source_url"] != req.url
+            or old["format"] != req.format
+            or (old["filter_expr"] or "") != (req.filter_expr or "")
+            or old["min_v4_prefix"] != req.min_v4_prefix
+            or old["min_v6_prefix"] != req.min_v6_prefix):
+        core.db.reset_application_list_fetch(name)
+        return {"success": True,
+                "message": f"List '{name}' saved; it refetches in full on the next scheduler tick"}
     return {"success": True, "message": f"List '{name}' saved"}
 
 

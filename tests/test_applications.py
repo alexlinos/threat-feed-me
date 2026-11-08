@@ -82,8 +82,9 @@ def db(tmp_path):
 class FakeRequest:
     """Just the surface the serving path reads (repo pattern: direct router
     calls, no portal threads — TestClient hung this suite on exit here)."""
-    def __init__(self, headers=None):
+    def __init__(self, headers=None, query=None):
         self.headers = headers or {}
+        self.query_params = query or {}
 
 
 @pytest.fixture
@@ -150,6 +151,25 @@ def test_gate_honours_per_list_floors():
     assert not ok
 
 
+@pytest.mark.parametrize("entry,expected_ok,expected_tld", [
+    ("printer.local", False, "local"),
+    ("*.corp.local", False, "local"),
+    ("foo.localhost", False, "localhost"),
+    ("x.test", False, "test"),
+    ("y.invalid", False, "invalid"),
+    ("https://intranet.local/x", False, "local"),
+    ("login.example.net", True, None),
+    ("*.cdn.example.net", True, None),
+])
+def test_gate_rejects_reserved_special_use_tlds(entry, expected_ok, expected_tld):
+    # Domain design D4: reserved and special-use TLDs are never served; the
+    # threat side already applies reserved_reason(), application lists now do.
+    ok, reason = applications.guard_entry(entry)
+    assert ok == expected_ok, f"{entry}: {reason}"
+    if expected_tld is not None:
+        assert expected_tld in reason.lower()
+
+
 # ----------------------------------------------------------- source parse --
 
 def test_extract_json_paths_expands_lists():
@@ -162,6 +182,29 @@ def test_extract_json_paths_expands_lists():
 def test_extract_json_paths_missing_key_raises():
     with pytest.raises(ValueError):
         applications.extract_json_paths({"a": 1}, "$.nope")
+
+
+M365_SHAPE = [
+    {"id": 1, "serviceArea": "Exchange", "urls": ["outlook.office.com"]},
+    {"id": 2, "serviceArea": "Exchange", "ips": ["198.51.100.0/24"]},
+    {"id": 3, "serviceArea": "Common"},
+]
+
+
+def test_extract_json_paths_expands_top_level_array_for_microsoft_365_shape():
+    assert applications.extract_json_paths(M365_SHAPE, "$[*].urls[*]") == ["outlook.office.com"]
+    assert applications.extract_json_paths(M365_SHAPE, "$[*].ips[*]") == ["198.51.100.0/24"]
+
+
+def test_extract_json_paths_top_level_star_returns_array_items():
+    assert applications.extract_json_paths(
+        ["a.example.net", "b.example.net"], "$[*]") == ["a.example.net", "b.example.net"]
+
+
+def test_extract_json_paths_missing_key_on_top_level_array_raises_with_expression():
+    with pytest.raises(ValueError) as exc:
+        applications.extract_json_paths(M365_SHAPE, "$[*].nope[*]")
+    assert "'$[*].nope[*]'" in str(exc.value) and "'nope'" in str(exc.value)
 
 
 def test_parse_body_plain_skips_comments():
@@ -218,6 +261,21 @@ def test_change_guard_holds_and_approval_serves(db):
     assert db.get_pending("acme") is None
     assert len(db.get_entries("acme")) == 20
     assert db.get_history("acme")[0]["added"] == 12
+
+
+def test_served_refresh_discards_a_stale_held_one(db):
+    # Approving a held refresh after a newer version was served used to roll
+    # the list back to the older held version.
+    original = [f"198.51.100.{i}" for i in range(20)]
+    _seed(db, original)
+    big = fake_get_factory("\n".join(f"203.0.113.{i}" for i in range(12)) + "\n"
+                           + "\n".join(original[:8]) + "\n")
+    assert applications.refresh_list(db, "acme", get=big)["outcome"] == "held"
+    small = fake_get_factory("\n".join(original + ["203.0.113.77"]) + "\n")
+    assert applications.refresh_list(db, "acme", get=small)["outcome"] == "ok"
+    assert db.get_pending("acme") is None
+    assert db.approve_pending("acme") is None
+    assert set(db.get_entries("acme")) == set(original) | {"203.0.113.77"}
 
 
 def test_change_guard_reject_keeps_baseline(db):
@@ -382,22 +440,71 @@ def test_serving_txt_etag_and_304(rtr, db):
     assert e.value.status_code == 404
 
 
-def _drain(resp):
-    """Starlette wraps the sync iterable into an async generator; drain it."""
-    import asyncio
-
-    async def run():
-        return "".join([c if isinstance(c, str) else c.decode()
-                        async for c in resp.body_iterator])
-    return asyncio.run(run())
-
-
 def test_serving_csv_json_and_limit(rtr, db):
     _serve_db(db)
-    assert _drain(rtr.list_csv("acme", FakeRequest(), limit=None)) == "198.51.100.1\r\n198.51.100.2\r\n"
-    body = _drain(rtr.list_json("acme", FakeRequest(), limit=None))
+    csv_r = rtr.list_csv("acme", FakeRequest(), limit=None)
+    assert csv_r.body == b"198.51.100.1\r\n198.51.100.2\r\n" and csv_r.headers["ETag"]
+    body = rtr.list_json("acme", FakeRequest(), limit=None).body
     assert json.loads(body)["entries"] == ["198.51.100.1", "198.51.100.2"]
-    assert rtr.list_txt("acme", FakeRequest(), limit=1).body == b"198.51.100.1\n"
+    top = rtr.list_txt("acme", FakeRequest(), limit=1)
+    assert top.body == b"198.51.100.1\n" and top.headers["X-Entry-Count"] == "2"
+
+
+# ------------------------------------------------------------- URL options --
+
+MIXED = ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32", "2001:db8::/48",
+         "2001:db8::1", "a.example.net", "*.cdn.example.net", "*.a.example.net",
+         "https://teams.example.net/foo"]
+
+
+@pytest.mark.parametrize("opts,expected", [
+    ({"kind": "ip"}, ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32",
+                      "2001:db8::/48", "2001:db8::1"]),
+    ({"kind": "domain"}, ["a.example.net", "*.cdn.example.net", "*.a.example.net"]),
+    ({"kind": "url"}, ["https://teams.example.net/foo"]),
+    ({"kind": "ip", "family": 4}, ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32"]),
+    ({"kind": "ip", "family": 6}, ["2001:db8::/48", "2001:db8::1"]),
+    # Sophos: v4 single addresses, bare (a /32 is served as its address).
+    ({"kind": "ip", "family": 4, "hosts": True}, ["198.51.100.7", "203.0.113.9"]),
+    ({"kind": "domain", "wildcards": "drop"}, ["a.example.net"]),
+])
+def test_select_entries_options(opts, expected):
+    assert applications.select_entries(MIXED, **opts) == expected
+
+
+def test_options_only_select_never_rewrite_vendor_entries():
+    # Maintainer's rule: serve strictly what the vendor publishes. Every
+    # option is a subset of the stored entries (hosts=1 only drops the /32
+    # prefix length from the same address); no domain becomes an address and
+    # no wildcard is widened or narrowed.
+    combos = [{"kind": k, "family": f, "wildcards": w}
+              for k in (None, "ip", "domain", "url") for f in (None, 4, 6)
+              for w in ("keep", "drop")]
+    for opts in combos:
+        assert set(applications.select_entries(MIXED, **opts)) <= set(MIXED), opts
+    assert "cdn.example.net" not in applications.select_entries(MIXED, kind="domain")
+
+
+def test_select_entries_family_leaves_domains_alone():
+    out = applications.select_entries(MIXED, family=4)
+    assert "a.example.net" in out and "2001:db8::1" not in out
+
+
+def test_list_url_options_reach_the_response(rtr, db):
+    db.replace_entries("acme", MIXED, len(MIXED), 0, [], [])
+    r = rtr.list_txt("acme", FakeRequest(), limit=None, kind="ip", family="4", hosts=1)
+    assert r.body == b"198.51.100.7\n203.0.113.9\n"
+    assert r.headers["X-Entry-Count"] == "2"
+    other = rtr.list_txt("acme", FakeRequest(), limit=None, kind="domain")
+    assert other.headers["ETag"] != r.headers["ETag"]     # each combination its own
+
+
+def test_list_url_unknown_option_is_400(rtr, db):
+    from fastapi import HTTPException
+    _serve_db(db)
+    with pytest.raises(HTTPException) as e:
+        rtr.list_txt("acme", FakeRequest(query={"kinds": "ip"}), limit=None)
+    assert e.value.status_code == 400 and "kinds" in e.value.detail
 
 
 # -------------------------------------------------------------------- API --
@@ -453,13 +560,22 @@ def test_api_add_malformed_host_is_saved_not_500(rtr, db, monkeypatch):
 
 
 def test_csrf_enforced_over_http(db, monkeypatch):  # setitem, see rtr
-    # The standing rule — mutations without X-Requested-With are rejected
-    # even with auth off — proven through the real ASGI stack. httpx over
-    # ASGITransport, not TestClient: no portal thread, no exit hang.
+    # Minimal app around the applications router, per the repo rule: tests
+    # must not import threatfeedme.app, because that lazily initializes core
+    # from ./config.yaml + ./data and leaks state into later tests and into a
+    # developer's real data directory. The standing rule (mutations without
+    # X-Requested-With are rejected even with auth off) is still proven
+    # through the real ASGI stack and the real csrf_check dependency. httpx
+    # over ASGITransport, not TestClient: no portal thread, no exit hang.
     import asyncio
     import httpx
-    monkeypatch.setitem(core.__dict__, "db", db)
-    from threatfeedme.app import app
+    from fastapi import FastAPI
+    from threatfeedme.routers import applications as r
+    monkeypatch.setitem(r.core.__dict__, "db", db)
+    monkeypatch.setitem(r.__dict__, "_allow_private", lambda: False)
+    app = FastAPI()
+    app.include_router(r.router)
+    app.dependency_overrides[r.require_auth] = lambda: None
     async def go():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
@@ -541,3 +657,33 @@ def test_api_approve_reject_round_trip(rtr, db):
     with pytest.raises(HTTPException) as e:
         rtr.approve("acme", _=None, _csrf=None)
     assert e.value.status_code == 404
+
+
+def _put_acme(rtr, **changes):
+    from threatfeedme.schemas import ApplicationListRequest
+    fields = dict(name="acme", url="https://vendor.example/acme.txt", format="list",
+                  filter_expr="", enabled=True, update_interval=3600,
+                  min_v4_prefix=8, min_v6_prefix=20, change_threshold_pct=50.0)
+    fields.update(changes)
+    return rtr.update_application("acme", ApplicationListRequest(**fields), _=None, _csrf=None)
+
+
+def test_update_resets_fetch_on_a_settings_change(rtr, db):
+    # A tightened floor must not hide behind a 304, and a held refresh made
+    # under the old settings must not be approvable afterwards.
+    db.set_application_list_state("acme", "ok", etag="v9")
+    db.add_pending("acme", ["198.51.100.9"], [{"e": "198.51.100.9"}], [], "moved")
+    r = _put_acme(rtr, min_v4_prefix=16)
+    assert "refetch" in r["message"].lower()
+    row = db.get_application_list("acme")
+    assert row["http_etag"] is None and row["last_refresh_at"] is None
+    assert db.get_pending("acme") is None
+
+
+def test_update_keeps_fetch_state_on_a_scheduling_change(rtr, db):
+    db.set_application_list_state("acme", "ok", etag="v9")
+    db.add_pending("acme", ["198.51.100.9"], [{"e": "198.51.100.9"}], [], "moved")
+    r = _put_acme(rtr, update_interval=7200)
+    assert "refetch" not in r["message"].lower()
+    assert db.get_application_list("acme")["http_etag"] == "v9"
+    assert db.get_pending("acme") is not None

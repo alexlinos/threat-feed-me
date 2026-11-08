@@ -1536,6 +1536,22 @@ class Database:
                     "UPDATE application_lists SET last_status=?, last_refresh_at=?"
                     " WHERE name=?", (status, _utcnow_iso(), name))
 
+    def reset_application_list_fetch(self, name: str) -> None:
+        """Drop the vendor validator and any held refresh after an operator edit.
+
+        A settings change (source, format, filter, or prefix floors) means the
+        previously served entries and a pending blob were produced under the
+        old rules; keeping the ETag lets a 304 hide them, and the pending row
+        could still be approved from the old source. NULLing last_refresh_at
+        makes the scheduler treat the list as due on its next tick.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE application_lists SET http_etag = NULL, last_refresh_at = NULL"
+                " WHERE name = ?", (name,))
+            cur.execute(
+                "DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+
     def get_entries(self, name: str) -> List[str]:
         with self._cursor() as cur:
             cur.execute("SELECT entry FROM application_list_entries WHERE list_name = ?"
@@ -1548,19 +1564,30 @@ class Database:
         set would serve a mix of two vendor versions, so the entries write,
         the counter, the version bump and the history row share one txn."""
         with self._cursor() as cur:
-            cur.execute("DELETE FROM application_list_entries WHERE list_name = ?", (name,))
-            cur.executemany(
-                "INSERT OR IGNORE INTO application_list_entries (list_name, entry)"
-                " VALUES (?,?)", [(name, e) for e in entries])
-            cur.execute(
-                "UPDATE application_lists SET entry_count=?, entry_version=entry_version+1"
-                " WHERE name=?", (len(entries), name))
-            cur.execute(
-                "INSERT INTO application_list_history (list_name, refreshed_at, added,"
-                " removed, count_after, added_sample, removed_sample)"
-                " VALUES (?,?,?,?,?,?,?)",
-                (name, _utcnow_iso(), added, removed, len(entries),
-                 json.dumps(added_sample), json.dumps(removed_sample)))
+            self._replace_entries_tx(cur, name, entries, added, removed,
+                                     added_sample, removed_sample)
+
+    def _replace_entries_tx(self, cur, name: str, entries: List[str],
+                            added: int, removed: int,
+                            added_sample: List[str],
+                            removed_sample: List[str]) -> None:
+        """replace_entries' body, inside a transaction the caller holds.
+        Split out so approve_pending can fold the swap, the status update and
+        the pending delete into one transaction: otherwise a pending row
+        written between them could be dropped unseen."""
+        cur.execute("DELETE FROM application_list_entries WHERE list_name = ?", (name,))
+        cur.executemany(
+            "INSERT OR IGNORE INTO application_list_entries (list_name, entry)"
+            " VALUES (?,?)", [(name, e) for e in entries])
+        cur.execute(
+            "UPDATE application_lists SET entry_count=?, entry_version=entry_version+1"
+            " WHERE name=?", (len(entries), name))
+        cur.execute(
+            "INSERT INTO application_list_history (list_name, refreshed_at, added,"
+            " removed, count_after, added_sample, removed_sample)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (name, _utcnow_iso(), added, removed, len(entries),
+             json.dumps(added_sample), json.dumps(removed_sample)))
 
     def get_history(self, name: str, limit: int = 50) -> List[Dict]:
         with self._cursor() as cur:
@@ -1620,15 +1647,21 @@ class Database:
 
     def approve_pending(self, name: str) -> Optional[Dict]:
         """Serve the held version. The approved swap records history like a
-        normal refresh so the 30-day diff stays complete."""
-        pending = self.get_pending(name)
-        if pending is None:
-            return None
-        self.replace_entries(name, pending["entries"], pending["added"],
-                             pending["removed"],
-                             [s["e"] for s in pending["added_sample"]],
-                             [s["e"] for s in pending["removed_sample"]])
+        normal refresh so the 30-day diff stays complete. One transaction, so
+        a pending row written meanwhile is never deleted unseen."""
         with self._cursor() as cur:
+            cur.execute("SELECT * FROM application_list_pending WHERE list_name = ?", (name,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            pending = dict(row)
+            pending["entries"] = json.loads(pending["entries"])
+            pending["added_sample"] = json.loads(pending["added_sample"])
+            pending["removed_sample"] = json.loads(pending["removed_sample"])
+            self._replace_entries_tx(cur, name, pending["entries"], pending["added"],
+                                     pending["removed"],
+                                     [s["e"] for s in pending["added_sample"]],
+                                     [s["e"] for s in pending["removed_sample"]])
             cur.execute("UPDATE application_lists SET last_status='approved held refresh'"
                         " WHERE name=?", (name,))
             cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))

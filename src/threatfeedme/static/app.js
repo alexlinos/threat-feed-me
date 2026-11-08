@@ -1583,13 +1583,180 @@ document.addEventListener('DOMContentLoaded', loadHostCheck);
 // Rows are re-fetched on every visit to the view; there are a handful of
 // lists and the pending/approve state must never be stale when clicked.
 let appsLoaded = false;
+// Catalog view state survives the re-render after every toggle or refresh.
+const catState = {vendor: null, group: null, filter: ''};
+let catData = null;
+let appRows = [];
+
 async function loadApplications() {
     try {
         const j = await (await apiFetch('/api/applications')).json();
-        renderApplications(j.applications || []);
+        appRows = j.applications || [];
         appsLoaded = true;
     } catch (e) { /* offline / auth: the view stays empty, message row says it */ }
+    try {
+        catData = await (await apiFetch('/api/applications/catalog')).json();
+    } catch (e) { catData = null; /* catalog is an offer; your own lists still work */ }
+    renderCatalog();
+    renderApplications(appRows);
 }
+
+// "12m ago" from a stored ISO stamp (the table used to print it raw).
+function appAgo(iso) {
+    const t = Date.parse(iso || '');
+    if (Number.isNaN(t)) return '—';
+    const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (m < 1) return 'just now';
+    if (m < 120) return m + 'm ago';
+    if (m < 48 * 60) return Math.round(m / 60) + 'h ago';
+    return Math.round(m / 1440) + 'd ago';
+}
+
+// A per-list status as the Feeds table shows one: problems in amber.
+function appStatus(r) {
+    if (r.pending) return '<span class="warn">held for approval</span>';
+    const s = r.last_status || '';
+    if (!s) return '<span class="muted">never fetched</span>';
+    if (/^(error|held)/.test(s)) return '<span class="warn">' + esc(s) + '</span>';
+    if (s === 'not-modified') return '<span class="ok-text">ok</span> <span class="muted">(unchanged)</span>';
+    return '<span class="ok-text">' + esc(s) + '</span>';
+}
+
+function appUrlCell(name) {
+    return '<div class="url-row"><input class="url-box" type="text" readonly value="' +
+        esc(location.origin + '/lists/' + encodeURIComponent(name) + '.txt') +
+        '" onclick="this.select()" aria-label="' + esc(name) + ' list URL">' +
+        '<button class="copy-btn" type="button" onclick="copyUrl(this)">Copy</button></div>';
+}
+
+// Tab order inside a vendor: the "all" view first, then as published.
+function catGroups(rows) {
+    const seen = [];
+    rows.forEach(r => { if (!seen.includes(r.group || '')) seen.push(r.group || ''); });
+    return seen.sort((a, b) => (/^All /.test(b) ? 1 : 0) - (/^All /.test(a) ? 1 : 0));
+}
+
+function renderCatalog() {
+    const host = document.getElementById('apps-catalog');
+    if (!host) return;
+    const c = catData;
+    if (!c) { host.innerHTML = '<p class="muted">The catalog couldn\'t be loaded. Your own lists below still work.</p>'; return; }
+    if (c.disabled) {
+        host.innerHTML = '<p class="muted">The catalog is switched off on this server (<code>app_catalog.enabled</code>). ' +
+            'Your own lists below still work.</p>';
+        return;
+    }
+    const rows = c.catalog || [];
+    if (!rows.length) {
+        host.innerHTML = '<p class="muted">' + (c.error
+            ? 'The catalog isn\'t available: ' + esc(c.error) + '. Your own lists below still work.'
+            : 'No catalog lists have been published yet.') + '</p>';
+        return;
+    }
+    const vendors = [...new Set(rows.map(r => r.vendor))].sort((a, b) => a.localeCompare(b));
+    if (!vendors.includes(catState.vendor)) catState.vendor = vendors[0];
+    const onCount = v => rows.filter(r => r.vendor === v && r.enabled).length;
+    const nav = '<nav class="cat-nav" aria-label="Vendors">' +
+        '<select class="cat-select" aria-label="Vendor">' + vendors.map(v =>
+            '<option value="' + esc(v) + '"' + (v === catState.vendor ? ' selected' : '') + '>' + esc(v) +
+            (onCount(v) ? ' (' + onCount(v) + ' on)' : '') + '</option>').join('') + '</select>' +
+        '<ul>' + vendors.map(v =>
+            '<li><button type="button" class="cat-v' + (v === catState.vendor ? ' active' : '') +
+            '" data-vendor="' + esc(v) + '"' + (v === catState.vendor ? ' aria-current="true"' : '') + '>' +
+            '<span>' + esc(v) + '</span>' + (onCount(v) ? '<span class="cat-count">' + onCount(v) + ' on</span>' : '') +
+            '</button></li>').join('') + '</ul></nav>';
+    const vrows = rows.filter(r => r.vendor === catState.vendor);
+    const groups = catGroups(vrows);
+    if (!groups.includes(catState.group)) catState.group = groups[0];
+    const info = (c.vendors || {})[catState.vendor] || {};
+    let panel = '<div class="cat-panel"><h3>' + esc(catState.vendor) + '</h3>' +
+        (info.description ? '<p class="hint">' + esc(info.description) + '</p>' : '') +
+        (info.docs ? '<p class="cat-docs"><a href="' + esc(info.docs) + '" target="_blank" rel="noopener noreferrer">' +
+            esc(catState.vendor) + ' documentation: what to allow ↗</a></p>' : '');
+    if (groups.length > 1) {
+        panel += '<div class="cat-tabs" role="tablist">' + groups.map(g =>
+            '<button type="button" role="tab" class="cat-tab' + (g === catState.group ? ' active' : '') +
+            '" aria-selected="' + (g === catState.group) + '" data-group="' + esc(g) + '">' + esc(g) + '</button>').join('') + '</div>';
+    }
+    const grows = vrows.filter(r => (r.group || '') === catState.group);
+    if (grows.length > 12) {
+        panel += '<input class="cat-filter" type="search" placeholder="Filter ' + grows.length + ' lists" aria-label="Filter lists" value="' +
+            esc(catState.filter) + '">';
+    }
+    panel += '<table class="feed-table cat-table"><thead><tr><th>List</th><th>Entries</th><th>On</th></tr></thead>' +
+        '<tbody>' + catRows(grows) + '</tbody></table>' +
+        (c.error ? '<p class="muted">Showing the last catalog loaded; the latest couldn\'t be read (' + esc(c.error) + ').</p>' : '') +
+        '</div>';
+    // Keep an open URL builder open across the re-render a toggle causes.
+    const openUb = [...host.querySelectorAll('details.ub[open]')].map(d => d.dataset.base);
+    host.innerHTML = nav + panel;
+    host.querySelectorAll('details.ub').forEach(d => { if (openUb.includes(d.dataset.base)) d.open = true; });
+}
+
+function catRows(rows) {
+    const f = catState.filter.trim().toLowerCase();
+    const shown = f ? rows.filter(r => (r.name + ' ' + r.description).toLowerCase().includes(f)) : rows;
+    if (!shown.length) return '<tr><td colspan="3" class="muted">No lists match.</td></tr>';
+    return shown.map(r => {
+        const count = r.enabled && r.local_entries != null ? r.local_entries : r.entries;
+        let html = '<tr' + (r.enabled ? ' class="cat-on"' : '') + '><td><b>' + esc(r.name) + '</b>' +
+            (r.description ? '<div class="cat-desc">' + esc(r.description) + '</div>' : '') + '</td>' +
+            '<td>' + (count ? count.toLocaleString() : '—') + '</td>' +
+            (r.conflict
+                ? '<td><span class="muted" title="One of your lists is already called ' + esc(r.slug) +
+                  '; rename or delete it to use this one">name in use</span></td></tr>'
+                : '<td><label class="switch" title="' + (r.enabled ? 'Switch off: stop fetching and serving' : 'Switch on: fetch and serve this list') + '">' +
+                  '<input type="checkbox" data-slug="' + esc(r.slug) + '"' + (r.enabled ? ' checked' : '') +
+                  ' aria-label="' + esc(r.name) + '"><span></span></label></td></tr>');
+        if (r.enabled) {
+            html += '<tr class="cat-detail"><td colspan="3">' + appUrlCell(r.slug) +
+                '<p class="cat-status">' + appStatus(r) + '</p>' +
+                ubBody(location.origin + '/lists/' + encodeURIComponent(r.slug), 'app') + '</td></tr>';
+        }
+        return html;
+    }).join('');
+}
+
+async function catalogToggle(el) {
+    const slug = el.dataset.slug;
+    const on = el.checked;
+    el.disabled = true;
+    const res = await apiFetch('/api/applications/catalog/' + encodeURIComponent(slug) + '/toggle',
+        {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: on})});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        el.checked = !on;           // the switch shows what is true, not what was asked
+        el.disabled = false;
+        appMsg(slug + ': ' + detailText(j.detail || 'failed (' + res.status + ')'));
+        return;
+    }
+    appMsg(slug + ': ' + (on ? (j.outcome === 'error' ? 'on, but the first fetch failed' + (j.error ? ' (' + j.error + ')' : '')
+                                 : 'on, ' + (j.count != null ? j.count.toLocaleString() + ' entries serving' : j.outcome))
+                              : 'off; its URL no longer serves'));
+    loadApplications();
+}
+
+(function wireCatalog() {
+    const host = document.getElementById('apps-catalog');
+    if (!host) return;
+    host.addEventListener('click', ev => {
+        const v = ev.target.closest('.cat-v');
+        const t = ev.target.closest('.cat-tab');
+        if (v) { catState.vendor = v.dataset.vendor; catState.group = null; catState.filter = ''; renderCatalog(); }
+        else if (t) { catState.group = t.dataset.group; catState.filter = ''; renderCatalog(); }
+    });
+    host.addEventListener('change', ev => {
+        if (ev.target.matches('.cat-select')) { catState.vendor = ev.target.value; catState.group = null; catState.filter = ''; renderCatalog(); }
+        else if (ev.target.matches('input[data-slug]')) catalogToggle(ev.target);
+    });
+    host.addEventListener('input', ev => {
+        if (!ev.target.matches('.cat-filter')) return;
+        catState.filter = ev.target.value;
+        const vrows = (catData.catalog || []).filter(r => r.vendor === catState.vendor && (r.group || '') === catState.group);
+        host.querySelector('.cat-table tbody').innerHTML = catRows(vrows);
+    });
+})();
+
 function renderApplications(rows) {
     const tb = document.querySelector('#apps-table tbody');
     const callout = document.getElementById('apps-pending-callout');
@@ -1599,25 +1766,36 @@ function renderApplications(rows) {
         callout.hidden = held.length === 0;
         callout.innerHTML = held.map(r =>
             '<b>' + esc(r.name) + '</b> is holding a refresh that moved too much of ' +
-            'the list. Review and approve or discard it in the row below.').join('<br>');
+            'the list. Review and approve or discard it in its row.').join('<br>');
     }
-    tb.innerHTML = rows.map(r => {
-        const url = location.origin + '/lists/' + encodeURIComponent(r.name) + '.txt';
-        const statusCell = (r.pending ? '<span class="warn">held for approval</span>' : esc(r.last_status || 'never fetched')) +
-            (r.enabled ? '' : ' <span class="muted">(disabled)</span>');
+    // Catalog lists live in the catalog above (switch, URL, builder); this
+    // table is the operator's own. Until the catalog loads, show everything.
+    // Only lists that really are the catalog's (same source); a list of the
+    // operator's own that merely shares a name stays here.
+    const catalogSlugs = new Set(((catData && catData.catalog) || []).filter(r => r.adopted).map(r => r.slug));
+    const own = rows.filter(r => !catalogSlugs.has(r.name));
+    if (!own.length) {
+        tb.innerHTML = '<tr><td colspan="6" class="muted">None yet. Add one below: any URL that serves a plain list or JSON.</td></tr>';
+        return;
+    }
+    tb.innerHTML = own.map(r => {
+        const n = esc(r.name);
         const actions =
-            '<button onclick="appRefresh(\'' + esc(r.name) + '\')">Refresh now</button> ' +
+            '<button class="mini-btn" type="button" onclick="appRefresh(\'' + n + '\')">Refresh</button> ' +
             (r.pending
-                ? '<button onclick="appPending(\'' + esc(r.name) + '\',\'approve\')">Approve</button> ' +
-                  '<button onclick="appPending(\'' + esc(r.name) + '\',\'reject\')">Discard</button> '
+                ? '<button class="mini-btn" type="button" onclick="appPending(\'' + n + '\',\'approve\')">Approve</button> ' +
+                  '<button class="mini-btn" type="button" onclick="appPending(\'' + n + '\',\'reject\')">Discard</button> '
                 : '') +
-            '<button onclick="appDelete(\'' + esc(r.name) + '\')">Delete</button>';
-        return '<tr><td><a href="#applications/' + esc(r.name) + '">' + esc(r.name) + '</a></td>' +
+            '<button class="rm-btn" type="button" onclick="appDelete(\'' + n + '\')">Delete</button>';
+        return '<tr><td><b>' + n + '</b><div class="cat-desc"><a href="' + esc(r.source_url || '#') +
+            '" target="_blank" rel="noopener noreferrer">source ↗</a></div></td>' +
             '<td>' + (r.entry_count ? r.entry_count.toLocaleString() : '—') + '</td>' +
-            '<td>' + esc(r.last_refresh_at || '—') + '</td>' +
-            '<td>' + statusCell + '</td>' +
-            '<td><input class="url-box" type="text" readonly value="' + esc(url) + '" onclick="this.select()"></td>' +
-            '<td>' + actions + '</td></tr>';
+            '<td title="' + esc(r.last_refresh_at || '') + '">' + appAgo(r.last_refresh_at) + '</td>' +
+            '<td>' + appStatus(r) + (r.enabled ? '' : ' <span class="muted">(off)</span>') + '</td>' +
+            '<td>' + appUrlCell(r.name) + '</td>' +
+            '<td class="app-actions">' + actions + '</td></tr>' +
+            '<tr class="ub-tr"><td colspan="6">' +
+            ubBody(location.origin + '/lists/' + encodeURIComponent(r.name), 'app') + '</td></tr>';
     }).join('');
 }
 async function appRefresh(name) {
@@ -1643,6 +1821,215 @@ function appMsg(t) {
     const el = document.getElementById('apps-msg');
     if (el) el.textContent = t;
 }
+
+// ---- URL builder: "which firewall?" -> the exact list URL --------------------
+// One component under every block-list card and every application list
+// (<details class="ub" data-ub="ip|domain|app" data-base="…/feeds/high">).
+// A preset sets the options a firewall object needs; touching any option
+// afterwards makes it Custom. It only composes options the server accepts
+// (/feeds: family, hosts, limit; /lists: also kind and wildcards) and reads
+// the live size from X-Entry-Count with ?limit=1, sending X-TFM-Probe so the
+// probe is not recorded as a poll (that line must only ever show firewalls).
+const UB_FORTIGATE_CAP = 131000;   // entries per connector on mid-range models
+const UB_PRESETS = {
+    ip: [
+        {id: 'any', label: 'Any firewall: every entry', opts: {}},
+        {id: 'fortigate', label: 'FortiGate: IP address threat feed', opts: {}, cap: UB_FORTIGATE_CAP,
+         where: 'Security Fabric › External Connectors › Threat Feeds › IP Address'},
+        {id: 'paloalto', label: 'Palo Alto: External Dynamic List (IP)', opts: {},
+         where: 'Objects › External Dynamic Lists, type IP List'},
+        {id: 'checkpoint', label: 'Check Point: Network Feed', opts: {},
+         where: 'a Network Feed object (R81.10 and later), flat list format'},
+        {id: 'cisco', label: 'Cisco FMC: Security Intelligence feed', opts: {},
+         where: 'Objects › Security Intelligence › Network Lists and Feeds'},
+        {id: 'sophos', label: 'Sophos Firewall: third-party threat feed', opts: {family: '4', hosts: true},
+         where: 'Active threat response › Third-party threat feeds (single IPv4 addresses; networks and IPv6 are left out)'},
+        {id: 'pf4', label: 'pfSense / pfBlockerNG: IPv4', opts: {family: '4'},
+         where: 'pfBlockerNG › IP › IPv4, or a URL Table (IPs) alias'},
+        {id: 'pf6', label: 'pfSense / pfBlockerNG: IPv6', opts: {family: '6'},
+         where: 'pfBlockerNG › IP › IPv6'},
+    ],
+    domain: [
+        {id: 'any', label: 'Any DNS filter: every entry', opts: {}},
+        {id: 'fortigate', label: 'FortiGate: domain threat feed', opts: {}, cap: UB_FORTIGATE_CAP,
+         where: 'External Connectors › Threat Feeds › Domain Name, then a DNS Filter profile'},
+        {id: 'paloalto', label: 'Palo Alto: External Dynamic List (domain)', opts: {},
+         where: 'Objects › External Dynamic Lists, type Domain List'},
+        {id: 'cisco', label: 'Cisco FMC: DNS Security Intelligence feed', opts: {},
+         where: 'Objects › Security Intelligence › DNS Lists and Feeds'},
+        {id: 'pihole', label: 'Pi-hole / AdGuard Home: blocklist', opts: {},
+         where: 'the blocklist (adlist) settings'},
+    ],
+    app: [
+        {id: 'any', label: 'Any firewall: every entry', opts: {}},
+        {id: 'fortigate-ip', label: 'FortiGate: IP address feed', opts: {kind: 'ip'}, cap: UB_FORTIGATE_CAP,
+         where: 'External Connectors › Threat Feeds › IP Address, used as an address in a policy'},
+        {id: 'fortigate-dns', label: 'FortiGate: domain feed (DNS filter)', opts: {kind: 'domain'}, cap: UB_FORTIGATE_CAP,
+         where: 'External Connectors › Threat Feeds › Domain Name, allowed in a DNS Filter profile'},
+        {id: 'paloalto-ip', label: 'Palo Alto: External Dynamic List (IP)', opts: {kind: 'ip'},
+         where: 'Objects › External Dynamic Lists, type IP List'},
+        {id: 'paloalto-domain', label: 'Palo Alto: External Dynamic List (domain)', opts: {kind: 'domain'},
+         where: 'Objects › External Dynamic Lists, type Domain List'},
+        {id: 'checkpoint', label: 'Check Point: Network Feed', opts: {kind: 'ip'},
+         where: 'a Network Feed object (R81.10 and later), flat list format'},
+        {id: 'pf4', label: 'pfSense / OPNsense: IPv4 alias', opts: {kind: 'ip', family: '4'},
+         where: 'a URL Table (IPs) alias'},
+        {id: 'pf6', label: 'pfSense / OPNsense: IPv6 alias', opts: {kind: 'ip', family: '6'},
+         where: 'a URL Table (IPs) alias'},
+    ],
+};
+const UB_DEFAULTS = {preset: 'any', kind: '', family: '', hosts: false, wildcards: 'keep', limit: '', fmt: 'txt'};
+let ubSeq = 0;
+
+function ubSeg(name, label, current, choices) {
+    return '<div class="ub-field"><span>' + label + '</span><div class="ub-seg" role="radiogroup" aria-label="' + label + '">' +
+        choices.map(([v, t]) => '<label><input type="radio" name="' + name + '" data-k="' + name.split('-')[0] +
+            '" value="' + v + '"' + (v === current ? ' checked' : '') + '>' + t + '</label>').join('') +
+        '</div></div>';
+}
+
+function ubRender(box) {
+    const mode = box.dataset.ub;
+    const s = box._ub;
+    const id = box._ubId;
+    const presets = UB_PRESETS[mode];
+    let html = '<div class="ub-field"><label for="ubp-' + id + '">Firewall</label><select id="ubp-' + id + '" data-k="preset">' +
+        presets.map(p => '<option value="' + p.id + '"' + (p.id === s.preset ? ' selected' : '') + '>' + esc(p.label) + '</option>').join('') +
+        '<option value="custom"' + (s.preset === 'custom' ? ' selected' : '') + '>Custom</option></select></div>';
+    if (mode === 'app') {
+        html += ubSeg('kind-' + id, 'Entries', s.kind,
+                      [['', 'All'], ['ip', 'IPs'], ['domain', 'Domains'], ['url', 'URLs']]);
+    }
+    if (mode !== 'domain') {
+        html += ubSeg('family-' + id, 'IP version', s.family, [['', 'Both'], ['4', 'IPv4'], ['6', 'IPv6']]);
+        html += '<label class="ub-check"><input type="checkbox" data-k="hosts"' + (s.hosts ? ' checked' : '') +
+            '> Single addresses only (leave out networks)</label>';
+    }
+    html += '<div class="ub-row2">';
+    if (mode === 'app') {
+        html += '<div class="ub-field"><label for="ubw-' + id + '">Wildcards</label><select id="ubw-' + id + '" data-k="wildcards">' +
+            [['keep', 'Keep *.example.com entries'], ['drop', 'Leave them out']]
+                .map(([v, t]) => '<option value="' + v + '"' + (v === s.wildcards ? ' selected' : '') + '>' + t + '</option>').join('') +
+            '</select></div>';
+    }
+    html += '<div class="ub-field"><label for="ubl-' + id + '">Max entries</label><input id="ubl-' + id +
+        '" type="number" min="1" step="1" inputmode="numeric" placeholder="all" data-k="limit" value="' + esc(s.limit) + '"></div>';
+    html += '<div class="ub-field"><label for="ubf-' + id + '">Format</label><select id="ubf-' + id + '" data-k="fmt">' +
+        ['txt', 'csv', 'json'].map(f => '<option value="' + f + '"' + (f === s.fmt ? ' selected' : '') + '>.' + f + '</option>').join('') +
+        '</select></div></div>';
+    html += '<div class="url-row"><input class="url-box" type="text" readonly onclick="this.select()" aria-label="Built URL">' +
+        '<button class="copy-btn" type="button" onclick="copyUrl(this)">Copy</button></div>' +
+        '<p class="ub-note" aria-live="polite"></p><p class="ub-where"></p>';
+    box.querySelector('.ub-body').innerHTML = html;
+    ubUpdate(box);
+}
+
+function ubUrl(box, forCount) {
+    const mode = box.dataset.ub;
+    const s = box._ub;
+    const q = new URLSearchParams();
+    if (mode === 'app' && s.kind) q.set('kind', s.kind);
+    if (mode !== 'domain' && s.family) q.set('family', s.family);
+    if (mode !== 'domain' && s.hosts) q.set('hosts', '1');
+    if (mode === 'app' && s.wildcards !== 'keep') q.set('wildcards', s.wildcards);
+    if (forCount) q.set('limit', '1');
+    else if (s.limit) q.set('limit', s.limit);
+    const qs = q.toString();
+    return box.dataset.base + '.' + (forCount ? 'txt' : s.fmt) + (qs ? '?' + qs : '');
+}
+
+function ubUpdate(box) {
+    box.querySelector('.url-box').value = ubUrl(box, false);
+    const preset = UB_PRESETS[box.dataset.ub].find(p => p.id === box._ub.preset);
+    box.querySelector('.ub-where').textContent = preset && preset.where ? 'Goes in: ' + preset.where : '';
+    clearTimeout(box._ubTimer);
+    box._ubTimer = setTimeout(() => ubCount(box, preset), 250);
+}
+
+async function ubCount(box, preset) {
+    const note = box.querySelector('.ub-note');
+    const probe = ubUrl(box, true);
+    // Same-origin path: the card's URL may name the LAN address while this
+    // page was loaded by hostname, and a cross-origin probe would fail.
+    const u = new URL(probe, location.href);
+    let n = null;
+    try {
+        const r = await fetch(u.pathname + u.search, {headers: {'X-TFM-Probe': '1'}});
+        if (probe !== ubUrl(box, true)) return;          // options moved on meanwhile
+        if (r.ok) n = parseInt(r.headers.get('X-Entry-Count'), 10);
+        else if (r.status === 404) { note.textContent = 'This list is not being served (unknown or switched off).'; note.className = 'ub-note warn'; return; }
+    } catch (e) { /* offline: leave the count out, the URL is still right */ }
+    if (n === null || Number.isNaN(n)) { note.textContent = ''; return; }
+    const s = box._ub;
+    const limit = s.limit ? parseInt(s.limit, 10) : 0;
+    const app = box.dataset.ub === 'app';
+    let msg = 'This URL serves ' + n.toLocaleString() + ' entr' + (n === 1 ? 'y' : 'ies') + '.';
+    let warn = false;
+    const filtered = s.kind || s.family || s.hosts || s.wildcards !== 'keep';
+    if (n === 0) {
+        // Only blame the options when there are some; an empty tier is just empty.
+        msg = filtered ? 'This URL serves no entries with these options.' : 'This list has no entries right now.';
+        warn = !!filtered;
+    } else if (limit && n > limit) {
+        if (app) {
+            msg += ' Max entries leaves out ' + (n - limit).toLocaleString() +
+                ': this is an allow-list, so whatever is left out stops being allowed.';
+            warn = true;
+        } else {
+            msg += ' The ' + limit.toLocaleString() + ' strongest are served.';
+        }
+    } else if (preset && preset.cap && n > preset.cap) {
+        msg += app
+            ? ' That is more than a mid-range FortiGate holds in one list (about ' + preset.cap.toLocaleString() + '); narrow it with the options above.'
+            : ' A mid-range FortiGate holds about ' + preset.cap.toLocaleString() + ' per list: set Max entries so it keeps the strongest.';
+        warn = true;
+    }
+    note.textContent = msg;
+    note.className = 'ub-note' + (warn ? ' warn' : '');
+}
+
+function ubChange(box, el) {
+    const k = el.dataset.k;
+    if (!k) return;
+    if (k === 'preset') {
+        const p = UB_PRESETS[box.dataset.ub].find(x => x.id === el.value);
+        // A preset is a whole configuration: start from the defaults, keep
+        // the operator's size and format choices.
+        if (p) box._ub = Object.assign({}, UB_DEFAULTS, {limit: box._ub.limit, fmt: box._ub.fmt}, p.opts, {preset: p.id});
+        else box._ub.preset = 'custom';
+        ubRender(box);
+        return;
+    }
+    box._ub[k] = el.type === 'checkbox' ? el.checked : el.value;
+    if (k !== 'limit' && k !== 'fmt' && box._ub.preset !== 'custom') {
+        box._ub.preset = 'custom';
+        box.querySelector('[data-k="preset"]').value = 'custom';
+    }
+    ubUpdate(box);
+}
+
+function ubBody(base, mode) {
+    // Markup for one builder; base is escaped because it lands in an attribute.
+    return '<details class="ub" data-ub="' + mode + '" data-base="' + esc(base) + '">' +
+        '<summary>Build a URL for your firewall</summary><div class="ub-body"></div></details>';
+}
+
+// <details> toggle does not bubble; a capturing listener still sees it.
+document.addEventListener('toggle', (ev) => {
+    const box = ev.target;
+    if (!(box instanceof HTMLDetailsElement) || !box.classList.contains('ub') || !box.open || box._ub) return;
+    box._ub = Object.assign({}, UB_DEFAULTS);
+    box._ubId = ++ubSeq;
+    ubRender(box);
+}, true);
+document.addEventListener('change', (ev) => {
+    const box = ev.target.closest && ev.target.closest('details.ub');
+    if (box && box._ub) ubChange(box, ev.target);
+});
+document.addEventListener('input', (ev) => {
+    const box = ev.target.closest && ev.target.closest('details.ub');
+    if (box && box._ub && ev.target.dataset.k === 'limit') ubChange(box, ev.target);
+});
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('apps-add-form');
     if (!form) return;

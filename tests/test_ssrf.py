@@ -142,3 +142,12 @@ def test_env_proxies_are_ignored_while_the_guard_is_on(tmp_path, monkeypatch):
     fi.FeedIngestor(db)._get_following_redirects("https://feeds.example.org/l.txt", {})
     fi.FeedIngestor(db, allow_private_urls=True)._get_following_redirects("https://feeds.example.org/l.txt", {})
     assert seen == [fi._NO_PROXIES, None]
+
+
+def test_refusal_does_not_name_the_internal_address():
+    # The message reaches the dashboard (a 400 detail) and stored statuses;
+    # naming the resolved address turned it into an internal DNS oracle.
+    with pytest.raises(fi.UnsafeURLError) as e:
+        fi._assert_public("fileserver", ["10.20.30.40"])
+    assert "non-public address" in str(e.value)
+    assert "10.20.30.40" not in str(e.value)

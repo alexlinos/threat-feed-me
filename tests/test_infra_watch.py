@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import infra_watch as iw
@@ -62,6 +64,82 @@ def test_normalize_azure_handles_properties_nesting():
     out = iw.normalize_azure(data)
     assert "cidr|AzureFrontDoor.Frontend|US|192.0.2.0/27" in out
     assert "cidr|OldShape|Global|203.0.113.0/24" in out
+
+
+def test_normalize_azure_live_shape_keeps_tag_name():
+    # The real ServiceTags shape: the tag name sits on the value and the
+    # prefixes inside properties. Reading the name out of properties (the
+    # old code) yielded "" for every entry, which made per-tag catalog
+    # slicing impossible (issue #28).
+    data = {"values": [
+        {"name": "Storage.EastUS", "id": "/subscriptions/x",
+         "properties": {"region": "eastus", "platform": "Azure",
+                        "addressPrefixes": ["192.0.2.0/27"]}},
+        {"name": "Sql", "properties": {"region": "",
+                                        "addressPrefixes": ["198.51.100.0/27"]}},
+    ]}
+    out = iw.normalize_azure(data)
+    assert "cidr|Storage.EastUS|eastus|192.0.2.0/27" in out
+    assert "cidr|Sql|Global|198.51.100.0/27" in out
+
+
+def test_normalize_adobe_extracts_domains_and_drops_junk():
+    text = """
+    - *.adobe.com
+    - lm.licenses.adobe.com
+    - https://cc-api-data.adobe.io/some/path
+    - wss://speech.platform.bing.com
+    - firebase*.googleapis.com
+    - network-endpoints.html and app.js are page furniture
+    - s3.amazonaws.com/tron-ffc-icons-prod/
+    """
+    out = iw.normalize_adobe(text)
+    assert "domain|||*.adobe.com" in out
+    assert "domain|||lm.licenses.adobe.com" in out
+    assert "domain|||cc-api-data.adobe.io" in out
+    assert "domain|||speech.platform.bing.com" in out
+    assert "domain|||s3.amazonaws.com" in out
+    assert not any("firebase" in e and "*" in e.split("|")[-1][1:] for e in out)
+    # The mid-string wildcard's parent must not leak in as a broader entry.
+    assert "domain|||googleapis.com" not in out
+    assert not any(e.endswith(".html") or e.endswith(".js") for e in out)
+
+
+def test_adobe_source_is_optional():
+    src = next(s for s in iw.SOURCES if s.name == "adobe_endpoints")
+    assert src.optional is True
+    assert all(not s.optional for s in iw.SOURCES if s.name != "adobe_endpoints")
+
+
+def _fake_adobe_get(monkeypatch, page, files):
+    fetched = []
+
+    def get(url, headers=None):
+        fetched.append(url)
+        if url == iw.ADOBE_PAGE_URL:
+            return page.encode()
+        return files[url].encode()
+    monkeypatch.setattr(iw, "get", get)
+    return fetched
+
+
+def test_adobe_uses_only_the_linked_file_on_an_adobe_host(monkeypatch):
+    page = ('<a href="https://cdn.other.example/endpoints-allowlist.txt">mirror</a>'
+            '<a href="https://www.adobe.com/files/endpoints-allowlist-2026.txt">file</a>'
+            '<script src="https://assets.tracker.example/x.js"></script>')
+    good = "https://www.adobe.com/files/endpoints-allowlist-2026.txt"
+    fetched = _fake_adobe_get(monkeypatch, page, {good: "*.adobe.com\n"})
+    assert iw.fetch_adobe() == "*.adobe.com\n"
+    assert fetched == [iw.ADOBE_PAGE_URL, good]       # the foreign mirror is never fetched
+
+
+def test_adobe_without_a_linked_file_fails_instead_of_mining_the_page(monkeypatch):
+    # The page's own hosts (CDN, scripts, analytics) must never become entries
+    # on a list firewalls allow.
+    page = '<p>*.adobe.com</p><script src="https://assets.tracker.example/x.js"></script>'
+    _fake_adobe_get(monkeypatch, page, {})
+    with pytest.raises(ValueError):
+        iw.fetch_adobe()
 
 
 def test_normalize_cloudflare_dict_of_lists():
