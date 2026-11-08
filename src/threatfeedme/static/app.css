@@ -576,13 +576,14 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
 .ub > summary::-webkit-details-marker { display:none; }
 .ub > summary::before { content:'▸'; display:inline-block; width:1em; transition:transform .15s; }
 .ub[open] > summary::before { transform:rotate(90deg); }
-.ub-body { display:grid; gap:12px; margin-top:12px; }
+.ub-body { display:grid; gap:12px; margin-top:12px; overflow-wrap:normal; }
 .ub-field { display:flex; flex-direction:column; gap:5px; min-width:0; font-size:12px; color:var(--muted);
             text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
 .ub-field select, .ub-field input { padding:8px 10px; font-size:13.5px; text-transform:none; letter-spacing:0; font-weight:400; width:100%; box-sizing:border-box; }
 .ub-seg { display:flex; flex-wrap:wrap; gap:6px; text-transform:none; letter-spacing:0; }
 .ub-seg label { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border:1px solid var(--line-2);
-                border-radius:8px; cursor:pointer; color:var(--ink-2); font-size:13px; font-weight:500; }
+                border-radius:8px; cursor:pointer; color:var(--ink-2); font-size:13px; font-weight:500;
+                white-space:nowrap; flex:none; }
 .ub-seg label:has(input:checked) { border-color:var(--accent); background:var(--accent-deep); color:var(--accent-hi); }
 .ub-seg input { margin:0; accent-color:var(--accent-hi); }
 .ub-check { display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--ink-2); cursor:pointer; }
@@ -625,7 +626,9 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
 .cat-table { table-layout:fixed; }
 .cat-table th:nth-child(2), .cat-table td:nth-child(2) { width:84px; text-align:right; white-space:nowrap; font-family:var(--mono); font-size:13px; }
 .cat-table th:last-child, .cat-table td:last-child { width:56px; text-align:center; }
-.cat-table td:first-child { overflow-wrap:anywhere; }
+/* long list names may break anywhere; not the detail row under them, where
+   it let the URL builder's buttons shrink to one character per line */
+.cat-table tr:not(.cat-detail) > td:first-child { overflow-wrap:anywhere; }
 .cat-detail .url-row { min-width:0; }
 .cat-detail .url-box { min-width:0; width:100%; }
 .cat-desc { color:var(--dim); font-size:12.5px; margin-top:2px; font-weight:400; }
