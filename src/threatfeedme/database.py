@@ -1536,6 +1536,22 @@ class Database:
                     "UPDATE application_lists SET last_status=?, last_refresh_at=?"
                     " WHERE name=?", (status, _utcnow_iso(), name))
 
+    def reset_application_list_fetch(self, name: str) -> None:
+        """Drop the vendor validator and any held refresh after an operator edit.
+
+        A settings change (source, format, filter, or prefix floors) means the
+        previously served entries and a pending blob were produced under the
+        old rules; keeping the ETag lets a 304 hide them, and the pending row
+        could still be approved from the old source. NULLing last_refresh_at
+        makes the scheduler treat the list as due on its next tick.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE application_lists SET http_etag = NULL, last_refresh_at = NULL"
+                " WHERE name = ?", (name,))
+            cur.execute(
+                "DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+
     def get_entries(self, name: str) -> List[str]:
         with self._cursor() as cur:
             cur.execute("SELECT entry FROM application_list_entries WHERE list_name = ?"

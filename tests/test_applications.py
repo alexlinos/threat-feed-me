@@ -633,3 +633,33 @@ def test_api_approve_reject_round_trip(rtr, db):
     with pytest.raises(HTTPException) as e:
         rtr.approve("acme", _=None, _csrf=None)
     assert e.value.status_code == 404
+
+
+def _put_acme(rtr, **changes):
+    from threatfeedme.schemas import ApplicationListRequest
+    fields = dict(name="acme", url="https://vendor.example/acme.txt", format="list",
+                  filter_expr="", enabled=True, update_interval=3600,
+                  min_v4_prefix=8, min_v6_prefix=20, change_threshold_pct=50.0)
+    fields.update(changes)
+    return rtr.update_application("acme", ApplicationListRequest(**fields), _=None, _csrf=None)
+
+
+def test_update_resets_fetch_on_a_settings_change(rtr, db):
+    # A tightened floor must not hide behind a 304, and a held refresh made
+    # under the old settings must not be approvable afterwards.
+    db.set_application_list_state("acme", "ok", etag="v9")
+    db.add_pending("acme", ["198.51.100.9"], [{"e": "198.51.100.9"}], [], "moved")
+    r = _put_acme(rtr, min_v4_prefix=16)
+    assert "refetch" in r["message"].lower()
+    row = db.get_application_list("acme")
+    assert row["http_etag"] is None and row["last_refresh_at"] is None
+    assert db.get_pending("acme") is None
+
+
+def test_update_keeps_fetch_state_on_a_scheduling_change(rtr, db):
+    db.set_application_list_state("acme", "ok", etag="v9")
+    db.add_pending("acme", ["198.51.100.9"], [{"e": "198.51.100.9"}], [], "moved")
+    r = _put_acme(rtr, update_interval=7200)
+    assert "refetch" not in r["message"].lower()
+    assert db.get_application_list("acme")["http_etag"] == "v9"
+    assert db.get_pending("acme") is not None

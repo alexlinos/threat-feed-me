@@ -238,13 +238,26 @@ def add_application(req: ApplicationListRequest, _=Depends(require_auth),
 @router.put("/api/applications/{name}")
 def update_application(name: str, req: ApplicationListRequest,
                        _=Depends(require_auth), _csrf=Depends(csrf_check)):
-    _row_or_404(name)
+    old = _row_or_404(name)
     _validate(req)
     core.db.update_application_list(name, {
         "source_url": req.url, "format": req.format, "filter_expr": req.filter_expr,
         "enabled": 1 if req.enabled else 0, "update_interval": req.update_interval,
         "min_v4_prefix": req.min_v4_prefix, "min_v6_prefix": req.min_v6_prefix,
         "change_threshold_pct": req.change_threshold_pct})
+    # A fetch-affecting edit invalidates the stored ETag and any held refresh:
+    # tightening a prefix floor must not be skipped by a 304, and a pending row
+    # produced under the old source/settings must not survive an approval.
+    # Enabled/interval/threshold edits are scheduling policy, not the shape of
+    # the served data, so they keep the validator and the pending row.
+    if (old["source_url"] != req.url
+            or old["format"] != req.format
+            or (old["filter_expr"] or "") != (req.filter_expr or "")
+            or old["min_v4_prefix"] != req.min_v4_prefix
+            or old["min_v6_prefix"] != req.min_v6_prefix):
+        core.db.reset_application_list_fetch(name)
+        return {"success": True,
+                "message": f"List '{name}' saved; it refetches in full on the next scheduler tick"}
     return {"success": True, "message": f"List '{name}' saved"}
 
 
