@@ -105,6 +105,28 @@ def test_the_cidr_is_served_not_the_network_address(db):
     assert "45.66.230.0/24\n" in body and "\n45.66.230.0\n" not in body
 
 
+def test_family_serves_one_ip_version_with_its_own_etag(db):
+    db.add_indicators_bulk([("2a0b:4d07::1", {})], source="blocklist_de")
+    ConfidenceScorer(db, {}).recalculate_all_scores()
+    feed_cache.mark_scores_changed(db)
+    both, etag_both = feed_cache.txt(db, "all", "ip")
+    v4, etag4 = feed_cache.txt(db, "all", "ip", family=4)
+    v6, etag6 = feed_cache.txt(db, "all", "ip", family=6)
+    assert b"2a0b:4d07::1\n" in both
+    assert b"2a0b:4d07::1" not in v4 and b"185.9.9.9\n" in v4
+    assert v6 == b"2a0b:4d07::1\n"
+    assert len({etag_both, etag4, etag6}) == 3          # three cached bodies
+    # Domains have no IP version: the option is a no-op there.
+    assert feed_cache.txt(db, "all", "domain", family=4) == feed_cache.txt(db, "all", "domain")
+
+
+def test_entry_count_is_the_size_before_limit(db):
+    full, _etag, total = feed_cache.txt_with_count(db, "all", "ip")
+    top, _etag, total_top = feed_cache.txt_with_count(db, "all", "ip", limit=1)
+    assert total == total_top == len(full.decode().splitlines())
+    assert len(top.decode().splitlines()) == 1
+
+
 # ---- never stale -------------------------------------------------------------
 
 def test_a_whitelist_change_is_visible_on_the_next_poll(db):

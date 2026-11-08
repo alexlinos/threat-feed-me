@@ -149,6 +149,62 @@ def _domain_ok(host: str) -> Tuple[bool, str]:
     return False, "not an IP, CIDR, domain, wildcard or URL"
 
 
+def entry_kind(entry: str) -> str:
+    """'url', 'ip' (address or network) or 'domain' (wildcards included) for
+    an entry that already passed guard_entry."""
+    if "://" in entry:
+        return "url"
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return "ip"
+    except ValueError:
+        return "domain"
+
+
+def select_entries(entries: List[str], kind: Optional[str] = None,
+                   family: Optional[int] = None, hosts: bool = False,
+                   wildcards: str = "keep") -> List[str]:
+    """The /lists/ URL options, so one stored list can feed every kind of
+    firewall object. Each option only selects which of the vendor's own
+    entries are served; they combine freely and are applied before ?limit.
+
+    Nothing here turns one kind of entry into another or rewrites what a
+    vendor published: no resolving domains to addresses, no widening or
+    narrowing a wildcard. Vendors move addresses behind their names (Microsoft
+    has, several times), and a derived list goes stale silently; the
+    maintainer's rule is to serve strictly what the vendor publishes.
+
+      kind      ip | domain | url: only that kind of entry (a FortiGate IP
+                feed fails its whole import on one hostname line);
+      family    4 | 6: drop IP entries of the other version (domains and
+                URLs are untouched; add kind=ip for a pure address list);
+      hosts     drop networks wider than one address and serve /32 and /128
+                entries as bare addresses, the same address written without
+                its prefix (Sophos takes no CIDR at all);
+      wildcards keep | drop: leave *.example.com entries out for consumers
+                that reject them. Never stripped to example.com: on an
+                exact-match firewall that silently narrows what the vendor
+                listed.
+    """
+    out: List[str] = []
+    for e in entries:
+        k = entry_kind(e)
+        if kind and k != kind:
+            continue
+        if k == "ip":
+            net = ipaddress.ip_network(e, strict=False)
+            if family and net.version != family:
+                continue
+            if hosts:
+                if net.num_addresses > 1:
+                    continue
+                e = str(net.network_address)
+        elif k == "domain" and e.startswith("*.") and wildcards == "drop":
+            continue
+        out.append(e)
+    return out
+
+
 def filter_entries(entries: List[str], v4_floor: int, v6_floor: int
                    ) -> Tuple[List[str], List[Tuple[str, str]]]:
     """The emission gate: (accepted sorted-unique, [(entry, reason) rejected])."""

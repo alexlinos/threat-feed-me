@@ -486,12 +486,36 @@ The on-disk exports split the same way (`*_confidence_ips.*` /
 **List size limits.** Many firewalls limit how many entries one list can hold
 (a mid-range FortiGate takes about 131,000 per connector; PAN-OS limits depend
 on the model). `?hosts=1` serves single addresses only, leaving out network
-entries, for consumers that reject CIDR lines (Sophos). Add `?limit=N` to any URL to get only the N strongest entries,
+entries, for consumers that reject CIDR lines (Sophos). `?family=4` or
+`?family=6` serves one IP version, for consumers that take no IPv6 (Sophos
+again) or keep the two apart (pfBlockerNG). Add `?limit=N` to any URL to get only the N strongest entries,
 e.g. `/feeds/all.txt?limit=100000`, so the list fits instead of being cut off
 wherever the firewall stops reading. Lists carry an ETag, so a firewall re-polling
-an unchanged list gets a cheap `304 Not Modified`. Each URL on the dashboard
+an unchanged list gets a cheap `304 Not Modified`, and every `.txt` URL sends an
+`X-Entry-Count` header with the list's size before `?limit`. Each URL on the dashboard
 shows when it was last polled and by what, so you can confirm your firewall is
-really pulling it.
+really pulling it. The options combine, e.g. `/feeds/medium.txt?hosts=1&family=4`
+for a Sophos third-party feed.
+
+**Application list URLs.** `/lists/<name>.txt` (also `.csv`, `.json`) serves
+an application list exactly as stored, which can mix IPs, networks, domains,
+wildcards and URLs. These options shape one list for one kind of firewall
+object, combine freely, and apply before `?limit=N`. They only choose which
+of the vendor's own entries are served: nothing is converted (no domain is
+ever resolved into IP ranges) or rewritten, because vendors move addresses
+behind their names and a derived list goes stale without anyone noticing.
+
+| Option | Values | Effect |
+|---|---|---|
+| `kind` | `ip`, `domain`, `url` | only that kind of entry (an IP-address feed fails its whole import on a hostname) |
+| `family` | `4`, `6` | drop IP entries of the other version; domains and URLs are untouched |
+| `hosts` | `1` | drop networks wider than one address; `/32` and `/128` entries are served bare |
+| `wildcards` | `keep`, `drop` | `drop` leaves `*.example.com` entries out (default `keep`) |
+
+For example `/lists/github-hooks.txt?kind=ip&family=4&hosts=1`. Unlike the
+threat-list URLs, an unknown option here is a `400`, so a misspelt option can
+never quietly serve a different list. Every format carries an ETag and
+`X-Entry-Count`.
 
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in

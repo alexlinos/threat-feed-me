@@ -82,8 +82,9 @@ def db(tmp_path):
 class FakeRequest:
     """Just the surface the serving path reads (repo pattern: direct router
     calls, no portal threads — TestClient hung this suite on exit here)."""
-    def __init__(self, headers=None):
+    def __init__(self, headers=None, query=None):
         self.headers = headers or {}
+        self.query_params = query or {}
 
 
 @pytest.fixture
@@ -382,22 +383,71 @@ def test_serving_txt_etag_and_304(rtr, db):
     assert e.value.status_code == 404
 
 
-def _drain(resp):
-    """Starlette wraps the sync iterable into an async generator; drain it."""
-    import asyncio
-
-    async def run():
-        return "".join([c if isinstance(c, str) else c.decode()
-                        async for c in resp.body_iterator])
-    return asyncio.run(run())
-
-
 def test_serving_csv_json_and_limit(rtr, db):
     _serve_db(db)
-    assert _drain(rtr.list_csv("acme", FakeRequest(), limit=None)) == "198.51.100.1\r\n198.51.100.2\r\n"
-    body = _drain(rtr.list_json("acme", FakeRequest(), limit=None))
+    csv_r = rtr.list_csv("acme", FakeRequest(), limit=None)
+    assert csv_r.body == b"198.51.100.1\r\n198.51.100.2\r\n" and csv_r.headers["ETag"]
+    body = rtr.list_json("acme", FakeRequest(), limit=None).body
     assert json.loads(body)["entries"] == ["198.51.100.1", "198.51.100.2"]
-    assert rtr.list_txt("acme", FakeRequest(), limit=1).body == b"198.51.100.1\n"
+    top = rtr.list_txt("acme", FakeRequest(), limit=1)
+    assert top.body == b"198.51.100.1\n" and top.headers["X-Entry-Count"] == "2"
+
+
+# ------------------------------------------------------------- URL options --
+
+MIXED = ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32", "2001:db8::/48",
+         "2001:db8::1", "a.example.net", "*.cdn.example.net", "*.a.example.net",
+         "https://teams.example.net/foo"]
+
+
+@pytest.mark.parametrize("opts,expected", [
+    ({"kind": "ip"}, ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32",
+                      "2001:db8::/48", "2001:db8::1"]),
+    ({"kind": "domain"}, ["a.example.net", "*.cdn.example.net", "*.a.example.net"]),
+    ({"kind": "url"}, ["https://teams.example.net/foo"]),
+    ({"kind": "ip", "family": 4}, ["198.51.100.0/24", "198.51.100.7", "203.0.113.9/32"]),
+    ({"kind": "ip", "family": 6}, ["2001:db8::/48", "2001:db8::1"]),
+    # Sophos: v4 single addresses, bare (a /32 is served as its address).
+    ({"kind": "ip", "family": 4, "hosts": True}, ["198.51.100.7", "203.0.113.9"]),
+    ({"kind": "domain", "wildcards": "drop"}, ["a.example.net"]),
+])
+def test_select_entries_options(opts, expected):
+    assert applications.select_entries(MIXED, **opts) == expected
+
+
+def test_options_only_select_never_rewrite_vendor_entries():
+    # Maintainer's rule: serve strictly what the vendor publishes. Every
+    # option is a subset of the stored entries (hosts=1 only drops the /32
+    # prefix length from the same address); no domain becomes an address and
+    # no wildcard is widened or narrowed.
+    combos = [{"kind": k, "family": f, "wildcards": w}
+              for k in (None, "ip", "domain", "url") for f in (None, 4, 6)
+              for w in ("keep", "drop")]
+    for opts in combos:
+        assert set(applications.select_entries(MIXED, **opts)) <= set(MIXED), opts
+    assert "cdn.example.net" not in applications.select_entries(MIXED, kind="domain")
+
+
+def test_select_entries_family_leaves_domains_alone():
+    out = applications.select_entries(MIXED, family=4)
+    assert "a.example.net" in out and "2001:db8::1" not in out
+
+
+def test_list_url_options_reach_the_response(rtr, db):
+    db.replace_entries("acme", MIXED, len(MIXED), 0, [], [])
+    r = rtr.list_txt("acme", FakeRequest(), limit=None, kind="ip", family="4", hosts=1)
+    assert r.body == b"198.51.100.7\n203.0.113.9\n"
+    assert r.headers["X-Entry-Count"] == "2"
+    other = rtr.list_txt("acme", FakeRequest(), limit=None, kind="domain")
+    assert other.headers["ETag"] != r.headers["ETag"]     # each combination its own
+
+
+def test_list_url_unknown_option_is_400(rtr, db):
+    from fastapi import HTTPException
+    _serve_db(db)
+    with pytest.raises(HTTPException) as e:
+        rtr.list_txt("acme", FakeRequest(query={"kinds": "ip"}), limit=None)
+    assert e.value.status_code == 400 and "kinds" in e.value.detail
 
 
 # -------------------------------------------------------------------- API --
