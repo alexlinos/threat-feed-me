@@ -1,21 +1,15 @@
 {
- "fetched_at": "2026-11-07 13:13 UTC",
+ "fetched_at": "2026-11-08 13:35 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
    "count": 7060,
    "baseline": false,
-   "added": 5,
+   "added": 0,
    "removed": 0,
-   "added_sample": [
-    "v6|ap-east-2|AMAZON|2600:f0f3:f010:2e00::/56",
-    "v6|ap-east-2|EC2|2600:f0f3:f010:2e00::/56",
-    "v6|ap-southeast-6|AMAZON|2600:f0f3:f010:500::/56",
-    "v6|ap-southeast-6|EC2|2600:f0f3:f010:500::/56",
-    "v6|sa-east-1|AMAZON|2600:1f01:4952::/47"
-   ],
+   "added_sample": [],
    "removed_sample": [],
-   "pct_change": 0.07,
+   "pct_change": 0.0,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
@@ -39,14 +33,11 @@
    "status": "ok",
    "count": 1153,
    "baseline": false,
-   "added": 2,
+   "added": 0,
    "removed": 0,
-   "added_sample": [
-    "v4|northamerica-northeast1|Google Cloud|34.183.174.0/24",
-    "v4|northamerica-northeast1|Google Cloud|34.184.171.0/24"
-   ],
+   "added_sample": [],
    "removed_sample": [],
-   "pct_change": 0.17,
+   "pct_change": 0.0,
    "min_v4_prefix": 14,
    "min_v6_prefix": 44,
    "alert": false,

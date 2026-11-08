@@ -98686,6 +98686,6 @@
   "cidr||westus|9.129.58.144/28",
   "cidr||westus|9.129.96.0/22"
  ],
- "fetched_at": "2026-11-07T13:13:45Z",
+ "fetched_at": "2026-11-08T13:35:02Z",
  "source": "azure_service_tags"
 }
