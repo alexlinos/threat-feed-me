@@ -1020,10 +1020,10 @@ A review of v2.7.0 (PR #27, application lists) found two holes, both fixed:
 - **The allow-list gate repeated the 2.4.19 supernet bypass**: `is_private`
   on a network needs both ends private, so `172.0.0.0/8` passed. `_net_ok`
   now overlaps `safety._SPECIAL_V4/_V6`, like the threat-side filter.
-- Not fixed in 2.7.1 (from the same review): a slow-drip vendor can stall
-  the scheduler thread (the app-list pass runs inline before due_feeds);
-  approving a held refresh can overwrite a newer served version;
-  `domains.reserved_reason` is not applied to app-list domains.
+- Not fixed in 2.7.1 (from the same review): approving a held refresh can
+  overwrite a newer served version; `domains.reserved_reason` is not applied
+  to app-list domains. (The slow-drip scheduler stall is fixed on 2.7: see
+  below.)
 - PR #29 (catalog) predates this and needs rebasing onto it: its manifest
   fetch and every catalog list go through the same paths. (Done: carried
   onto `feat/2.7-catalog`, see below.)
@@ -1051,6 +1051,12 @@ stays the released version.
   description, a link to the vendor's own docs on what to allow, tabs where
   the vendor publishes categories, a table of lists with entry counts and
   on/off switches. Do not name or link the reference anywhere in the repo.
+- **The application-list pass runs on its own thread**
+  (`scheduler.start_application_lists_pass`): it used to run inline on the
+  scheduler tick before the threat-feed due check, so one vendor dribbling
+  bytes under the read timeout could stall every threat-feed refresh, and
+  the catalog makes 200+ lists plausible. A tick that finds the previous
+  pass still running skips it.
 - **No per-region lists** (maintainer): AWS per service across all regions;
   Azure global service tags only (regional would be ~2,900 lists, AWS
   per-region 347). Microsoft 365 keeps its category tabs (not regions).

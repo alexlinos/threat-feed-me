@@ -148,6 +148,10 @@ def _maybe_check_updates() -> None:
 _refresh_lock = threading.Lock()
 _refresh_state = {"running": False, "last_finished": None, "last_result": None, "last_error": None}
 _scheduler_stop = threading.Event()
+# Application lists run on their own thread: the pass flag is independent of
+# the feed refresh lock, so list vendors cannot hold threat-feed due checks.
+_apps_pass_lock = threading.Lock()
+_apps_pass_running = False
 
 
 def _run_refresh_holding_lock(only: Optional[List[str]] = None) -> None:
@@ -218,6 +222,34 @@ def _refresh_application_lists() -> None:
         safety_cfg.get('allow_private_feed_urls', False)))
 
 
+def start_application_lists_pass() -> bool:
+    """Start one application-list pass on its own thread.
+
+    A slow vendor that dribbles bytes just under the read timeout could once
+    stall every threat-feed refresh by running inline on the scheduler tick.
+    Single-pass and off-thread, it can only delay other application lists.
+    """
+    global _apps_pass_running
+    with _apps_pass_lock:
+        if _apps_pass_running:
+            logger.debug("Application-list pass still running; skipping this tick")
+            return False
+        _apps_pass_running = True
+
+    def _pass_thread_body() -> None:
+        global _apps_pass_running
+        try:
+            _refresh_application_lists()
+        except Exception as e:
+            logger.error(f"Application-list pass failed: {e}")
+        finally:
+            with _apps_pass_lock:
+                _apps_pass_running = False
+
+    threading.Thread(target=_pass_thread_body, daemon=True, name="app-lists").start()
+    return True
+
+
 def _scheduler_loop():
     """Background loop: on each short tick, refresh only the feeds that are due
     per their individual update_interval (Emerging Threats every 12h, hourly
@@ -255,8 +287,11 @@ def _scheduler_loop():
         # own tables; deliberately outside the feed refresh lock because
         # they cannot touch the corpus, the votes or the served threat
         # lists. A vendor error is per-list status, never a dead tick.
+        # They run on their own thread so a slow vendor can only delay
+        # other application lists, never the threat feeds; a tick that finds
+        # the previous pass still running skips it instead of stacking threads.
         try:
-            _refresh_application_lists()
+            start_application_lists_pass()
         except Exception as e:
             logger.error(f"Scheduler application-list pass failed: {e}")
 
