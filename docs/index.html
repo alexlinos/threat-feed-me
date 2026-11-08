@@ -190,7 +190,7 @@
   <div class="wrap">
     <div class="hero">
       <div>
-        <a class="kicker" href="#walkthrough">New in v2.5 “Flytrap”: guided set-up · TAXII 2.1 · CrowdSec →</a>
+        <a class="kicker" href="#delivery">New in 2.7: application allow-lists · firewall URL builder →</a>
         <h1>The open-source MineMeld replacement<span class="bang">.</span></h1>
         <p class="lede">Threat Feed Me pulls <b>22 free, keyless threat feeds</b> and removes the duplicates,
           like MineMeld did. Then it goes a step further: it notices when feeds are just <b>republishing each
@@ -232,7 +232,7 @@
   <section id="walkthrough">
     <div class="wrap">
       <h2>From Docker to Blocker in five minutes</h2>
-      <p class="sub">The dashboard walks you through it. Every screen below is the real v2.5 interface.</p>
+      <p class="sub">The dashboard walks you through it. Every screen below is the real interface.</p>
       <!-- The promo, rendered with HyperFrames. preload="none": nothing past the
            poster downloads until the visitor presses play. -->
       <figure class="shot tour">
@@ -410,11 +410,15 @@
       <h2>Beyond the firewall</h2>
       <p class="sub">The same consensus lists, delivered to the rest of your stack.</p>
       <div class="cards">
-        <div class="card"><h3>CrowdSec<span class="tag">v2.5</span></h3>
+        <div class="card"><h3>Application allow-lists<span class="tag">New in 2.7</span></h3>
+          <p>Microsoft 365, AWS, Azure, Google, GitHub and Cloudflare lists from a built-in catalog, each linked to
+            the vendor's own documentation and switched on one at a time, served exactly as the vendor publishes
+            them and kept out of threat scoring. A URL builder gives you the exact URL for your firewall.</p></div>
+        <div class="card"><h3>CrowdSec</h3>
           <p>Publishes your chosen tier into your CrowdSec Local API as ban decisions, so every bouncer you
             run (nginx, Traefik, Cloudflare, iptables) enforces it. Pulls your own CrowdSec detections, the
             community blocklist and Console lists back in, each voting as its own source, and never counts its own.</p></div>
-        <div class="card"><h3>TAXII 2.1 for SIEMs<span class="tag">v2.5</span></h3>
+        <div class="card"><h3>TAXII 2.1 for SIEMs</h3>
           <p>Six read-only collections of STIX 2.1 Indicators with confidence, sources and expiry, for
             Microsoft Sentinel, QRadar, Splunk, MISP and OpenCTI. Stable IDs, so indicators update in place.</p></div>
         <div class="card"><h3>UniFi gateways</h3>
