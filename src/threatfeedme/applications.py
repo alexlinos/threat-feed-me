@@ -402,6 +402,9 @@ def refresh_list(db, name: str, get: Callable = requests.get,
             return summary
         db.replace_entries(name, accepted, len(added), len(removed),
                            sorted(added)[:DIFF_SAMPLE_CAP], sorted(removed)[:DIFF_SAMPLE_CAP])
+        # A held version is stale once a newer one is served; approving it
+        # would roll the list back.
+        db.reject_pending(name)
         db.set_application_list_state(name, status="ok", etag=new_etag)
         if rejected:
             sample = "; ".join(f"{e}: {r}" for e, r in rejected[:5])

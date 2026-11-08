@@ -263,6 +263,21 @@ def test_change_guard_holds_and_approval_serves(db):
     assert db.get_history("acme")[0]["added"] == 12
 
 
+def test_served_refresh_discards_a_stale_held_one(db):
+    # Approving a held refresh after a newer version was served used to roll
+    # the list back to the older held version.
+    original = [f"198.51.100.{i}" for i in range(20)]
+    _seed(db, original)
+    big = fake_get_factory("\n".join(f"203.0.113.{i}" for i in range(12)) + "\n"
+                           + "\n".join(original[:8]) + "\n")
+    assert applications.refresh_list(db, "acme", get=big)["outcome"] == "held"
+    small = fake_get_factory("\n".join(original + ["203.0.113.77"]) + "\n")
+    assert applications.refresh_list(db, "acme", get=small)["outcome"] == "ok"
+    assert db.get_pending("acme") is None
+    assert db.approve_pending("acme") is None
+    assert set(db.get_entries("acme")) == set(original) | {"203.0.113.77"}
+
+
 def test_change_guard_reject_keeps_baseline(db):
     _seed(db, ["198.51.100.1", "198.51.100.2", "198.51.100.3"])
     get = fake_get_factory("203.0.113.9\n")
