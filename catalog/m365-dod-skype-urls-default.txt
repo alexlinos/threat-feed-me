@@ -1,0 +1,2 @@
+msteamsstatics.blob.core.usgovcloudapi.net
+statics.teams.microsoft.com

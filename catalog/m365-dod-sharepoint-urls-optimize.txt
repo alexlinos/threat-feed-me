@@ -1,0 +1,2 @@
+*.dps.mil
+*.sharepoint-mil.us

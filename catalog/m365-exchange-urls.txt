@@ -1,0 +1,9 @@
+*.mail.protection.outlook.com
+*.mx.microsoft
+*.outlook.com
+*.protection.outlook.com
+autodiscover.*.onmicrosoft.com
+outlook.cloud.microsoft
+outlook.office.com
+outlook.office365.com
+smtp.office365.com

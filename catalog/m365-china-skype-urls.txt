@@ -1,0 +1,2 @@
+*.teams.microsoftonline.cn
+teams.microsoftonline.cn

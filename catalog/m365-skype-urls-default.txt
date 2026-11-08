@@ -1,0 +1,5 @@
+*.keydelivery.mediaservices.windows.net
+*.skype.com
+*.streaming.mediaservices.windows.net
+adl.windows.com
+aka.ms

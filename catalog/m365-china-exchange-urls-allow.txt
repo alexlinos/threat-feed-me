@@ -1,0 +1,4 @@
+*.mail.protection.partner.outlook.cn
+*.partner.outlook.cn
+*.protection.partner.outlook.cn
+*.sovcloud-mx.cn

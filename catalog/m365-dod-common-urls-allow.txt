@@ -1,0 +1,16 @@
+*.auth.microsoft.us
+*.dod.online.office365.us
+*.gov.us.microsoftonline.com
+*.security.apps.mil
+compliance.apps.mil
+dod-graph.microsoft.us
+dod.loki.office365.us
+graph.microsoftazure.us
+login.microsoftonline.us
+portal.apps.mil
+purview.apps.mil
+reports.apps.mil
+scc.protection.apps.mil
+security.apps.mil
+webshell.dodsuite.office365.us
+www.ohome.apps.mil

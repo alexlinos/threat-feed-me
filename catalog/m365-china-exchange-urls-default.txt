@@ -1,0 +1,2 @@
+*.partner.outlook.cn
+attachments.office365-net.cn

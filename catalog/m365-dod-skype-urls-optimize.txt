@@ -1,0 +1,2 @@
+*.dod.teams.microsoft.us
+dod.teams.microsoft.us

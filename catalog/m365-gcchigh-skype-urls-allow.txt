@@ -1,0 +1,2 @@
+*.gov.teams.microsoft.us
+gov.teams.microsoft.us

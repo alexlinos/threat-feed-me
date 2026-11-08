@@ -1,0 +1,6 @@
+*.dps.mil
+*.sharepoint-mil.us
+*.svc.ms
+*.wns.windows.com
+g.live.com
+oneclient.sfx.ms

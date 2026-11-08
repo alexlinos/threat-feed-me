@@ -1,0 +1,3 @@
+*.protection.apps.mil
+*.protection.office365.us
+*.usgovcloud-mx.microsoft

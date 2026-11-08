@@ -1,0 +1,6 @@
+*.manage.office365.us
+*.protection.office365.us
+*.scc.office365.us
+*.usgovcloud-mx.microsoft
+manage.office365.us
+scc.office365.us

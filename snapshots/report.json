@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-11-08 13:35 UTC",
+ "fetched_at": "2026-11-08 13:54 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
@@ -28,6 +28,33 @@
    "min_v6_prefix": 35,
    "alert": false,
    "alert_reasons": []
+  },
+  "m365_gcc_high": {
+   "status": "ok",
+   "count": 127,
+   "baseline": true,
+   "added": 127,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "m365_dod": {
+   "status": "ok",
+   "count": 121,
+   "baseline": true,
+   "added": 121,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "m365_china": {
+   "status": "ok",
+   "count": 135,
+   "baseline": true,
+   "added": 135,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
   },
   "gcp_cloud": {
    "status": "ok",
@@ -59,17 +86,31 @@
   },
   "azure_service_tags": {
    "status": "ok",
-   "count": 98685,
+   "count": 103018,
    "baseline": false,
-   "added": 0,
-   "removed": 0,
-   "added_sample": [],
-   "removed_sample": [],
-   "pct_change": 0.0,
+   "added": 103018,
+   "removed": 98685,
+   "added_sample": [
+    "cidr|ActionGroup.AustraliaCentral2|australiacentral2|20.167.131.224/30",
+    "cidr|ActionGroup.AustraliaCentral2|australiacentral2|20.193.96.28/30",
+    "cidr|ActionGroup.AustraliaCentral2|australiacentral2|20.53.62.100/31",
+    "cidr|ActionGroup.AustraliaCentral2|australiacentral2|2603:1010:404:402::178/125",
+    "cidr|ActionGroup.AustraliaCentral2|australiacentral2|2603:1010:404::10c/126"
+   ],
+   "removed_sample": [
+    "cidr||Global|102.133.0.0/16",
+    "cidr||Global|102.133.0.192/32",
+    "cidr||Global|102.133.0.199/32",
+    "cidr||Global|102.133.0.212/32",
+    "cidr||Global|102.133.0.240/28"
+   ],
+   "pct_change": 204.39,
    "min_v4_prefix": 11,
    "min_v6_prefix": 36,
-   "alert": false,
-   "alert_reasons": []
+   "alert": true,
+   "alert_reasons": [
+    "changed 204.4% of entries (threshold 10%)"
+   ]
   },
   "cloudflare_ips": {
    "status": "ok",
@@ -98,6 +139,12 @@
    "min_v6_prefix": 29,
    "alert": false,
    "alert_reasons": []
+  },
+  "adobe_endpoints": {
+   "status": "fetch failed: no downloadable Adobe allowlist file linked from the endpoints page",
+   "count": null,
+   "alert": false,
+   "baseline": false
   }
  }
 }

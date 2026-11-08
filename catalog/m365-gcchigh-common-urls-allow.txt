@@ -1,0 +1,15 @@
+*.auth.microsoft.us
+*.gov.online.office365.us
+*.gov.us.microsoftonline.com
+*.osi.office365.us
+*.security.microsoft.us
+compliance.microsoft.us
+gcchigh.loki.office365.us
+graph.microsoft.us
+graph.microsoftazure.us
+login.microsoftonline.us
+purview.microsoft.us
+scc.office365.us
+security.microsoft.us
+tasks.office365.us
+www.office365.us

@@ -1,0 +1,5 @@
+*.svc.ms
+*.wns.windows.com
+admin.onedrive.us
+g.live.com
+oneclient.sfx.ms

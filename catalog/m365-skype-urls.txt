@@ -1,0 +1,10 @@
+*.keydelivery.mediaservices.windows.net
+*.lync.com
+*.skype.com
+*.streaming.mediaservices.windows.net
+*.teams.cloud.microsoft
+*.teams.microsoft.com
+adl.windows.com
+aka.ms
+teams.cloud.microsoft
+teams.microsoft.com

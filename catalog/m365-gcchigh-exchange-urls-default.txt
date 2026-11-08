@@ -1,0 +1,7 @@
+attachments.office365-net.us
+autodiscover-s.office365.us
+autodiscover.*.mail.onmicrosoft.com
+autodiscover.*.mail.onmicrosoft.us
+autodiscover.*.onmicrosoft.com
+autodiscover.*.onmicrosoft.us
+outlook.office365.us

@@ -1,0 +1,16 @@
+*.auth.microsoft.cn
+*.azure-mobile.cn
+*.chinacloud-mobile.cn
+*.chinacloudapi.cn
+*.onmschina.cn
+*.partner.microsoftonline-m-i.net.cn
+*.partner.microsoftonline-m.net.cn
+*.partner.microsoftonline-p.cn
+*.partner.microsoftonline-p.net.cn
+*.partner.microsoftonline.cn
+*.partner.officewebapps.cn
+*.windowsazure.cn
+login.partner.microsoftonline.cn
+microsoftgraph.chinacloudapi.cn
+portal.partner.microsoftonline.cdnsvc.com
+r4.partner.outlook.cn
