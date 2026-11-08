@@ -143,8 +143,10 @@ def _assert_public(host: str, addresses: List[str]) -> None:
     for addr in addresses:
         ip = ipaddress.ip_address(addr.split('%', 1)[0])
         if not ip.is_global:
+            # The message reaches the dashboard and stored statuses; naming the
+            # address made it an internal DNS lookup oracle.
             raise UnsafeURLError(
-                f"feed URL host '{host}' resolves to non-public address {ip}; "
+                f"feed URL host '{host}' resolves to a non-public address; "
                 "refusing to fetch (set safety.allow_private_feed_urls: true "
                 "to permit internal feed URLs)"
             )

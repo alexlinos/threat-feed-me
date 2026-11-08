@@ -151,6 +151,25 @@ def test_gate_honours_per_list_floors():
     assert not ok
 
 
+@pytest.mark.parametrize("entry,expected_ok,expected_tld", [
+    ("printer.local", False, "local"),
+    ("*.corp.local", False, "local"),
+    ("foo.localhost", False, "localhost"),
+    ("x.test", False, "test"),
+    ("y.invalid", False, "invalid"),
+    ("https://intranet.local/x", False, "local"),
+    ("login.example.net", True, None),
+    ("*.cdn.example.net", True, None),
+])
+def test_gate_rejects_reserved_special_use_tlds(entry, expected_ok, expected_tld):
+    # Domain design D4: reserved and special-use TLDs are never served; the
+    # threat side already applies reserved_reason(), application lists now do.
+    ok, reason = applications.guard_entry(entry)
+    assert ok == expected_ok, f"{entry}: {reason}"
+    if expected_tld is not None:
+        assert expected_tld in reason.lower()
+
+
 # ----------------------------------------------------------- source parse --
 
 def test_extract_json_paths_expands_lists():
@@ -163,6 +182,29 @@ def test_extract_json_paths_expands_lists():
 def test_extract_json_paths_missing_key_raises():
     with pytest.raises(ValueError):
         applications.extract_json_paths({"a": 1}, "$.nope")
+
+
+M365_SHAPE = [
+    {"id": 1, "serviceArea": "Exchange", "urls": ["outlook.office.com"]},
+    {"id": 2, "serviceArea": "Exchange", "ips": ["198.51.100.0/24"]},
+    {"id": 3, "serviceArea": "Common"},
+]
+
+
+def test_extract_json_paths_expands_top_level_array_for_microsoft_365_shape():
+    assert applications.extract_json_paths(M365_SHAPE, "$[*].urls[*]") == ["outlook.office.com"]
+    assert applications.extract_json_paths(M365_SHAPE, "$[*].ips[*]") == ["198.51.100.0/24"]
+
+
+def test_extract_json_paths_top_level_star_returns_array_items():
+    assert applications.extract_json_paths(
+        ["a.example.net", "b.example.net"], "$[*]") == ["a.example.net", "b.example.net"]
+
+
+def test_extract_json_paths_missing_key_on_top_level_array_raises_with_expression():
+    with pytest.raises(ValueError) as exc:
+        applications.extract_json_paths(M365_SHAPE, "$[*].nope[*]")
+    assert "'$[*].nope[*]'" in str(exc.value) and "'nope'" in str(exc.value)
 
 
 def test_parse_body_plain_skips_comments():
@@ -219,6 +261,21 @@ def test_change_guard_holds_and_approval_serves(db):
     assert db.get_pending("acme") is None
     assert len(db.get_entries("acme")) == 20
     assert db.get_history("acme")[0]["added"] == 12
+
+
+def test_served_refresh_discards_a_stale_held_one(db):
+    # Approving a held refresh after a newer version was served used to roll
+    # the list back to the older held version.
+    original = [f"198.51.100.{i}" for i in range(20)]
+    _seed(db, original)
+    big = fake_get_factory("\n".join(f"203.0.113.{i}" for i in range(12)) + "\n"
+                           + "\n".join(original[:8]) + "\n")
+    assert applications.refresh_list(db, "acme", get=big)["outcome"] == "held"
+    small = fake_get_factory("\n".join(original + ["203.0.113.77"]) + "\n")
+    assert applications.refresh_list(db, "acme", get=small)["outcome"] == "ok"
+    assert db.get_pending("acme") is None
+    assert db.approve_pending("acme") is None
+    assert set(db.get_entries("acme")) == set(original) | {"203.0.113.77"}
 
 
 def test_change_guard_reject_keeps_baseline(db):
@@ -503,13 +560,22 @@ def test_api_add_malformed_host_is_saved_not_500(rtr, db, monkeypatch):
 
 
 def test_csrf_enforced_over_http(db, monkeypatch):  # setitem, see rtr
-    # The standing rule — mutations without X-Requested-With are rejected
-    # even with auth off — proven through the real ASGI stack. httpx over
-    # ASGITransport, not TestClient: no portal thread, no exit hang.
+    # Minimal app around the applications router, per the repo rule: tests
+    # must not import threatfeedme.app, because that lazily initializes core
+    # from ./config.yaml + ./data and leaks state into later tests and into a
+    # developer's real data directory. The standing rule (mutations without
+    # X-Requested-With are rejected even with auth off) is still proven
+    # through the real ASGI stack and the real csrf_check dependency. httpx
+    # over ASGITransport, not TestClient: no portal thread, no exit hang.
     import asyncio
     import httpx
-    monkeypatch.setitem(core.__dict__, "db", db)
-    from threatfeedme.app import app
+    from fastapi import FastAPI
+    from threatfeedme.routers import applications as r
+    monkeypatch.setitem(r.core.__dict__, "db", db)
+    monkeypatch.setitem(r.__dict__, "_allow_private", lambda: False)
+    app = FastAPI()
+    app.include_router(r.router)
+    app.dependency_overrides[r.require_auth] = lambda: None
     async def go():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
@@ -591,3 +657,33 @@ def test_api_approve_reject_round_trip(rtr, db):
     with pytest.raises(HTTPException) as e:
         rtr.approve("acme", _=None, _csrf=None)
     assert e.value.status_code == 404
+
+
+def _put_acme(rtr, **changes):
+    from threatfeedme.schemas import ApplicationListRequest
+    fields = dict(name="acme", url="https://vendor.example/acme.txt", format="list",
+                  filter_expr="", enabled=True, update_interval=3600,
+                  min_v4_prefix=8, min_v6_prefix=20, change_threshold_pct=50.0)
+    fields.update(changes)
+    return rtr.update_application("acme", ApplicationListRequest(**fields), _=None, _csrf=None)
+
+
+def test_update_resets_fetch_on_a_settings_change(rtr, db):
+    # A tightened floor must not hide behind a 304, and a held refresh made
+    # under the old settings must not be approvable afterwards.
+    db.set_application_list_state("acme", "ok", etag="v9")
+    db.add_pending("acme", ["198.51.100.9"], [{"e": "198.51.100.9"}], [], "moved")
+    r = _put_acme(rtr, min_v4_prefix=16)
+    assert "refetch" in r["message"].lower()
+    row = db.get_application_list("acme")
+    assert row["http_etag"] is None and row["last_refresh_at"] is None
+    assert db.get_pending("acme") is None
+
+
+def test_update_keeps_fetch_state_on_a_scheduling_change(rtr, db):
+    db.set_application_list_state("acme", "ok", etag="v9")
+    db.add_pending("acme", ["198.51.100.9"], [{"e": "198.51.100.9"}], [], "moved")
+    r = _put_acme(rtr, update_interval=7200)
+    assert "refetch" not in r["message"].lower()
+    assert db.get_application_list("acme")["http_etag"] == "v9"
+    assert db.get_pending("acme") is not None
