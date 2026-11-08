@@ -1028,11 +1028,15 @@ A review of v2.7.0 (PR #27, application lists) found two holes, both fixed:
   fetch and every catalog list go through the same paths. (Done: carried
   onto `feat/2.7-catalog`, see below.)
 
-## 2.7 branch (in progress): list URL options, URL builder, catalog
+## v2.7.2 (2026-11-08): list URL options, URL builder, catalog
 
-Work collects on the `2.7` branch and ships as one release, so installs
-see one update notice, not one per change (maintainer, 2026-11-07). Main
-stays the released version.
+Built on the `2.7` branch and shipped as one release, so installs see one
+update notice, not one per change (maintainer, 2026-11-07); keep using a
+batch branch for future work, main stays the released version. After the
+release, the infra-list-watch workflow must run once to publish
+`catalog.json` (until then installs say the catalog isn't published yet);
+that first run also rewrites the Azure snapshot in the tag-name format, so
+expect one all-entries-changed Azure alert.
 
 - **Applications serve strictly what the vendor publishes** (maintainer).
   URL options only select entries; nothing converts a domain into

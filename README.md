@@ -58,11 +58,10 @@ hand it to firewalls and SIEMs, with less to maintain:
 | EDL feed outputs (PAN-OS) | `/feeds/{high,medium,all}.txt` and `/feeds/domains/...`: plain one-per-line lists that PAN-OS External Dynamic Lists and every other firewall accept |
 | TAXII miners (TAXII 1.x feeds) | TAXII **2.1** collections as feeds: MISP, OpenCTI or any TAXII 2.1 server |
 | TAXII DataFeed output (TAXII 1.1 / STIX 1.x) | TAXII **2.1** / STIX **2.1**, read-only, six collections |
-| Office 365 / AWS / Azure / GCP miners (allow-lists) | Not yet: application lists are on the [2.6 roadmap](ROADMAP.md) |
+| Office 365 / AWS / Azure / GCP miners (allow-lists) | Application lists: a built-in catalog (Microsoft 365 in all four clouds, AWS, Azure, Google, GitHub, Cloudflare) you switch on per list, plus lists you point at any URL; per service, all regions |
 | Node graph you wire and maintain | Nothing to wire: add a feed, it votes |
 
-What it doesn't do (yet): the Office 365 and cloud IP-range allow-lists (2.6),
-arbitrary processing graphs, TAXII 1.x, writes over TAXII, syslog-driven lists,
+What it doesn't do (yet): per-region cloud allow-lists, arbitrary processing graphs, TAXII 1.x, writes over TAXII, syslog-driven lists,
 or pushing PAN-OS Dynamic Address Groups. The
 [migration guide](https://alexlinos.github.io/threat-feed-me/minemeld.html)
 goes through every common MineMeld use. If you need a full threat-intel platform with case
