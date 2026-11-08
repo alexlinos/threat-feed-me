@@ -1025,7 +1025,45 @@ A review of v2.7.0 (PR #27, application lists) found two holes, both fixed:
   approving a held refresh can overwrite a newer served version;
   `domains.reserved_reason` is not applied to app-list domains.
 - PR #29 (catalog) predates this and needs rebasing onto it: its manifest
-  fetch and every catalog list go through the same paths.
+  fetch and every catalog list go through the same paths. (Done: carried
+  onto `feat/2.7-catalog`, see below.)
+
+## 2.7 branch (in progress): list URL options, URL builder, catalog
+
+Work collects on the `2.7` branch and ships as one release, so installs
+see one update notice, not one per change (maintainer, 2026-11-07). Main
+stays the released version.
+
+- **Applications serve strictly what the vendor publishes** (maintainer).
+  URL options only select entries; nothing converts a domain into
+  addresses or rewrites a wildcard (`wildcards=strip` existed briefly and
+  was removed). Vendors move addresses behind names (Microsoft has,
+  repeatedly); a derived list goes stale silently. A test pins that every
+  option combination is a subset of the stored entries.
+- **URL options**: `/feeds` gained `?family=4|6` (unknown params still
+  ignored there: a 400 would break firewalls already polling). `/lists`
+  takes `kind`, `family`, `hosts`, `wildcards=keep|drop`, `limit`, and an
+  unknown option is a 400. `X-Entry-Count` (size before limit) on every
+  `.txt` and every `/lists` format. The dashboard's URL builder probes with
+  `X-TFM-Probe`, which the routes never record as a poll.
+- **Catalog page design** is modelled on a reference "source templates"
+  page the maintainer chose: vendors listed on the left; per vendor a
+  description, a link to the vendor's own docs on what to allow, tabs where
+  the vendor publishes categories, a table of lists with entry counts and
+  on/off switches. Do not name or link the reference anywhere in the repo.
+- **No per-region lists** (maintainer): AWS per service across all regions;
+  Azure global service tags only (regional would be ~2,900 lists, AWS
+  per-region 347). Microsoft 365 keeps its category tabs (not regions).
+- Catalog client: `guarded_get` + capped read, failures remembered 5 min,
+  `app_catalog.enabled: false` off switch, list URLs must sit beside the
+  manifest, follows `safety.allow_private_feed_urls`. Factory deletes the
+  files of retired lists (never when a run produced nothing); Adobe uses
+  only the linked file on an Adobe host, never page text.
+- **Previewing the catalog locally**: build it from snapshots with
+  `scripts/build_catalog.py --base-url http://127.0.0.1:<port>/`, serve the
+  output with `python -m http.server`, set the scratch DB's
+  `app_catalog_url` to the local `catalog/catalog.json`, and allow private
+  feed URLs in the scratch config only (the guard refuses 127.0.0.1).
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 

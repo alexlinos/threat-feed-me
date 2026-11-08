@@ -21,10 +21,10 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
-from threatfeedme import applications, core
+from threatfeedme import applications, core, vendor_catalog
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme.feed_ingestor import UnsafeURLError, _require_public_url
-from threatfeedme.schemas import ApplicationListRequest
+from threatfeedme.schemas import ApplicationListRequest, CatalogToggleRequest
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,12 @@ def _row_or_404(name: str) -> dict:
 def _allow_private() -> bool:
     """The feed URL policy (safety.allow_private_feed_urls) governs list URLs too."""
     return bool((core.config.get('safety', {}) or {}).get('allow_private_feed_urls', False))
+
+
+def _catalog_enabled() -> bool:
+    """app_catalog.enabled (default on): off stops the manifest fetch, for
+    air-gapped installs and anyone who doesn't want the GitHub request."""
+    return bool((core.config.get('app_catalog', {}) or {}).get('enabled', True))
 
 
 def _validate(req: ApplicationListRequest) -> None:
@@ -105,7 +111,11 @@ def _served(request: Request, name: str, ext: str, limit: Optional[int],
         raise HTTPException(status_code=400, detail=(
             f"Unknown option(s): {', '.join(sorted(unknown))}; "
             f"list URLs take {', '.join(sorted(_OPTIONS))}"))
-    _row_or_404(name)
+    row = _row_or_404(name)
+    if not row["enabled"]:
+        # A switched-off list (catalog toggle, issue #28) is not served:
+        # its URL 404s exactly like an unknown list's.
+        raise HTTPException(status_code=404, detail="Unknown application list")
     entries = applications.select_entries(
         core.db.get_entries(name), kind=kind, family=int(family) if family else None,
         hosts=bool(hosts), wildcards=wildcards or "keep")
@@ -164,6 +174,31 @@ def list_applications(_=Depends(require_auth)):
     for row in rows:
         row["pending"] = core.db.get_pending(row["name"]) is not None
     return {"applications": rows}
+
+
+@router.get("/api/applications/catalog")
+def get_catalog(_=Depends(require_auth)):
+    # Declared before /api/applications/{name} so "catalog" is not read as
+    # a list name. Renders from the published manifest only; no list data
+    # is downloaded to answer this.
+    return vendor_catalog.catalog_view(core.db, enabled=_catalog_enabled(),
+                                       allow_private=_allow_private())
+
+
+@router.post("/api/applications/catalog/{slug}/toggle")
+def toggle_catalog(slug: str, req: CatalogToggleRequest,
+                   _=Depends(require_auth), _csrf=Depends(csrf_check)):
+    try:
+        summary = vendor_catalog.set_enabled(core.db, slug, req.enabled,
+                                             allow_private=_allow_private(),
+                                             catalog_enabled=_catalog_enabled())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Not in the catalog")
+    except vendor_catalog.NameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"success": summary.get("outcome") != "error", **summary}
 
 
 @router.get("/api/applications/{name}")

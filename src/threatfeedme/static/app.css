@@ -207,6 +207,10 @@ input::placeholder { color:var(--dim); }
 .heat-title-ip { color:var(--accent-hi); }
 .heat-title-domain { color:var(--purple); }
 
+/* Applications view (issues #26/#28): section heads in the feeds idiom */
+.apps-subhead { margin:20px 0 2px; font-size:.85em; font-weight:650;
+                text-transform:uppercase; letter-spacing:.12em; }
+
 /* UniFi panel: the enable switch carries a visible text label (an unlabeled
    bare switch got saved untouched in the field). */
 .unifi-enable-label { display:inline-flex; align-items:center; gap:8px;
@@ -591,3 +595,49 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
 .ub-where:empty { display:none; }
 #apps-table tr.ub-tr td { padding-top:0; border-top:0; }
 #apps-table tr.ub-tr .ub { margin-top:0; border-top:0; padding-top:4px; max-width:640px; }
+#apps-table .url-row { min-width:280px; }
+.app-actions { white-space:nowrap; }
+.apps-add { margin-top:12px; }
+
+/* Applications catalog (app.js renderCatalog): vendors on the left, the
+   chosen vendor's lists on the right; a vendor dropdown on narrow screens. */
+.cat { display:grid; grid-template-columns:230px minmax(0,1fr); gap:18px; align-items:start; margin-bottom:8px; }
+.cat > p { grid-column:1 / -1; margin:0; }
+.cat-nav ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:2px; }
+.cat-v { width:100%; display:flex; justify-content:space-between; align-items:center; gap:8px; text-align:left;
+         padding:8px 11px; border:1px solid transparent; border-radius:9px; background:transparent;
+         color:var(--ink-2); cursor:pointer; font:500 13.5px var(--sans); }
+.cat-v:hover { background:var(--raised); color:var(--ink); }
+.cat-v.active { background:var(--accent-deep); border-color:#2b6b52; color:var(--accent-hi); font-weight:650; }
+.cat-count { font:600 11px var(--mono); color:var(--accent-hi); white-space:nowrap; }
+.cat-select { display:none; width:100%; padding:9px 10px; font-size:14px; }
+.cat-panel { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; min-width:0; }
+.cat-panel h3 { margin:0 0 6px; font-size:17px; }
+.cat-docs { margin:0 0 12px; font-size:13.5px; }
+.cat-tabs { display:flex; flex-wrap:wrap; gap:2px; border-bottom:1px solid var(--line); margin-bottom:12px; }
+.cat-tab { padding:8px 12px; border:0; border-bottom:2px solid transparent; margin-bottom:-1px; background:transparent;
+           color:var(--muted); cursor:pointer; font:600 13px var(--sans); }
+.cat-tab:hover { color:var(--ink); }
+.cat-tab.active { color:var(--accent-hi); border-bottom-color:var(--accent-hi); }
+.cat-filter { width:100%; max-width:320px; padding:8px 10px; margin-bottom:10px; box-sizing:border-box; font-size:13.5px; }
+/* fixed layout: a URL box's intrinsic width must not push the table past
+   its panel (it did, and the page scrolled sideways at ~820px) */
+.cat-table { table-layout:fixed; }
+.cat-table th:nth-child(2), .cat-table td:nth-child(2) { width:84px; text-align:right; white-space:nowrap; font-family:var(--mono); font-size:13px; }
+.cat-table th:last-child, .cat-table td:last-child { width:56px; text-align:center; }
+.cat-table td:first-child { overflow-wrap:anywhere; }
+.cat-detail .url-row { min-width:0; }
+.cat-detail .url-box { min-width:0; width:100%; }
+.cat-desc { color:var(--dim); font-size:12.5px; margin-top:2px; font-weight:400; }
+.cat-table tr.cat-on td { border-bottom:0; }
+.cat-table tr.cat-detail td { padding-top:0; text-align:left; width:auto; }
+.cat-status { margin:6px 0 0; font-size:12.5px; }
+.cat-detail .ub { max-width:640px; }
+/* Below ~1000px the panel beside a 230px vendor column gets too narrow for
+   URL rows; the vendor list becomes a dropdown above the panel instead. */
+@media (max-width:1000px) {
+  .cat { grid-template-columns:1fr; gap:10px; }
+  .cat-nav ul { display:none; }
+  .cat-select { display:block; }
+  .cat-panel { padding:14px; }
+}
