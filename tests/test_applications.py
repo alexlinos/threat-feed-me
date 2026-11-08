@@ -165,6 +165,29 @@ def test_extract_json_paths_missing_key_raises():
         applications.extract_json_paths({"a": 1}, "$.nope")
 
 
+M365_SHAPE = [
+    {"id": 1, "serviceArea": "Exchange", "urls": ["outlook.office.com"]},
+    {"id": 2, "serviceArea": "Exchange", "ips": ["198.51.100.0/24"]},
+    {"id": 3, "serviceArea": "Common"},
+]
+
+
+def test_extract_json_paths_expands_top_level_array_for_microsoft_365_shape():
+    assert applications.extract_json_paths(M365_SHAPE, "$[*].urls[*]") == ["outlook.office.com"]
+    assert applications.extract_json_paths(M365_SHAPE, "$[*].ips[*]") == ["198.51.100.0/24"]
+
+
+def test_extract_json_paths_top_level_star_returns_array_items():
+    assert applications.extract_json_paths(
+        ["a.example.net", "b.example.net"], "$[*]") == ["a.example.net", "b.example.net"]
+
+
+def test_extract_json_paths_missing_key_on_top_level_array_raises_with_expression():
+    with pytest.raises(ValueError) as exc:
+        applications.extract_json_paths(M365_SHAPE, "$[*].nope[*]")
+    assert "'$[*].nope[*]'" in str(exc.value) and "'nope'" in str(exc.value)
+
+
 def test_parse_body_plain_skips_comments():
     body = "# comment\n198.51.100.1\n\n203.0.113.0/24\n"
     assert applications.parse_body(body, "list", "") == ["198.51.100.1", "203.0.113.0/24"]

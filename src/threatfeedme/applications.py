@@ -232,8 +232,10 @@ def extract_json_paths(data: Any, expr: str) -> List[str]:
     not code (the 2.6 engine decision). Dots descend, ``[*]`` expands one
     level, a leaf may be a string, a number, or a list of strings. Anything
     richer belongs in a dedicated fetcher, not in a parser a vendor file
-    can steer.
+    can steer. A leading ``[*]`` expands a top-level array, which is the
+    Microsoft 365 endpoints shape.
     """
+    original_expr = expr
     if expr.startswith("$."):
         expr = expr[2:]
     elif expr.startswith("$"):
@@ -246,11 +248,25 @@ def extract_json_paths(data: Any, expr: str) -> List[str]:
         key, _, index = token.partition("[")
         expand = index == "*]"
         nxt: List[Any] = []
+        if not key:
+            if expand:
+                # A bare ``[*]`` is a level, not a field: expand the current
+                # list(s) only; non-list nodes contribute nothing here.
+                for node in nodes:
+                    if isinstance(node, list):
+                        nxt.extend(node)
+                nodes = nxt
+            # No name to descend by; leave the current nodes untouched.
+            continue
         for node in nodes:
             if isinstance(node, dict) and key in node:
                 nxt.append(node[key])
         if not nxt:
-            raise ValueError(f"filter expression found nothing at '{key}'")
+            # Name the whole expression and the failing segment so operators
+            # can fix the filter against the vendor shape.
+            raise ValueError(
+                f"filter expression '{original_expr}' matched nothing at '{key}'"
+            )
         if expand:
             expanded: List[Any] = []
             for node in nxt:
