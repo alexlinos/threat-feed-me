@@ -560,13 +560,22 @@ def test_api_add_malformed_host_is_saved_not_500(rtr, db, monkeypatch):
 
 
 def test_csrf_enforced_over_http(db, monkeypatch):  # setitem, see rtr
-    # The standing rule — mutations without X-Requested-With are rejected
-    # even with auth off — proven through the real ASGI stack. httpx over
-    # ASGITransport, not TestClient: no portal thread, no exit hang.
+    # Minimal app around the applications router, per the repo rule: tests
+    # must not import threatfeedme.app, because that lazily initializes core
+    # from ./config.yaml + ./data and leaks state into later tests and into a
+    # developer's real data directory. The standing rule (mutations without
+    # X-Requested-With are rejected even with auth off) is still proven
+    # through the real ASGI stack and the real csrf_check dependency. httpx
+    # over ASGITransport, not TestClient: no portal thread, no exit hang.
     import asyncio
     import httpx
-    monkeypatch.setitem(core.__dict__, "db", db)
-    from threatfeedme.app import app
+    from fastapi import FastAPI
+    from threatfeedme.routers import applications as r
+    monkeypatch.setitem(r.core.__dict__, "db", db)
+    monkeypatch.setitem(r.__dict__, "_allow_private", lambda: False)
+    app = FastAPI()
+    app.include_router(r.router)
+    app.dependency_overrides[r.require_auth] = lambda: None
     async def go():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
