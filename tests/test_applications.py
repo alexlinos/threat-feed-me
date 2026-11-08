@@ -151,6 +151,25 @@ def test_gate_honours_per_list_floors():
     assert not ok
 
 
+@pytest.mark.parametrize("entry,expected_ok,expected_tld", [
+    ("printer.local", False, "local"),
+    ("*.corp.local", False, "local"),
+    ("foo.localhost", False, "localhost"),
+    ("x.test", False, "test"),
+    ("y.invalid", False, "invalid"),
+    ("https://intranet.local/x", False, "local"),
+    ("login.example.net", True, None),
+    ("*.cdn.example.net", True, None),
+])
+def test_gate_rejects_reserved_special_use_tlds(entry, expected_ok, expected_tld):
+    # Domain design D4: reserved and special-use TLDs are never served; the
+    # threat side already applies reserved_reason(), application lists now do.
+    ok, reason = applications.guard_entry(entry)
+    assert ok == expected_ok, f"{entry}: {reason}"
+    if expected_tld is not None:
+        assert expected_tld in reason.lower()
+
+
 # ----------------------------------------------------------- source parse --
 
 def test_extract_json_paths_expands_lists():

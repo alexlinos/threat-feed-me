@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from threatfeedme.domains import is_valid_domain
+from threatfeedme.domains import is_valid_domain, reserved_reason
 from threatfeedme.feed_ingestor import (ResponseTooLargeError, UnsafeURLError,
                                         _read_capped_bytes, guarded_get)
 from threatfeedme.safety import _SPECIAL_V4, _SPECIAL_V6
@@ -143,6 +143,12 @@ def _domain_ok(host: str) -> Tuple[bool, str]:
     if bare.count("*") > 1 or (host.startswith("*") and not host.startswith("*.")):
         return False, "malformed wildcard"
     if is_valid_domain(bare):
+        # An allow-list entry for a .local / .test name is a bug or a poison
+        # attempt: reserved and special-use TLDs are never served, the same
+        # rule the threat side applies.
+        reason = reserved_reason(bare.lower().rstrip("."))
+        if reason:
+            return False, reason
         return True, ""
     # A bare IPv4 slipped past ip_network (e.g. a malformed octet string);
     # anything that is neither a valid domain nor an IP is junk.
