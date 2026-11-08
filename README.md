@@ -36,12 +36,13 @@ always hungry.
   <img src="docs/assets/screens/lists.png" alt="The Block lists view: High, Medium and Everything lists for IPs and domains, each with its URL, live count and last-polled line" width="100%">
 </p>
 
-**New in 2.5 "Flytrap":** a redesigned dashboard with a guided first-run set-up,
-TAXII 2.1 in both directions (serve your lists, and read MISP, OpenCTI or ISAC
-collections as feeds), CrowdSec in both directions, votes that expire when a
-feed drops an indicator, "last polled by" proof on every URL, a database about
-a third of its old size, and a MineMeld migration path. See [Upgrading to 2.5](#upgrading) before you pull it: High
-gets smaller on purpose.
+**New in 2.7:** application allow-lists. A built-in catalog of Microsoft 365
+(all four clouds), AWS, Azure, Google, GitHub and Cloudflare lists, each linked
+to the vendor's own documentation and switched on one at a time, served
+strictly as the vendor publishes them. A firewall URL builder under every list:
+pick FortiGate, Palo Alto, Sophos, pfSense and more, and copy the exact URL. And
+`?family=4|6` on every list for firewalls that take one IP version. Coming from
+2.4 or earlier? See [Upgrading](#upgrading) first: High gets smaller on purpose.
 
 ### Coming from MineMeld?
 
@@ -239,7 +240,7 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
 - **Feed Aggregation**: Pull from multiple sources (OSINT, commercial, custom
   including [HoneyDB](https://honeydb.io) honeypot telemetry: the community
   network and, if you run sensors, your own honeypots voting as a source)
-- **Two indicator kinds, never mixed** *(v2.0)*: IP/CIDR feeds for the packet
+- **Two indicator kinds, never mixed**: IP/CIDR feeds for the packet
   filter and domain feeds for the DNS filter (FortiGate DNS filter, Pi-hole,
   AdGuard Home, pfBlockerNG DNSBL, Unbound). Feeds *declare* their kind;
   domains are never sniffed out of IP feeds, an IP URL never contains a
@@ -276,23 +277,29 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
   (self-heals when the whitelist entry is removed). Click a feed's **⚠ N FP** badge to review what
   it was penalized for and forgive individual flags or all of them; the
   whitelist entries stay in place, only the blame is withdrawn.
-- **Votes that expire** *(v2.5)*: a feed's vote on an indicator lasts while
+- **Votes that expire**: a feed's vote on an indicator lasts while
   it lists it and for 3 days after (`scoring.vote_grace_days`), so a feed that
   dropped an IP long ago stops corroborating it
-- **TAXII 2.1 in both directions** *(v2.5)*: a server with the same six lists
+- **TAXII 2.1 in both directions**: a server with the same six lists
   as STIX 2.1 Indicators for SIEMs and TIPs (Sentinel, QRadar, Splunk, MISP,
   OpenCTI), and TAXII 2.1 collections as feeds, so a MISP, OpenCTI or ISAC
   collection votes like any other source; see
   [TAXII 2.1](#taxii-21-for-siems-and-tips)
-- **CrowdSec, both directions** *(v2.5)*: publish a tier to your CrowdSec
+- **CrowdSec, both directions**: publish a tier to your CrowdSec
   bouncers, and pull your CrowdSec detections, the community blocklist and
   Console lists back in as votes; see [CrowdSec](#crowdsec)
 - **UniFi push**: UDM gateways can't poll a URL, so the lists are pushed into
   UniFi network lists after every refresh
 - **Multi-format export**: text, CSV and JSON; `?limit=N` returns only the N
-  strongest entries, for firewalls that limit list size; ETags so unchanged
-  lists cost a 304
-- **Operations dashboard** *(redesigned in v2.5)*: a guided first-run set-up,
+  strongest entries, for firewalls that limit list size; `?hosts=1` and
+  `?family=4|6` shape a list for one firewall; ETags so unchanged lists cost
+  a 304. The dashboard's URL builder composes these for your firewall.
+- **Application allow-lists**: vendor ranges and domains (Microsoft 365,
+  AWS, Azure, Google, GitHub, Cloudflare) from a built-in catalog, or any URL
+  you point a list at, served at their own URLs and kept out of threat
+  scoring; every refresh passes prefix floors, a special-use check and a
+  change guard that holds big swings for your approval
+- **Operations dashboard**: a guided first-run set-up,
   feed health with inline errors, uniqueness and overlap per feed, "last
   polled by …" beside every URL, a System view (DB size, backups, predictor,
   hostnames), and an ops pulse line; works on a phone, needs nothing from the
@@ -345,8 +352,8 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
 
 ## How confidence tiering works
 
-*(v1.8.0+, the "effective votes" algorithm; set `scoring.tiering.method:
-legacy` in `config.yaml` for the old fixed thresholds.)*
+*(The "effective votes" algorithm; set `scoring.tiering.method: legacy` in
+`config.yaml` for the old fixed thresholds.)*
 
 **The one-sentence version.** An IP is dangerous only if *independent*
 sources agree on it, so we count **effective votes**, not raw sources, and
@@ -378,7 +385,7 @@ goes through four checks:
 3. **Is the sighting fresh?** *(recency weight)*: A scan from three days ago
    matters less than one from an hour ago. The recency part of the score
    halves every 72 hours (`scoring.decay_half_life_hours`).
-4. **Does the witness still say so?** *(current listings, v2.5.0)*: A feed
+4. **Does the witness still say so?** *(current listings)*: A feed
    votes for an IP while it lists it, and for `scoring.vote_grace_days`
    (default 3) after it drops it. Most feeds publish short windows (HoneyDB
    24 hours, AbuseIPDB 3 days), so two feeds seeing an IP a few days apart is

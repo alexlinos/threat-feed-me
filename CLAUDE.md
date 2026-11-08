@@ -112,6 +112,12 @@ releases already.
 - **No AI attribution in commits.** No `Co-Authored-By: Claude`, no naming
   models in commit messages or docs. Multiple models work on this repo; the
   history stays clean of all of them.
+- **Versions in the README and site** (maintainer, 2026-11-08): one "New in
+  X.Y" line for the current minor release (README headline, site kicker and
+  one tagged card), updated each minor release. No per-feature "(v2.5)" tags
+  and no version in evergreen text ("the real interface", not "the real v2.5
+  interface"): they go stale every release. Upgrade and rollback notes keep
+  exact versions because they are about specific versions.
 - Commit messages explain *why*, not just what: the reasoning is the part
   that isn't recoverable from the diff.
 - `data/` is gitignored and disposable (fetched feed state, SQLite DB). Never
