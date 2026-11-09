@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Track upstream changes to the application-list sources (roadmap 2.6).
+"""Track upstream changes to the application-list sources.
 
-Fetches every vendor infrastructure list that the planned application-list
-feature would serve (AWS, Microsoft 365, Google Cloud, Google, Azure service
+Fetches every vendor infrastructure list the application catalog is built
+from (AWS, Microsoft 365, Google Cloud, Google, Azure service
 tags, Cloudflare, GitHub meta), normalizes each to a sorted set of canonical
 entry strings, and diffs against the snapshots kept on the ``infra-snapshots``
 orphan branch. The CI workflow runs this daily, commits new snapshots, and
 opens an alert issue when a change is big enough to matter or looks hostile
 (a CIDR suddenly wider than the 2.6 prefix floor allows).
 
-Why in CI rather than in the app: this watches the *upstream* shape and
-cadence before any fetcher ships, and a poisoned vendor file should page
-the maintainer, not silently pass through a production change guard.
+Why in CI rather than in the app: scripts/build_catalog.py slices these
+snapshots into the catalog every install reads, and a poisoned vendor file
+should page the maintainer, not silently pass through a production change
+guard.
 
 Parsers are pure functions over already-parsed JSON so the test suite can
 exercise them offline against fixtures (repo rule: no network in tests).
 
-Exit codes: 0 = ok, 1 = alert-worthy change, 2 = at least one non-optional
-fetch failed. (A source marked optional, currently Adobe's bot-walled KB
-page, reports its failure in the report without failing the run.)
+Exit codes: 0 = ok, 1 = alert-worthy change, 2 = at least one fetch failed
+or parsed to nothing (the last good snapshot is kept).
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
 from pathlib import Path
 
 import requests
@@ -105,69 +104,6 @@ def fetch_azure():
     if not candidates:
         raise ValueError("no ServiceTags_Public blob link found on the Azure details page")
     return get_json(candidates[-1])  # date-stamped names sort newest-last
-
-
-ADOBE_PAGE_URL = "https://helpx.adobe.com/enterprise/kb/network-endpoints.html"
-# Adobe offers the allowlist as a downloadable file linked from the KB page;
-# the file name carries a timestamp, so match the shape, not a fixed name.
-ADOBE_FILE_RE = re.compile(r"""https?://[^\s\"'<>]+?\.(?:txt|csv)(?:\?[^\s\"'<>]*)?""")
-
-
-def _adobe_host(link: str) -> bool:
-    host = (urlsplit(link).hostname or "").lower()
-    return host == "adobe.com" or host.endswith(".adobe.com")
-
-
-def fetch_adobe() -> str:
-    """Adobe's endpoints live on a bot-walled help page, with a downloadable
-    allowlist file linked from it. Same pattern as Azure: fetch the page,
-    then the linked file. Only that file is used, and only from an Adobe
-    host: mining the page's own text would put its CDN, script and
-    analytics hosts on a list firewalls ALLOW, and a link elsewhere is not
-    Adobe's word. No file means a failed fetch; the source is optional in
-    SOURCES, so the watch carries on and the last good snapshot stays.
-    Returns raw text; normalize_adobe extracts.
-    """
-    page = get(ADOBE_PAGE_URL).decode("utf-8", errors="replace")
-    for link in sorted(set(ADOBE_FILE_RE.findall(page))):
-        if _adobe_host(link) and ("allowlist" in link.lower() or "endpoint" in link.lower()):
-            return get(link).decode("utf-8", errors="replace")
-    raise ValueError("no downloadable Adobe allowlist file linked from the endpoints page")
-
-
-# Host-shaped tokens in prose: optional scheme, optional leading wildcard,
-# then a dotted host. Paths are cut by only capturing the host part.
-_ADOBE_HOST_RE = re.compile(
-    r"(?:https?://|wss://)?(\*\.)?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
-    r"(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)", re.IGNORECASE)
-# Dotted tokens whose last label is a file extension are page furniture,
-# not endpoints ("network-endpoints.html" is not an allow-list entry).
-_ADOBE_JUNK_TLDS = {"html", "htm", "aspx", "php", "jsp", "js", "css", "json",
-                    "xml", "png", "jpg", "jpeg", "gif", "svg", "pdf", "xlsx",
-                    "txt", "csv", "zip"}
-
-
-def normalize_adobe(text: str) -> set[str]:
-    """Extract domain material from Adobe's allowlist text (file or page).
-
-    Keeps fully qualified domains and leading-wildcard domains. Mid-string
-    wildcards (firebase*.googleapis.com) are not expressible in the served
-    list format and fall out on their own: the regex only matches a
-    wildcard at the start, and the remainder parses as a different host.
-    """
-    out = set()
-    for m in _ADOBE_HOST_RE.finditer(text):
-        if m.start() > 0 and (text[m.start() - 1].isalnum()
-                              or text[m.start() - 1] in "*._-"):
-            continue  # fragment of a larger token (a mid-string wildcard's
-            # parent domain is broader than what Adobe published; skip it)
-        host = m.group(2).lower().rstrip(".")
-        tld = host.rsplit(".", 1)[-1]
-        if len(host) > 253 or len(tld) < 2 or not tld.isalpha() \
-                or tld in _ADOBE_JUNK_TLDS:
-            continue
-        out.add(f"domain|||{('*.' if m.group(1) else '') + host}")
-    return out
 
 
 def fetch_cloudflare():
@@ -261,7 +197,6 @@ class Source:
     fetch: Callable[[], Any]      # () -> parsed JSON
     normalize: Callable[[Any], set[str]]  # (parsed) -> set[str]
     note: str = ""
-    optional: bool = False        # a failed optional fetch never fails the run
     data: Any = field(default=None, repr=False)
 
 
@@ -280,9 +215,6 @@ SOURCES = [
            note="blob URL found via the download page weekly"),
     Source("cloudflare_ips", fetch_cloudflare, normalize_cloudflare),
     Source("github_meta", fetch_github_meta, normalize_github_meta),
-    Source("adobe_endpoints", fetch_adobe, normalize_adobe,
-           note="bot-walled KB page with a downloadable allowlist; best-effort",
-           optional=True),
 ]
 
 
@@ -404,9 +336,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             src.data = src.fetch()
             entries = src.normalize(src.data)
+            if not entries:
+                # A vendor changing its file shape parses to nothing; taking
+                # that as "everything removed" would publish emptied lists.
+                raise ValueError("no entries parsed")
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-            if not src.optional:
-                fetch_failed = True
+            fetch_failed = True
             results[src.name] = {"status": f"fetch failed: {exc}", "count": None,
                                  "alert": False, "baseline": False}
             print(f"FAIL {src.name}: {exc}", file=sys.stderr)
