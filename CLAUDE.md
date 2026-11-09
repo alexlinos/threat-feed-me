@@ -787,11 +787,11 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod runs 2.7.2 (rolled 2026-11-09, from 2.6.6; no application lists switched on yet). cyberhost sits pending
-  review there: the 2.6.0 catalog poll (auto_add off) parked it, and a row
-  that arrived pending stays off until the operator Adds it.
-  abuse_ch_threatfox is a pre-fingerprint seed row that sync can't touch;
-  it 410s until switched off from the dashboard. Its dashboard has no sign-in by the maintainer's choice: access
+- Prod runs 2.7.2 (rolled 2026-11-09, from 2.6.6; no application lists
+  switched on yet). cyberhost was Added there by the operator (the 2.6.0
+  catalog poll had parked it as pending) and abuse_ch_threatfox, a
+  pre-fingerprint seed row sync can't touch, was switched off from the
+  dashboard: 25 of 25 enabled feeds healthy. Its dashboard has no sign-in by the maintainer's choice: access
   is segmented at the firewall. Not an open item. The 2.5.0 canary was
   removed 2026-09-26.
 
