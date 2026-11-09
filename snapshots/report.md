@@ -1,4 +1,4 @@
-# Infra list watch — 2026-11-09 16:32 UTC
+# Infra list watch — 2026-11-09 19:57 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
@@ -12,4 +12,3 @@
 | azure_service_tags | 103018 | 0 | 0 | 0.0 | ok |
 | cloudflare_ips | 22 | 0 | 0 | 0.0 | ok |
 | github_meta | 8497 | 0 | 0 | 0.0 | ok |
-| adobe_endpoints | None | - | - | - | fetch failed: no downloadable Adobe allowlist file linked from the endpoints page |

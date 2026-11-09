@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-11-09 16:32 UTC",
+ "fetched_at": "2026-11-09 19:57 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
@@ -140,12 +140,6 @@
    "min_v6_prefix": 29,
    "alert": false,
    "alert_reasons": []
-  },
-  "adobe_endpoints": {
-   "status": "fetch failed: no downloadable Adobe allowlist file linked from the endpoints page",
-   "count": null,
-   "alert": false,
-   "baseline": false
   }
  }
 }
