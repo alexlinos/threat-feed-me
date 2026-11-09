@@ -103019,6 +103019,6 @@
   "cidr|ZeroTrustSegmentation|Global|74.177.72.71/32",
   "cidr|ZeroTrustSegmentation|Global|85.210.237.144/30"
  ],
- "fetched_at": "2026-11-08T13:54:39Z",
+ "fetched_at": "2026-11-09T16:32:31Z",
  "source": "azure_service_tags"
 }
