@@ -1073,8 +1073,18 @@ expect one all-entries-changed Azure alert.
 - Catalog client: `guarded_get` + capped read, failures remembered 5 min,
   `app_catalog.enabled: false` off switch, list URLs must sit beside the
   manifest, follows `safety.allow_private_feed_urls`. Factory deletes the
-  files of retired lists (never when a run produced nothing); Adobe uses
-  only the linked file on an Adobe host, never page text.
+  files of retired lists (never when a run produced nothing).
+- **Catalog factory fixes (2026-11-09)**: the watch step's exit code was
+  never recorded (`bash -e` + pipefail ended the step first), so no alert
+  issue could open and a failed fetch ran green; the code now comes from
+  `PIPESTATUS` and a last step turns the run red on anything but 0 or 1. A
+  source that parses to nothing counts as a failed fetch (snapshot kept),
+  so a vendor shape change cannot publish emptied lists. Adobe was removed:
+  the factory never found a file linked from its page, so it never
+  published; re-add it
+  only from a file Adobe links on an Adobe host, never from page text.
+  Adding a vendor needs no release: edit the two factory scripts on main
+  and run the workflow (it runs the scripts from main).
 - **Previewing the catalog locally**: build it from snapshots with
   `scripts/build_catalog.py --base-url http://127.0.0.1:<port>/`, serve the
   output with `python -m http.server`, set the scratch DB's

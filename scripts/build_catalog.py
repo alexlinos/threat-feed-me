@@ -83,8 +83,6 @@ VENDORS: dict[str, tuple[str, str]] = {
                    "https://www.cloudflare.com/ips/"),
     "GitHub": ("GitHub's address ranges per service, from the GitHub meta API.",
                "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-githubs-ip-addresses"),
-    "Adobe": ("Domains Adobe lists for Creative Cloud, Acrobat and Document Cloud.",
-              "https://helpx.adobe.com/enterprise/kb/network-endpoints.html"),
 }
 
 
@@ -230,10 +228,6 @@ SLICERS: dict[str, Callable[[list[str]], dict[str, CatalogList]]] = {
         "cloudflare", "Cloudflare", "Cloudflare ranges",
         "Cloudflare edge network ranges.", e),
     "github_meta": slice_github_meta,
-    "adobe_endpoints": lambda e: slice_single(
-        "adobe", "Adobe", "Adobe apps and services",
-        "Creative Cloud and Acrobat network endpoints (domains) from "
-        "Adobe's published endpoints list.", e),
 }
 
 

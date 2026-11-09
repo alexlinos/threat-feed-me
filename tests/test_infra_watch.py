@@ -9,8 +9,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import infra_watch as iw
@@ -83,65 +81,6 @@ def test_normalize_azure_live_shape_keeps_tag_name():
     assert "cidr|Sql|Global|198.51.100.0/27" in out
 
 
-def test_normalize_adobe_extracts_domains_and_drops_junk():
-    text = """
-    - *.adobe.com
-    - lm.licenses.adobe.com
-    - https://cc-api-data.adobe.io/some/path
-    - wss://speech.platform.bing.com
-    - firebase*.googleapis.com
-    - network-endpoints.html and app.js are page furniture
-    - s3.amazonaws.com/tron-ffc-icons-prod/
-    """
-    out = iw.normalize_adobe(text)
-    assert "domain|||*.adobe.com" in out
-    assert "domain|||lm.licenses.adobe.com" in out
-    assert "domain|||cc-api-data.adobe.io" in out
-    assert "domain|||speech.platform.bing.com" in out
-    assert "domain|||s3.amazonaws.com" in out
-    assert not any("firebase" in e and "*" in e.split("|")[-1][1:] for e in out)
-    # The mid-string wildcard's parent must not leak in as a broader entry.
-    assert "domain|||googleapis.com" not in out
-    assert not any(e.endswith(".html") or e.endswith(".js") for e in out)
-
-
-def test_adobe_source_is_optional():
-    src = next(s for s in iw.SOURCES if s.name == "adobe_endpoints")
-    assert src.optional is True
-    assert all(not s.optional for s in iw.SOURCES if s.name != "adobe_endpoints")
-
-
-def _fake_adobe_get(monkeypatch, page, files):
-    fetched = []
-
-    def get(url, headers=None):
-        fetched.append(url)
-        if url == iw.ADOBE_PAGE_URL:
-            return page.encode()
-        return files[url].encode()
-    monkeypatch.setattr(iw, "get", get)
-    return fetched
-
-
-def test_adobe_uses_only_the_linked_file_on_an_adobe_host(monkeypatch):
-    page = ('<a href="https://cdn.other.example/endpoints-allowlist.txt">mirror</a>'
-            '<a href="https://www.adobe.com/files/endpoints-allowlist-2026.txt">file</a>'
-            '<script src="https://assets.tracker.example/x.js"></script>')
-    good = "https://www.adobe.com/files/endpoints-allowlist-2026.txt"
-    fetched = _fake_adobe_get(monkeypatch, page, {good: "*.adobe.com\n"})
-    assert iw.fetch_adobe() == "*.adobe.com\n"
-    assert fetched == [iw.ADOBE_PAGE_URL, good]       # the foreign mirror is never fetched
-
-
-def test_adobe_without_a_linked_file_fails_instead_of_mining_the_page(monkeypatch):
-    # The page's own hosts (CDN, scripts, analytics) must never become entries
-    # on a list firewalls allow.
-    page = '<p>*.adobe.com</p><script src="https://assets.tracker.example/x.js"></script>'
-    _fake_adobe_get(monkeypatch, page, {})
-    with pytest.raises(ValueError):
-        iw.fetch_adobe()
-
-
 def test_normalize_cloudflare_dict_of_lists():
     data = {"result": {"ipv4_cidrs": ["192.0.2.0/24"], "ipv6_cidrs": ["2001:db8::/48"]}}
     assert iw.normalize_cloudflare(data) == {"v4|192.0.2.0/24", "v6|2001:db8::/48"}
@@ -190,3 +129,14 @@ def test_load_previous_corrupt_snapshot_returns_none(tmp_path):
     assert iw.load_previous(tmp_path, "t") is None
     (tmp_path / "t.json").write_text(json.dumps({"entries": ["a", "b"]}))
     assert iw.load_previous(tmp_path, "t") == {"a", "b"}
+
+
+def test_source_that_parses_to_nothing_fails_and_keeps_its_snapshot(tmp_path, monkeypatch):
+    # A vendor changing its file shape normalizes to an empty set. Taken as
+    # "everything removed" it would overwrite the snapshot and publish
+    # emptied lists; it must count as a failed fetch instead.
+    old = json.dumps({"entries": ["v4|192.0.2.0/24"]})
+    (tmp_path / "t.json").write_text(old, encoding="utf-8")
+    monkeypatch.setattr(iw, "SOURCES", [iw.Source("t", lambda: {"new": "shape"}, lambda d: set())])
+    assert iw.main(["--snapshots", str(tmp_path), "--update"]) == 2
+    assert (tmp_path / "t.json").read_text(encoding="utf-8") == old
