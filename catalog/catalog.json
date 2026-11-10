@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-08T13:54:40Z",
+ "generated_at": "2026-11-10T14:59:24Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -50,8 +50,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 3287,
-   "bytes": 67320,
+   "entries": 3293,
+   "bytes": 67441,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
   },
   {
@@ -116,8 +116,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2 ranges, all regions.",
    "format": "list",
-   "entries": 2588,
-   "bytes": 52568,
+   "entries": 2594,
+   "bytes": 52689,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2.txt"
   },
   {
@@ -204,8 +204,8 @@
    "group": "All regions",
    "description": "Amazon Web Services S3 ranges, all regions.",
    "format": "list",
-   "entries": 663,
-   "bytes": 13190,
+   "entries": 664,
+   "bytes": 13207,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-s3.txt"
   },
   {
@@ -303,8 +303,8 @@
    "group": "",
    "description": "GitHub web address ranges from the GitHub meta API.",
    "format": "list",
-   "entries": 65,
-   "bytes": 1095,
+   "entries": 70,
+   "bytes": 1174,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/github-web.txt"
   },
   {
@@ -1491,8 +1491,8 @@
    "group": "All regions",
    "description": "Azure service tag AzureCloud address prefixes, all regions.",
    "format": "list",
-   "entries": 4948,
-   "bytes": 93715,
+   "entries": 4909,
+   "bytes": 93088,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-azurecloud.txt"
   },
   {
@@ -1571,6 +1571,17 @@
    "entries": 656,
    "bytes": 11603,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-azuredatabricks.txt"
+  },
+  {
+   "slug": "azure-azuredatabricksserverless",
+   "name": "Azure AzureDatabricksServerless",
+   "vendor": "Microsoft Azure",
+   "group": "All regions",
+   "description": "Azure service tag AzureDatabricksServerless address prefixes, all regions.",
+   "format": "list",
+   "entries": 1822,
+   "bytes": 30548,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-azuredatabricksserverless.txt"
   },
   {
    "slug": "azure-azuredevops",
@@ -1722,8 +1733,8 @@
    "group": "All regions",
    "description": "Azure service tag AzureMonitor address prefixes, all regions.",
    "format": "list",
-   "entries": 3187,
-   "bytes": 64509,
+   "entries": 3200,
+   "bytes": 64729,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-azuremonitor.txt"
   },
   {
@@ -2206,8 +2217,8 @@
    "group": "All regions",
    "description": "Azure service tag PowerBI address prefixes, all regions.",
    "format": "list",
-   "entries": 939,
-   "bytes": 17130,
+   "entries": 1058,
+   "bytes": 19128,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-powerbi.txt"
   },
   {
@@ -2217,8 +2228,8 @@
    "group": "All regions",
    "description": "Azure service tag PowerPlatformInfra address prefixes, all regions.",
    "format": "list",
-   "entries": 1522,
-   "bytes": 25381,
+   "entries": 1532,
+   "bytes": 25546,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-powerplatforminfra.txt"
   },
   {
@@ -2228,8 +2239,8 @@
    "group": "All regions",
    "description": "Azure service tag PowerPlatformPlex address prefixes, all regions.",
    "format": "list",
-   "entries": 421,
-   "bytes": 7018,
+   "entries": 431,
+   "bytes": 7171,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-powerplatformplex.txt"
   },
   {

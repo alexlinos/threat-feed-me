@@ -1154,6 +1154,6 @@
   "v6|us-west8|Google Cloud|2600:1900:4280::/44",
   "v6|us-west8|Google Cloud|2600:1902:2d0::/44"
  ],
- "fetched_at": "2026-11-09T19:57:37Z",
+ "fetched_at": "2026-11-10T14:59:22Z",
  "source": "gcp_cloud"
 }
