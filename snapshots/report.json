@@ -1,24 +1,15 @@
 {
- "fetched_at": "2026-11-10 14:59 UTC",
+ "fetched_at": "2026-11-11 14:30 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
    "count": 7073,
    "baseline": false,
-   "added": 15,
-   "removed": 2,
-   "added_sample": [
-    "v6|eusc-de-east-1|S3|2001:3fc6:2::/48",
-    "v6|us-east-1|AMAZON|2600:1f29:2000::/36",
-    "v6|us-east-1|AMAZON|2600:1f6a:9200::/46",
-    "v6|us-east-1|EC2|2600:1f29:2000::/36",
-    "v6|us-east-1|EC2|2600:1f6a:9200::/46"
-   ],
-   "removed_sample": [
-    "v6|us-east-2|AMAZON|2606:f40:8800::/40",
-    "v6|us-east-2|EC2|2606:f40:8800::/40"
-   ],
-   "pct_change": 0.24,
+   "added": 0,
+   "removed": 0,
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
@@ -112,23 +103,11 @@
    "status": "ok",
    "count": 105346,
    "baseline": false,
-   "added": 2411,
-   "removed": 83,
-   "added_sample": [
-    "cidr|ActionGroup.SaudiArabiaEast|saudiarabiaeast|2603:1040:1a02:3::698/125",
-    "cidr|ActionGroup.SaudiArabiaEast|saudiarabiaeast|2603:1040:1a02:400::18/125",
-    "cidr|ActionGroup.SaudiArabiaEast|saudiarabiaeast|48.197.94.96/30",
-    "cidr|ApiManagement.SaudiArabiaEast|saudiarabiaeast|2603:1040:1a02::740/124",
-    "cidr|ApiManagement.SaudiArabiaEast|saudiarabiaeast|48.197.78.16/28"
-   ],
-   "removed_sample": [
-    "cidr|AzureCloud.australiaeast|australiaeast|40.120.179.0/27",
-    "cidr|AzureCloud.australiaeast|australiaeast|40.120.179.32/28",
-    "cidr|AzureCloud.australiaeast|australiaeast|40.120.179.48/29",
-    "cidr|AzureCloud.australiaeast|australiaeast|40.120.179.56/30",
-    "cidr|AzureCloud.australiaeast|australiaeast|40.120.179.60/31"
-   ],
-   "pct_change": 2.42,
+   "added": 0,
+   "removed": 0,
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
    "min_v4_prefix": 11,
    "min_v6_prefix": 36,
    "alert": false,
@@ -150,19 +129,17 @@
   },
   "github_meta": {
    "status": "ok",
-   "count": 8502,
+   "count": 8499,
    "baseline": false,
-   "added": 5,
-   "removed": 0,
-   "added_sample": [
-    "meta|web|20.26.58.32/28",
-    "meta|web|20.26.68.64/28",
-    "meta|web|4.159.108.160/28",
-    "meta|web|4.159.197.192/28",
-    "meta|web|4.234.31.32/28"
+   "added": 0,
+   "removed": 3,
+   "added_sample": [],
+   "removed_sample": [
+    "meta|api|20.201.28.148/32",
+    "meta|packages|20.201.28.144/32",
+    "meta|web|20.201.28.151/32"
    ],
-   "removed_sample": [],
-   "pct_change": 0.06,
+   "pct_change": 0.04,
    "min_v4_prefix": 15,
    "min_v6_prefix": 29,
    "alert": false,
