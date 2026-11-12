@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-11T14:30:23Z",
+ "generated_at": "2026-11-12T15:23:50Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -303,8 +303,8 @@
    "group": "",
    "description": "GitHub web address ranges from the GitHub meta API.",
    "format": "list",
-   "entries": 69,
-   "bytes": 1157,
+   "entries": 82,
+   "bytes": 1373,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/github-web.txt"
   },
   {

@@ -7074,6 +7074,6 @@
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f24:34::/48",
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f32:4000::/39"
  ],
- "fetched_at": "2026-11-11T14:30:21Z",
+ "fetched_at": "2026-11-12T15:23:48Z",
  "source": "aws_ip_ranges"
 }

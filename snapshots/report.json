@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-11-11 14:30 UTC",
+ "fetched_at": "2026-11-12 15:23 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
@@ -129,17 +129,19 @@
   },
   "github_meta": {
    "status": "ok",
-   "count": 8499,
+   "count": 8512,
    "baseline": false,
-   "added": 0,
-   "removed": 3,
-   "added_sample": [],
-   "removed_sample": [
-    "meta|api|20.201.28.148/32",
-    "meta|packages|20.201.28.144/32",
-    "meta|web|20.201.28.151/32"
+   "added": 13,
+   "removed": 0,
+   "added_sample": [
+    "meta|web|172.130.18.192/28",
+    "meta|web|172.130.45.112/28",
+    "meta|web|172.139.64.112/28",
+    "meta|web|20.208.89.80/28",
+    "meta|web|20.247.166.64/28"
    ],
-   "pct_change": 0.04,
+   "removed_sample": [],
+   "pct_change": 0.15,
    "min_v4_prefix": 15,
    "min_v6_prefix": 29,
    "alert": false,

@@ -1,4 +1,4 @@
-# Infra list watch — 2026-11-11 14:30 UTC
+# Infra list watch — 2026-11-12 15:23 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
@@ -11,9 +11,11 @@
 | gcp_goog | 148 | 0 | 0 | 0.0 | ok |
 | azure_service_tags | 105346 | 0 | 0 | 0.0 | ok |
 | cloudflare_ips | 22 | 0 | 0 | 0.0 | ok |
-| github_meta | 8499 | 0 | 3 | 0.04 | ok |
+| github_meta | 8512 | 13 | 0 | 0.15 | ok |
 
 ## github_meta
-- removed: `meta|api|20.201.28.148/32`
-- removed: `meta|packages|20.201.28.144/32`
-- removed: `meta|web|20.201.28.151/32`
+- added: `meta|web|172.130.18.192/28`
+- added: `meta|web|172.130.45.112/28`
+- added: `meta|web|172.139.64.112/28`
+- added: `meta|web|20.208.89.80/28`
+- added: `meta|web|20.247.166.64/28`
