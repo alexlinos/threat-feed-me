@@ -1,15 +1,18 @@
 {
- "fetched_at": "2026-11-12 15:23 UTC",
+ "fetched_at": "2026-11-13 14:41 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 7073,
+   "count": 7075,
    "baseline": false,
-   "added": 0,
+   "added": 2,
    "removed": 0,
-   "added_sample": [],
+   "added_sample": [
+    "v6|us-east-1|AMAZON|2606:7b40:1a2f:340::/60",
+    "v6|us-east-1|EC2|2606:7b40:1a2f:340::/60"
+   ],
    "removed_sample": [],
-   "pct_change": 0.0,
+   "pct_change": 0.03,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
@@ -129,19 +132,19 @@
   },
   "github_meta": {
    "status": "ok",
-   "count": 8512,
+   "count": 8517,
    "baseline": false,
-   "added": 13,
+   "added": 5,
    "removed": 0,
    "added_sample": [
-    "meta|web|172.130.18.192/28",
-    "meta|web|172.130.45.112/28",
-    "meta|web|172.139.64.112/28",
-    "meta|web|20.208.89.80/28",
-    "meta|web|20.247.166.64/28"
+    "meta|web|4.158.254.48/28",
+    "meta|web|4.234.31.128/28",
+    "meta|web|4.234.47.112/28",
+    "meta|web|48.202.91.176/28",
+    "meta|web|57.166.80.144/28"
    ],
    "removed_sample": [],
-   "pct_change": 0.15,
+   "pct_change": 0.06,
    "min_v4_prefix": 15,
    "min_v6_prefix": 29,
    "alert": false,

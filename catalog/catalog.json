@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-12T15:23:50Z",
+ "generated_at": "2026-11-13T14:41:51Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -50,8 +50,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 3293,
-   "bytes": 67441,
+   "entries": 3294,
+   "bytes": 67465,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
   },
   {
@@ -116,8 +116,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2 ranges, all regions.",
    "format": "list",
-   "entries": 2594,
-   "bytes": 52689,
+   "entries": 2595,
+   "bytes": 52713,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2.txt"
   },
   {
@@ -303,8 +303,8 @@
    "group": "",
    "description": "GitHub web address ranges from the GitHub meta API.",
    "format": "list",
-   "entries": 82,
-   "bytes": 1373,
+   "entries": 87,
+   "bytes": 1455,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/github-web.txt"
   },
   {
