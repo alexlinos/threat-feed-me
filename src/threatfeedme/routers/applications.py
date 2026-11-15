@@ -15,6 +15,7 @@ filter here, and notably NOT the known-good output filter, which would
 strip these entries by design.
 """
 import hashlib
+import json
 import logging
 from typing import Annotated, Optional
 
@@ -53,6 +54,10 @@ def _catalog_enabled() -> bool:
 
 
 def _validate(req: ApplicationListRequest) -> None:
+    if req.name in applications.RESERVED_NAMES:
+        raise HTTPException(status_code=400,
+                            detail=f"'{req.name}' is reserved (/lists/{req.name}.json "
+                                   "is the list index); pick another name")
     if not applications.valid_name(req.name):
         raise HTTPException(status_code=400,
                             detail="Name must be lowercase letters, digits and dashes (2-64)")
@@ -125,7 +130,7 @@ def _served(request: Request, name: str, ext: str, limit: Optional[int],
     if not request.headers.get("x-tfm-probe"):   # the URL builder's count probe
         from threatfeedme import polls
         polls.record(core.db, f"lists/{name}.{ext}", request.headers.get("user-agent", ""))
-    return entries, total
+    return entries, total, row
 
 
 def _respond(request: Request, body: str, media_type: str, total: int) -> Response:
@@ -139,11 +144,35 @@ def _respond(request: Request, body: str, media_type: str, total: int) -> Respon
     return Response(body, media_type=media_type, headers=headers)
 
 
+@router.get("/lists/index.json")
+def list_index(request: Request):
+    """Every served application list with its version, checksum and counts
+    (issue #39), so a sync can decide there is nothing to do before it
+    fetches a single entry. Declared before /lists/{name}.json, and "index"
+    is a reserved list name. Unauthenticated like the rest of /lists/: the
+    same reach that can poll a list can enumerate them. Switched-off lists
+    are left out, as their URLs 404."""
+    if set(request.query_params):
+        raise HTTPException(status_code=400, detail="The index takes no options")
+    changed = core.db.application_lists_changed_at()
+    lists = []
+    for row in core.db.get_application_lists(enabled_only=True):
+        if row["name"] in applications.RESERVED_NAMES:
+            continue    # an older list named "index" has no .json to point at
+        lists.append({"name": row["name"], **applications.list_summary(core.db, row),
+                      "changed_at": changed.get(row["name"]),
+                      "url": f"/lists/{row['name']}.json"})
+    if not request.headers.get("x-tfm-probe"):
+        from threatfeedme import polls
+        polls.record(core.db, "lists/index.json", request.headers.get("user-agent", ""))
+    return _respond(request, json.dumps({"lists": lists}), "application/json", len(lists))
+
+
 @router.get("/lists/{name}.txt", response_class=PlainTextResponse)
 def list_txt(name: str, request: Request, limit: Optional[int] = _LIMIT,
              kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
              wildcards: _Wildcards = None):
-    entries, total = _served(request, name, "txt", limit, kind, family, hosts, wildcards)
+    entries, total, _row = _served(request, name, "txt", limit, kind, family, hosts, wildcards)
     body = "\n".join(entries) + ("\n" if entries else "")
     return _respond(request, body, "text/plain; charset=utf-8", total)
 
@@ -152,7 +181,7 @@ def list_txt(name: str, request: Request, limit: Optional[int] = _LIMIT,
 def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
              kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
              wildcards: _Wildcards = None):
-    entries, total = _served(request, name, "csv", limit, kind, family, hosts, wildcards)
+    entries, total, _row = _served(request, name, "csv", limit, kind, family, hosts, wildcards)
     return _respond(request, "".join(f"{e}\r\n" for e in entries),
                     "text/csv; charset=utf-8", total)
 
@@ -161,9 +190,20 @@ def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
 def list_json(name: str, request: Request, limit: Optional[int] = _LIMIT,
               kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
               wildcards: _Wildcards = None):
-    entries, total = _served(request, name, "json", limit, kind, family, hosts, wildcards)
-    import json as _json
-    return _respond(request, _json.dumps({"entries": entries}), "application/json", total)
+    """One list as one consistent document for sync consumers (issue #39):
+    a firewall-object sync reads it in a single request, so a refresh can
+    never land between "the IPv4 entries" and "the IPv6 entries".
+
+    `version` and `checksum` describe the whole stored list (the same values
+    /lists/index.json reports), whatever options this URL carries; `entries`
+    and the per-kind arrays are what this URL serves after its options."""
+    entries, total, row = _served(request, name, "json", limit, kind, family, hosts, wildcards)
+    summary = applications.list_summary(core.db, row)
+    history = core.db.get_history(name, limit=1)
+    doc = {"name": name, "version": summary["version"], "checksum": summary["checksum"],
+           "changed_at": history[0]["refreshed_at"] if history else None,
+           "entries": entries, **applications.split_entries(entries)}
+    return _respond(request, json.dumps(doc), "application/json", total)
 
 
 # ------------------------------------------------------------------- API --

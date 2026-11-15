@@ -1,13 +1,14 @@
-# Daily watch of the upstream application-list sources (roadmap 2.6).
+# Daily watch of the upstream application-list sources, and the factory for
+# the application catalog built from them.
 #
-# Why: the 2.6 feature will serve vendor allow-lists (AWS, Microsoft 365,
-# Google Cloud, Azure, Cloudflare, GitHub). Before the fetchers ship we need
-# the real change cadence and file-shape stability of each vendor, and after
-# they ship the same watch is the early-warning for a poisoned vendor file.
-# Snapshots live on the orphan branch `infra-snapshots`, so change history
-# is `git log infra-snapshots` and the diff of any commit is the vendor's
-# diff. An alert issue opens only on suspicious movement: over the change
-# threshold, or a CIDR suddenly wider than the 2.6 prefix floor.
+# Why: installs read the catalog this job publishes (vendor allow-lists for
+# AWS, Microsoft 365, Google, Azure, Cloudflare, GitHub), so this is the
+# early warning for a poisoned or reshaped vendor file. Snapshots and the
+# catalog live on the orphan branch `infra-snapshots`: change history is
+# `git log infra-snapshots` and the diff of any commit is the vendor's diff.
+# An alert issue opens on suspicious movement (over the change threshold, or
+# a CIDR wider than the prefix floor); a source that could not be fetched or
+# parsed keeps its last snapshot and turns the run red.
 name: Infra list watch
 
 on:
@@ -18,6 +19,13 @@ on:
 permissions:
   contents: write    # commit snapshots to the orphan branch
   issues: write      # open the alert issue
+
+# Two runs at once (the schedule plus a manual dispatch) would both push to
+# infra-snapshots and the second push would be rejected. Queue, never cancel:
+# a cancelled run could stop between writing snapshots and committing them.
+concurrency:
+  group: infra-list-watch
+  cancel-in-progress: false
 
 jobs:
   watch:
@@ -53,11 +61,15 @@ jobs:
 
       - name: Watch sources
         id: watch
+        # The script's exit code is the verdict (1 = suspicious change,
+        # 2 = a source failed), read by the alert and fail steps below. It
+        # must not end this step: the default shell is `bash -e`, and with
+        # pipefail a non-zero exit used to stop the step before the code was
+        # recorded, so no alert issue could ever open.
         run: |
-          set -o pipefail
+          set +e
           python scripts/infra_watch.py --snapshots .snaps/snapshots --update | tee watch.log
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Build application catalog
         # Slice the snapshots into finished lists + catalog.json (issue
@@ -81,7 +93,7 @@ jobs:
 
       - name: Open alert issue
         # Only a real verdict of "suspicious" opens an issue; fetch failures
-        # show up as a red run instead. One open alert at a time: reuse the
+        # are the red run below. One open alert at a time: reuse the
         # existing one rather than spamming during a multi-day vendor churn.
         if: steps.watch.outputs.exit == '1'
         env:
@@ -97,3 +109,12 @@ jobs:
             gh issue create --title "$TITLE" --label infra-watch \
               --body-file .snaps/snapshots/report.md
           fi
+
+      - name: Fail on a source that could not be read
+        # Last, so the snapshots that did succeed are already committed and
+        # the catalog is rebuilt. Anything but 0 or 1 lands here too (a
+        # crashed script must not look like a clean run).
+        if: steps.watch.outputs.exit != '0' && steps.watch.outputs.exit != '1'
+        run: |
+          echo "infra_watch exited ${{ steps.watch.outputs.exit }}: see the report above" >&2
+          exit 1

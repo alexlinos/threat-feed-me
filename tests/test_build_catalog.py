@@ -93,12 +93,9 @@ def test_single_list_sources(tmp_path):
     manifest, _ = _build(tmp_path, {
         "gcp_goog": ["v4|||192.0.2.0/24"],
         "gcp_cloud": ["v4|us-east1|Google Cloud|198.51.100.0/24"],
-        "cloudflare_ips": ["v4|203.0.113.0/24"],
-        "adobe_endpoints": ["domain|||*.adobe.com", "domain|||cc.adobe.io"]})
+        "cloudflare_ips": ["v4|203.0.113.0/24"]})
     slugs = {m["slug"] for m in manifest["lists"]}
-    assert slugs == {"google-workspace", "gcp-cloud", "cloudflare", "adobe"}
-    adobe = next(m for m in manifest["lists"] if m["slug"] == "adobe")
-    assert adobe["vendor"] == "Adobe" and adobe["entries"] == 2
+    assert slugs == {"google-workspace", "gcp-cloud", "cloudflare"}
 
 
 def test_manifest_counts_match_files(tmp_path):

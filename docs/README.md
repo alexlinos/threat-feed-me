@@ -3,8 +3,9 @@
 Static marketing page served at https://threatfeedme.app via GitHub Pages
 (Settings → Pages → Source: `main` branch, `/docs` folder).
 
-Self-contained: `index.html` plus the brand assets in `assets/` (copied from the
-repo-root `assets/`). No build step, no dependencies, no backend.
+Self-contained: `index.html` and `minemeld.html`, `robots.txt` and
+`sitemap.xml`, plus the brand assets in `assets/` (copied from the repo-root
+`assets/`). No build step, no dependencies, no backend.
 
 There is no `CNAME` file: `threatfeedme.app` is a registrar-level redirect to
 the github.io address, which drops the path, so the page's canonical and social

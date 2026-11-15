@@ -3,28 +3,26 @@
 Direction, not promises. Each item names the design constraints that are
 already decided, so whoever builds it starts from them.
 
-## 2.6: application lists
+## Application lists (shipped in 2.7; what is left)
 
-**Why.** Allow-listing SaaS and cloud ranges was one of MineMeld's most
-visible jobs: its Office 365 article was the most-published MineMeld how-to,
-and AWS, Azure and GCP range miners came up constantly. People still build
-EDLs for applications today (Microsoft 365, Zoom, Okta, cloud regions) to
-allow them, exempt them from SSL decryption, or pin egress. Threat Feed Me
-covers MineMeld's threat-feed pipeline but not this, and the
-[MineMeld guide](https://alexlinos.github.io/threat-feed-me/minemeld.html)
-says so.
+**What shipped.** Allow-lists for SaaS and cloud ranges, one of MineMeld's
+most visible jobs, served at their own URLs (`/lists/<name>.txt`, plus CSV
+and JSON). A built-in catalog covers Microsoft 365 (all four clouds, by
+category), AWS and Azure (per service, all regions), Google, Google Cloud,
+GitHub and Cloudflare; the project slices the vendor files centrally and
+installs fetch only the lists they switch on. Any URL of your own works
+too, as a plain list or as JSON with a filter expression.
 
-**What it is.** A catalogue of application lists, each served at its own URL
-(`/lists/<name>.txt`, plus CSV and JSON), refreshed on the normal schedule:
+**Still open.**
 
-| Source | Shape | Filters to offer |
-|---|---|---|
-| Microsoft 365 endpoints web service | JSON (needs a client-request GUID) | service area (Exchange, SharePoint, Teams, Common), category (Optimize, Allow, Default), required only; IPs and URLs as separate lists |
-| AWS `ip-ranges.json` | JSON | service, region, IPv4 / IPv6 |
-| Google Cloud `cloud.json`, Google `goog.json` | JSON | scope (region) |
-| Azure service tags | JSON, weekly file whose URL changes | tag, region. The awkward one: needs the download page followed or the Azure API |
-| Cloudflare, GitHub `/meta`, Zoom, Okta, Atlassian, Slack | text or JSON | per product |
-| Your own | URL or upload, list or JSON | a JSON filter expression |
+- More vendors: Zoom, Okta, Atlassian, Slack. Adobe was tried and removed:
+  the factory found no downloadable file linked from its endpoints page,
+  and the page's own text is not a safe source for a list firewalls allow.
+- Per-region lists were decided against (thousands of lists for little
+  use); revisit only on demand.
+- Uploading a list file (today a list needs a URL).
+
+The constraints below were decided before the build and still hold.
 
 **Decided constraints**
 
@@ -47,9 +45,10 @@ says so.
 - **Change history.** Each refresh records a diff (+added / −removed) kept
   for 30 days, shown per list, because "why did Teams break yesterday?" is
   the first question anyone asks of an allow-list.
-- **Engine.** A generic JSON source with a small filter expression
-  (a JSONPath subset), shared with custom threat feeds, so most vendors are
-  configuration, not code. Microsoft 365 and Azure get dedicated fetchers.
+- **Engine.** A generic JSON source with a small filter expression (a
+  JSONPath subset) for lists you add yourself. Catalog lists are sliced
+  once, centrally, by the project's factory, so installs fetch finished
+  lists and a vendor format change is fixed without a release.
 - **Serving.** Same as `/feeds`: exempt from the host check, ETag and
   `?limit=N`, last-polled-by per URL, TAXII not required.
 - **Out of scope.** Default-deny RMM lists (parked; see `CLAUDE.md`).
