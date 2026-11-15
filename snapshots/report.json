@@ -1,24 +1,15 @@
 {
- "fetched_at": "2026-11-14 13:39 UTC",
+ "fetched_at": "2026-11-15 14:02 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
    "count": 7055,
    "baseline": false,
-   "added": 2,
-   "removed": 22,
-   "added_sample": [
-    "v6|us-west-2|AMAZON|2600:f0f0:c102::/48",
-    "v6|us-west-2|EC2|2600:f0f0:c102::/48"
-   ],
-   "removed_sample": [
-    "v6|ap-southeast-1|AMAZON|2600:f0f0:4304::/46",
-    "v6|ap-southeast-1|EC2|2600:f0f0:4304::/46",
-    "v6|eu-central-1|AMAZON|2600:f0f0:4310::/46",
-    "v6|eu-central-1|EC2|2600:f0f0:4310::/46",
-    "v6|eu-west-1|AMAZON|2600:f0f0:4308::/46"
-   ],
-   "pct_change": 0.34,
+   "added": 0,
+   "removed": 0,
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
