@@ -1,13 +1,15 @@
 # Privacy Statement
 
-*Effective 2026-10-30. Applies to Threat Feed Me v2.6.0 and later.*
+*Effective 2026-11-09. Applies to Threat Feed Me v2.7.0 and later.*
 
 Threat Feed Me runs on infrastructure you control. The project and its
 maintainer collect nothing from you or from your installation: there is no
-telemetry, no analytics, no crash reporting and no account. Two daily
-requests to GitHub (a release check and the feed catalog, both described
-below and both switchable off) are the only traffic that reaches the
-project's infrastructure, and neither carries anything about your install.
+telemetry, no analytics, no crash reporting and no account. The only
+traffic that reaches the project's infrastructure is anonymous GETs to
+GitHub: a daily release check, the daily feed catalog, the application
+catalog when you open the Applications page, and any catalog lists you
+switch on. Each is described below, each can be switched off, and none
+carries anything about your install.
 This statement describes what the software stores on your host, what it
 sends out and to whom, what it exposes to the network, and what that means
 for you as the operator. It is written to be checked against the code, so
@@ -70,7 +72,9 @@ GETs a small catalog manifest from the project's own GitHub repository
 only, no list data). A catalog list you switch on is then fetched from
 its published URL in the same repository on the schedule above. GitHub
 sees your server's public IP address, the User-Agent
-`threat-feed-me (application catalog)` and the request time.
+`threat-feed-me (application catalog)` and the request time. Set
+`app_catalog.enabled: false` in config.yaml to stop the manifest fetch; a
+catalog list stops being fetched when you switch it off.
 
 **To the threat feed providers you enable.** On every refresh the ingestor
 makes an HTTP or HTTPS GET to each enabled feed URL with the User-Agent
@@ -154,7 +158,8 @@ scripts or images from anywhere else. You can confirm all of this with an egress
 rule that allows only your enabled feed hosts, your gateway and your
 CrowdSec LAPI: the software works normally behind it (the release check and
 catalog poll fail silently and the feeds already installed keep working;
-set `updates.enabled` and `catalog.enabled` to false to stop the attempts).
+set `updates.enabled`, `catalog.enabled` and `app_catalog.enabled` to false
+to stop the attempts).
 
 ## What the software exposes to the network
 

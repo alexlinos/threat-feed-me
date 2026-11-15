@@ -109,19 +109,19 @@ on-prem; feeds are pulled inbound only.
   actually polling each one.
 - Add your own feeds, upload a custom list, whitelist false positives, or force
   a refresh, all from the dashboard, no config editing.
-- A few feeds ship **disabled**, opt-in from the dashboard once configured:
-  AlienVault OTX and the two HoneyDB feeds (free API keys required), the
-  auth-walled abuse.ch ThreatFox export (the keyless ThreatFox IOC mirror
-  covers it and ships enabled), the keyed abuse.ch URLhaus export (the
-  keyless /downloads/ path is retired; a free Auth-Key from auth.abuse.ch
-  goes in **Set key** as `URLHAUS_AUTH_KEY` — the key is embedded in the
-  fetch URL server-side and never displayed, logged, or stored), CERT.PL,
-  HaGeZi fake, ThreatView domains,
-  joewein, PhishTank online-valid, and a sample custom honeypot list.
-  Feeds that need API credentials have a **Set key** button: it prompts for each
-  required credential (HoneyDB takes an id and key pair), stores them
-  server-side in the data volume's `.env`, applies them immediately, and
-  never displays them back.
+- A few feeds ship **disabled**; switch them on from the dashboard:
+  - *Need a free key:* AlienVault OTX, the two HoneyDB feeds, and the
+    abuse.ch URLhaus export (URLhaus retired its keyless download; a free
+    Auth-Key from auth.abuse.ch goes in as `URLHAUS_AUTH_KEY`).
+  - *Covered by a feed that is already on:* CERT.PL, HaGeZi fake, PhishTank
+    online-valid, and the auth-walled abuse.ch ThreatFox export (the keyless
+    ThreatFox IOC mirror ships enabled).
+  - *Niche or very large:* joewein (spam domains), ThreatView domains.
+  - *A sample:* the custom honeypot list.
+
+  Feeds that need credentials have a **Set key** button. It asks for each
+  one (HoneyDB takes an id and a key), stores them server-side in the data
+  volume's `.env`, applies them at once, and never shows or logs them.
 
 To protect the dashboard on an untrusted network, set a username and password
 under **System → Dashboard sign-in** (stored as a salted hash; changing it needs
@@ -184,8 +184,8 @@ publishing port 8080 on the host so the dashboard is only reachable through it.
 
 ## Walkthrough
 
-The dashboard is one page with five views in the left rail (Guide, Lists,
-Feeds, Connect, System), plus the Indicators page. Press <kbd>/</kbd> anywhere
+The dashboard is one page with six views in the left rail (Guide, Lists,
+Apps, Feeds, Connect, System), plus the Indicators page. Press <kbd>/</kbd> anywhere
 to look up an IP or domain.
 
 **1. Guide (first run).** Until a firewall has polled one of your IP lists, the
@@ -210,7 +210,17 @@ what arrived in 24 hours, your overrides, and push status for CrowdSec and
 UniFi when they're configured. The top bar says how many feeds are healthy and
 names the first one that isn't.
 
-**3. Feeds.** Every source in one table, IP feeds and domain feeds grouped
+**3. Apps (Applications).** Allow-lists, kept apart from the block lists. Pick a vendor on
+the left (Microsoft 365, AWS, Azure, Google, GitHub, Cloudflare), read what
+the list is for and follow the link to the vendor's own guidance, then switch
+on the lists you need; nothing is downloaded until you do. Each list gets its
+own URL and a URL builder that shapes it for your firewall. You can also add
+a list from any URL of your own. A refresh that would change a list by more
+than half is held, and waits here for you to approve or discard it. The
+catalog itself is fetched from the project's GitHub; `app_catalog.enabled:
+false` in config.yaml switches that off.
+
+**4. Feeds.** Every source in one table, IP feeds and domain feeds grouped
 apart, with problems floated to the top. Per feed: entries, the share nobody
 else reports (*unique*), how often it saw a threat first, what's new in 24
 hours, health, and false-positive flags. Add a URL feed or upload a list at the
@@ -219,11 +229,11 @@ bottom; the overlap map, country heatmap and problem-TLD panel sit under
 
 <p align="center"><img src="docs/assets/screens/feeds.png" alt="The Feeds view: per-feed entries, uniqueness, first reports, health and actions" width="100%"></p>
 
-**4. Connect.** Step-by-step placement for every supported firewall and DNS
+**5. Connect.** Step-by-step placement for every supported firewall and DNS
 filter, the TAXII 2.1 discovery URL for your SIEM, and the CrowdSec and UniFi
 panels (both push after every refresh, because neither can poll).
 
-**5. System.** Refresh interval and retention, database size, backups (with
+**6. System.** Refresh interval and retention, database size, backups (with
 **Back up now**), vote grace, the predictor's state, a **Recalculate now**
 button, and **Dashboard hostnames**: the names the dashboard has been reached
 by, the names you've saved, and the switch that locks it to them (see
@@ -362,8 +372,8 @@ tiers stay meaningful as the feed roster changes.
 
 **The problem, in plain terms.** Treat every feed as an independent witness
 and you get fooled. Public feeds aren't independent: Emerging Threats bundles
-Spamhaus DROP and DShield into its own list, BBcan177 re-publishes other
-community feeds share reporters. So the same dataset echoed by
+Spamhaus DROP and DShield into its own list, BBcan177 republishes other
+lists, and the community feeds share reporters. So the same dataset echoed by
 three feeds looks like three-way corroboration, and every redundant feed you
 add inflates the counts until "High confidence" holds more IPs than Medium.
 That's a lie in your blocklist.
@@ -457,9 +467,9 @@ python -m threatfeedme.main --serve
 For remote access, the container binds 0.0.0.0 via `DASHBOARD_HOST`
 set in the Dockerfile (`ENV DASHBOARD_HOST=0.0.0.0`). Source runs stay
 localhost-only unless `dashboard.host` is set in config.yaml. `DASHBOARD_PORT`
-overrides the port the same way (default 8080). The image's `EXPOSE` and the
-healthcheck in `docker-compose.yml` assume 8080, so change those too if you
-change the port inside the container.
+overrides the port the same way (default 8080). The health check follows
+`DASHBOARD_PORT`; the port mapping in `docker-compose.yml` assumes 8080, so
+change that too if you change the port inside the container.
 
 > For one-shot pipeline runs (fetch, score, export, stats) use
 > `python -m threatfeedme.main --fetch|--export|--full` instead.
@@ -791,7 +801,7 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
-**Upgrading to 2.5 ("Flytrap").** Two changes you will notice:
+**Upgrading to 2.5 ("Flytrap").** What you will notice:
 
 - **High gets smaller, on purpose.** A feed's vote now expires 3 days after the
   feed drops an indicator, where before it lasted until the indicator aged out.
@@ -816,7 +826,6 @@ automatically on startup:
   without turning anything on. The server's IP address always works, and feed
   URLs, TAXII and `/healthz` are never checked. Setting `TFM_ALLOWED_HOSTS`
   (comma-separated) is deliberate configuration, so it enforces from start-up.
-
 - **The first start migrates the database, once.** The churn log (the
   history the predictor learns from, and by far the largest table) moves to
   its own file, `threatfeedme-churn.db`, beside the main database, stored far
@@ -899,8 +908,10 @@ scheduler. Refreshes then happen only when you trigger them.
 ## Privacy
 
 Threat Feed Me runs where you install it: no telemetry, no analytics, no
-account. Its only calls home are two anonymous daily GETs to GitHub (the
-release check and the feed catalog), both switchable off. What it stores on your data
+account. Its only calls to the project are anonymous GETs to GitHub: the
+daily release check and feed catalog, the application catalog when you open
+the Applications view, and any catalog lists you switch on. Each can be switched off.
+What it stores on your data
 volume, what it sends to the feed providers you enable and to your UniFi
 gateway or CrowdSec LAPI, and what it exposes on the network (feed URLs and
 TAXII) are spelled out, component by component, in [PRIVACY.md](PRIVACY.md).

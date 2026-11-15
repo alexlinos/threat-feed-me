@@ -787,11 +787,11 @@ and re-import threatfeedme). Never import `threatfeedme.app` bare in a test.
   those feeds from CrowdSec publish and TAXII), and the UI mockups on the
   maintainer's design canvas. The application lists section above it is
   the agreed 2.6 core; threat-type lists and the list builder are proposals.
-- Prod runs 2.6.6 (rolled 2026-11-02, from 2.6.0). cyberhost sits pending
-  review there: the 2.6.0 catalog poll (auto_add off) parked it, and a row
-  that arrived pending stays off until the operator Adds it.
-  abuse_ch_threatfox is a pre-fingerprint seed row that sync can't touch;
-  it 410s until switched off from the dashboard. Its dashboard has no sign-in by the maintainer's choice: access
+- Prod runs 2.7.2 (rolled 2026-11-09, from 2.6.6; no application lists
+  switched on yet). cyberhost was Added there by the operator (the 2.6.0
+  catalog poll had parked it as pending) and abuse_ch_threatfox, a
+  pre-fingerprint seed row sync can't touch, was switched off from the
+  dashboard: 25 of 25 enabled feeds healthy. Its dashboard has no sign-in by the maintainer's choice: access
   is segmented at the firewall. Not an open item. The 2.5.0 canary was
   removed 2026-09-26.
 
@@ -1073,8 +1073,18 @@ expect one all-entries-changed Azure alert.
 - Catalog client: `guarded_get` + capped read, failures remembered 5 min,
   `app_catalog.enabled: false` off switch, list URLs must sit beside the
   manifest, follows `safety.allow_private_feed_urls`. Factory deletes the
-  files of retired lists (never when a run produced nothing); Adobe uses
-  only the linked file on an Adobe host, never page text.
+  files of retired lists (never when a run produced nothing).
+- **Catalog factory fixes (2026-11-09)**: the watch step's exit code was
+  never recorded (`bash -e` + pipefail ended the step first), so no alert
+  issue could open and a failed fetch ran green; the code now comes from
+  `PIPESTATUS` and a last step turns the run red on anything but 0 or 1. A
+  source that parses to nothing counts as a failed fetch (snapshot kept),
+  so a vendor shape change cannot publish emptied lists. Adobe was removed:
+  the factory never found a file linked from its page, so it never
+  published; re-add it
+  only from a file Adobe links on an Adobe host, never from page text.
+  Adding a vendor needs no release: edit the two factory scripts on main
+  and run the workflow (it runs the scripts from main).
 - **Previewing the catalog locally**: build it from snapshots with
   `scripts/build_catalog.py --base-url http://127.0.0.1:<port>/`, serve the
   output with `python -m http.server`, set the scratch DB's
