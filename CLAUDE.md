@@ -1056,6 +1056,17 @@ expect one all-entries-changed Azure alert.
   unknown option is a 400. `X-Entry-Count` (size before limit) on every
   `.txt` and every `/lists` format. The dashboard's URL builder probes with
   `X-TFM-Probe`, which the routes never record as a poll.
+- **List query API (issue #39, after 2.7.2)**: `/lists/index.json`
+  (enabled lists with version, checksum, per-kind counts, changed_at) and a
+  structured `/lists/<name>.json` (version, checksum, entries, plus
+  ipv4/ipv6/domains/urls), for operator-side firewall-object sync scripts
+  (#40; allow-list sync never goes into core, the existing block-list
+  pushes stay). Unauthenticated like the rest of `/lists/` (maintainer-side
+  decision recorded on #39; private lists would be a token feature).
+  `checksum` = SHA-256 of the option-less `.txt` body. `entry_version` only
+  moves on a real content change: `refresh_list` skips the swap (and the
+  0/0 history row) when a refetch is identical. "index" is a reserved list
+  name. Field names are a public contract once scripts use them.
 - **Catalog page design** is modelled on a reference "source templates"
   page the maintainer chose: vendors listed on the left; per vendor a
   description, a link to the vendor's own docs on what to allow, tabs where

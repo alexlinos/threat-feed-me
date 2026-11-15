@@ -533,6 +533,25 @@ threat-list URLs, an unknown option here is a `400`, so a misspelt option can
 never quietly serve a different list. Every format carries an ETag and
 `X-Entry-Count`.
 
+**Syncing lists into firewall objects.** Some firewalls can't turn a URL into
+objects a rule can use (Sophos, SonicWall): there, a script on your side
+creates address objects through the firewall's own API. Two read-only
+documents exist for that script:
+
+- `/lists/index.json` lists every served list with its `version`, `checksum`,
+  entry counts per kind and `changed_at`. Compare the checksum with the one
+  you last applied; if it is the same, there is nothing to do.
+- `/lists/<name>.json` is one list as one consistent document: `version`,
+  `checksum`, `entries`, and the same entries split into `ipv4`, `ipv6`,
+  `domains` and `urls`, the way firewall object models keep them apart. It
+  takes the options above; `version` and `checksum` always describe the whole
+  list.
+
+`checksum` is the SHA-256 of `/lists/<name>.txt` with no options. `version`
+goes up only when the list's content changes. Like the list URLs, both are
+unauthenticated, so anyone who can reach the server can see which lists are
+switched on, including the names of your own lists (never their source URLs).
+
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
   [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP

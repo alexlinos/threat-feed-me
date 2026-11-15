@@ -25,10 +25,12 @@ See fetch(): the guard is thread-local and does nothing unless armed.
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -63,9 +65,14 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x20\x7f\u202a-\u202e\u2066-\u2069\u200e\u20
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
 
 
+# /lists/index.json is the enumeration document (issue #39), so no new list
+# may take the name. A list already called "index" keeps its .txt and .csv.
+RESERVED_NAMES = frozenset({"index"})
+
+
 def valid_name(name: str) -> bool:
     """List names land in URLs (/lists/<name>.txt) and must be inert there."""
-    return bool(_NAME_RE.match(name or ""))
+    return bool(_NAME_RE.match(name or "")) and name not in RESERVED_NAMES
 
 
 # --------------------------------------------------------------------------
@@ -209,6 +216,53 @@ def select_entries(entries: List[str], kind: Optional[str] = None,
             continue
         out.append(e)
     return out
+
+
+def split_entries(entries: List[str]) -> Dict[str, List[str]]:
+    """Entries by the kinds firewall object models keep apart (issue #39):
+    an address group cannot mix IP versions, and names are separate objects.
+    Wildcards stay with the domains, as published."""
+    out: Dict[str, List[str]] = {"ipv4": [], "ipv6": [], "domains": [], "urls": []}
+    for e in entries:
+        k = entry_kind(e)
+        if k == "ip":
+            v = ipaddress.ip_network(e, strict=False).version
+            out["ipv4" if v == 4 else "ipv6"].append(e)
+        else:
+            out["domains" if k == "domain" else "urls"].append(e)
+    return out
+
+
+def checksum(entries: List[str]) -> str:
+    """SHA-256 of the list as /lists/<name>.txt serves it with no options
+    (one entry per line, trailing newline), so a consumer can verify a
+    download against the index without a second definition of "the list"."""
+    body = "\n".join(entries) + ("\n" if entries else "")
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+# (name, created_at, entry_version) -> summary. entry_version moves on every
+# real content change and created_at tells a recreated list from its
+# predecessor, so an entry is never stale; the index would otherwise re-read
+# and re-hash every list (200+ with the whole catalog on) on each request.
+_summary_cache: Dict[str, Tuple[Tuple, Dict[str, Any]]] = {}
+_summary_lock = threading.Lock()
+
+
+def list_summary(db, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Version, checksum and per-kind counts of one stored list."""
+    key = (row["created_at"], row["entry_version"])
+    with _summary_lock:
+        hit = _summary_cache.get(row["name"])
+        if hit and hit[0] == key:
+            return hit[1]
+    entries = db.get_entries(row["name"])
+    summary = {"version": row["entry_version"], "checksum": checksum(entries),
+               "entries": len(entries),
+               "counts": {k: len(v) for k, v in split_entries(entries).items()}}
+    with _summary_lock:
+        _summary_cache[row["name"]] = (key, summary)
+    return summary
 
 
 def filter_entries(entries: List[str], v4_floor: int, v6_floor: int
@@ -400,8 +454,14 @@ def refresh_list(db, name: str, get: Callable = requests.get,
                                           etag=new_etag)
             summary["outcome"] = "held"
             return summary
-        db.replace_entries(name, accepted, len(added), len(removed),
-                           sorted(added)[:DIFF_SAMPLE_CAP], sorted(removed)[:DIFF_SAMPLE_CAP])
+        # A refetch with identical content is not a new version: a vendor
+        # without ETags would otherwise bump entry_version (which the query
+        # API serves as the change signal, issue #39) and write a 0/0
+        # history row on every poll.
+        if added or removed or not current:
+            db.replace_entries(name, accepted, len(added), len(removed),
+                               sorted(added)[:DIFF_SAMPLE_CAP],
+                               sorted(removed)[:DIFF_SAMPLE_CAP])
         # A held version is stale once a newer one is served; approving it
         # would roll the list back.
         db.reject_pending(name)
