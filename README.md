@@ -839,6 +839,23 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
+**Upgrading to 2.7.3 with the UniFi push on.** What you will notice:
+
+- **The pushed domain list gets shorter, on purpose.** A UniFi domain list
+  blocks the addresses its names resolve to, so a phishing domain behind a
+  CDN blocked that CDN's shared addresses and every other site on them. A
+  domain now goes to the gateway only if every address it resolves to could
+  be on an IP list; the panel counts what was held back and why. On one
+  install 870 High domains became 242 pushed. The domain feed URLs are
+  unchanged: a DNS filter polling them still gets every domain.
+- **Cloudflare's published ranges leave every IP list** on the first refresh
+  (`safety.protect_known_good`, on by default).
+- **Domains: off now empties the domain lists on the gateway** at the next
+  push. Before, the last pushed list stayed there, still enforced.
+- **The server looks up the domains it is about to push** through its own
+  resolver (see [PRIVACY.md](PRIVACY.md)). Nothing is looked up unless the
+  UniFi domain push is on.
+
 **Upgrading to 2.5 ("Flytrap").** What you will notice:
 
 - **High gets smaller, on purpose.** A feed's vote now expires 3 days after the

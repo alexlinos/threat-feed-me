@@ -1056,7 +1056,7 @@ expect one all-entries-changed Azure alert.
   unknown option is a 400. `X-Entry-Count` (size before limit) on every
   `.txt` and every `/lists` format. The dashboard's URL builder probes with
   `X-TFM-Probe`, which the routes never record as a poll.
-- **List query API (issue #39, after 2.7.2)**: `/lists/index.json`
+- **List query API (issue #39, shipped in 2.7.3)**: `/lists/index.json`
   (enabled lists with version, checksum, per-kind counts, changed_at) and a
   structured `/lists/<name>.json` (version, checksum, entries, plus
   ipv4/ipv6/domains/urls), for operator-side firewall-object sync scripts
@@ -1102,7 +1102,12 @@ expect one all-entries-changed Azure alert.
   `app_catalog_url` to the local `catalog/catalog.json`, and allow private
   feed URLs in the scratch config only (the guard refuses 127.0.0.1).
 
-## UniFi push blocked a CDN's shared addresses (2026-11-16, fix on 2.7)
+## v2.7.3 (2026-11-16): UniFi push blocked a CDN's shared addresses
+
+Also in 2.7.3: the list query API (#39, above under v2.7.2) and the URL
+builder label fix. After a roll, an install with the UniFi push on needs no
+action: the first push withdraws the held-back domains.
+
 
 Report: "the UniFi push manages to block Cloudflare". Cause, measured on the
 pushing install: the IP list held no CDN address, but 543 of the 870 pushed
