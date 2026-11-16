@@ -87,6 +87,13 @@ def _public_dns(monkeypatch):
     for guard in _RESOLVED_GUARDS:
         guard.clear_cache()
         monkeypatch.setattr(guard, "_lookup", lambda name: ["5.6.7.8"])
+        # The opt-in public resolver (DNS over HTTPS) has its own seam; same
+        # rule, same answer.
+        monkeypatch.setattr(
+            guard, "_query",
+            lambda url, name, rtype, allow_private: {
+                "Status": 0,
+                "Answer": [{"type": 1, "data": "5.6.7.8"}] if rtype == "A" else []})
 
 
 _RESOLVED_GUARDS = []

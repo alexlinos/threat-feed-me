@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme.feed_ingestor import _redact
-from threatfeedme import core
+from threatfeedme import core, resolved_guard
 from threatfeedme.pusher_unifi import (DEFAULT_MAX_ENTRIES, DEFAULT_MAX_PER_GROUP,
                                        ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
                                        LAST_PUSH_KEY, UniFiPusher,
@@ -91,6 +91,9 @@ def _status() -> dict:
         # "" = domain push off; else the domain tier pushed into
         # Domain-type network lists ({prefix}-dom-{tier}-1..N).
         "domain_tier": block.get("domain_tier", ""),
+        # "" = the domain arm's address check asks this server's resolver;
+        # else the public resolver it asks (resolved_guard.PUBLIC_RESOLVERS).
+        "domain_check_resolver": block.get("domain_check_resolver", ""),
         # Policy ids whose destinations must reference the pushed groups
         # (issue #21 read-back); "" = no check for that arm.
         "ip_policy_id": block.get("ip_policy_id", ""),
@@ -127,6 +130,9 @@ class UniFiSettingsRequest(BaseModel):
     tier: Optional[str] = None
     # "" turns the domain arm off (the default).
     domain_tier: Optional[str] = None
+    # "" = this server's resolver (the default); else a public resolver by
+    # name. A closed list, never a URL.
+    domain_check_resolver: Optional[str] = None
     # Zone-based policy ids to read back after each arm's push (issue #21).
     ip_policy_id: Optional[str] = None
     domain_policy_id: Optional[str] = None
@@ -140,6 +146,13 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
     if request.domain_tier is not None and request.domain_tier not in ("",) + _VALID_TIERS:
         raise HTTPException(status_code=400,
                             detail="domain_tier must be high, medium, low, or empty (off)")
+    if (request.domain_check_resolver is not None
+            and request.domain_check_resolver.strip().lower()
+            not in ("",) + tuple(resolved_guard.PUBLIC_RESOLVERS)):
+        raise HTTPException(
+            status_code=400,
+            detail="domain_check_resolver must be empty (this server's DNS) or one of: "
+                   + ", ".join(sorted(resolved_guard.PUBLIC_RESOLVERS)))
     if request.host is not None:
         host = request.host.strip()
         if host and not _HOST_RE.match(host):
@@ -172,6 +185,8 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
         value = getattr(request, field)
         if value is not None:
             stored[field] = value.strip() if isinstance(value, str) else value
+    if request.domain_check_resolver is not None:
+        stored["domain_check_resolver"] = request.domain_check_resolver.strip().lower()
     core.db.set_setting(SETTINGS_KEY, json.dumps(stored))
     status = _status()
     status["credentials_cleared"] = credentials_cleared
@@ -291,7 +306,8 @@ def unifi_withheld(kind: str = "ip", tier: Optional[str] = None,
         return {"kind": kind, "tier": use_tier or "", "cap": 0, "entries": 0,
                 "tier_total": 0, "withheld_count": 0, "withheld": [],
                 "withheld_score_cutoff": None, "kept_score_floor": None,
-                "address_withheld": 0, "unresolved_withheld": 0,
+                "address_withheld": 0, "filtered_withheld": 0,
+                "unresolved_withheld": 0,
                 "unchecked_withheld": 0, "address_withheld_sample": []}
     # Hostless on purpose: select() only reads the local corpus, so the
     # coverage view works before the operator has committed to a gateway.
@@ -300,13 +316,15 @@ def unifi_withheld(kind: str = "ip", tier: Optional[str] = None,
                          group_prefix=block.get("group_prefix", "threatfeedme"),
                          max_entries=block.get("max_entries", DEFAULT_MAX_ENTRIES),
                          max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP),
-                         safety=SafetyFilter.from_config(core.config))
+                         safety=SafetyFilter.from_config(core.config),
+                         domain_check_resolver=block.get("domain_check_resolver", ""))
     # resolve=False: a GET must not start DNS lookups. The domain arm's
     # address check answers from what the last push resolved; names it has
     # no answer for are reported as unchecked.
     sel = pusher.select(core.db, kind, use_tier, resolve=False)
     return {"kind": kind, "tier": use_tier, "cap": sel.cap,
             "address_withheld": sel.protected_count,
+            "filtered_withheld": sel.filtered_count,
             "unresolved_withheld": sel.unresolved_count,
             "unchecked_withheld": sel.unchecked_count,
             "address_withheld_sample": [

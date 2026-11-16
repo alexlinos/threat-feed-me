@@ -1056,7 +1056,7 @@ expect one all-entries-changed Azure alert.
   unknown option is a 400. `X-Entry-Count` (size before limit) on every
   `.txt` and every `/lists` format. The dashboard's URL builder probes with
   `X-TFM-Probe`, which the routes never record as a poll.
-- **List query API (issue #39, after 2.7.2)**: `/lists/index.json`
+- **List query API (issue #39, shipped in 2.7.3)**: `/lists/index.json`
   (enabled lists with version, checksum, per-kind counts, changed_at) and a
   structured `/lists/<name>.json` (version, checksum, entries, plus
   ipv4/ipv6/domains/urls), for operator-side firewall-object sync scripts
@@ -1102,7 +1102,12 @@ expect one all-entries-changed Azure alert.
   `app_catalog_url` to the local `catalog/catalog.json`, and allow private
   feed URLs in the scratch config only (the guard refuses 127.0.0.1).
 
-## UniFi push blocked a CDN's shared addresses (2026-11-16, fix on 2.7)
+## v2.7.3 (2026-11-16): UniFi push blocked a CDN's shared addresses
+
+Also in 2.7.3: the list query API (#39, above under v2.7.2) and the URL
+builder label fix. After a roll, an install with the UniFi push on needs no
+action: the first push withdraws the held-back domains.
+
 
 Report: "the UniFi push manages to block Cloudflare". Cause, measured on the
 pushing install: the IP list held no CDN address, but 543 of the 870 pushed
@@ -1145,6 +1150,45 @@ its own name behind a proxy. What changed, and what to keep in mind:
   modules holding an older `resolved_guard`; conftest stubs `_lookup` on
   every copy it has seen. A test that needs specific answers patches
   `pu.resolved_guard.__dict__`, the copy its own pusher uses.
+
+### The check behind a DNS filter (found on the 2.7.3 roll, fix on 2.7)
+
+Two installs that push to one gateway were rolled to 2.7.3 the day it
+shipped. Neither sent a CDN-hosted name again, but the lists collapsed (31
+of 870 on one, 284 of 1,684 on the other) and the panel blamed "protected
+addresses". Measured: both resolve through the gateway, whose own DNS
+filter answers threat domains with its block-page address (one address per
+family, in the documentation ranges). 11 of 12 Medium-only names, never on
+a pushed list, got the same answer, so it does not come from the pushed
+list; a public resolver returned real addresses for all of them, mostly not
+on a CDN. The dry run behind the 2.7.3 numbers used a public resolver,
+which is why it did not show this.
+
+- **A placeholder-only answer is its own verdict** (`resolved_guard.FILTERED`:
+  unspecified, loopback, documentation ranges). Still held back, since the
+  real addresses are unknown, but counted as `filtered_withheld` and worded
+  apart in the panel. A LAN address stays PROTECTED: that one is an attack.
+- **Opt-in public resolver** (`domain_check_resolver`: "" | cloudflare |
+  google; UniFi panel "Check addresses"). A closed list, never a URL; DNS
+  JSON over HTTPS through `guarded_get` and a capped read. Each resolver has
+  its own cache (`(source, name)` keys), or a filter's placeholder would
+  outlive the switch by hours.
+- **A lookup that raises is UNCHECKED, not UNRESOLVED**, and is not cached.
+  2.7.3 cached it as a dead name for six hours; with a remote resolver that
+  would turn an outage into "nothing resolves". After 24 failures in a row
+  the resolver is taken as down for that push (`check_error` in the summary,
+  a fixed sentence).
+- **Seams**: `_lookup` (system) and `_query` (public); conftest stubs both
+  on every module copy. The real functions are `system_lookup` and
+  `doh_query`.
+- Not known: which gateway feature returns the placeholder, and how the
+  gateway enforces a domain list in a firewall policy (the resolved-address
+  reading rests on the original outage and a third-party report, not on the
+  gateway's internals).
+- **Live-server trap**: a server started from the main checkout serves
+  templates and static files from the working tree. Switch the checkout
+  back to the released commit after working on a branch, or the running
+  server pairs old Python with new JavaScript.
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 

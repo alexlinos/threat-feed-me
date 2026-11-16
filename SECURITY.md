@@ -258,7 +258,13 @@ you believe it is reachable, not just the CVE id.
   never-block addresses at push time, but the gateway resolves again later
   and may get a different answer, and a name can still be pointed at any
   other public address. Use the IP lists and a DNS filter on the domain
-  feed URLs where that matters; the domain push is off by default.
+  feed URLs where that matters; the domain push is off by default. The
+  check is only as good as the resolver it asks: one that filters threat
+  domains answers with a placeholder, and those names are held back because
+  their real addresses are unknown. The optional public resolver for the
+  check is chosen from a fixed list (no typed URL), fetched under the feed
+  SSRF guard with a capped read, and a resolver that fails leaves names
+  unchecked (held back), never treated as safe.
 - The UniFi and CrowdSec **Test connection** buttons report whether the
   configured host could be reached and logged in to, so anyone who can use the
   dashboard can probe LAN hosts with them. Enable sign-in where that matters.

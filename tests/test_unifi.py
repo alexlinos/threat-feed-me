@@ -506,6 +506,34 @@ def test_api_settings_roundtrip_and_validation(api_client):
     assert api_client.get("/api/integrations/unifi").json()["host"] == "192.168.1.1"
 
 
+def test_api_domain_check_resolver_is_a_closed_choice(api_client):
+    # The address check may ask a public resolver, chosen by NAME. A typed
+    # URL would be one more place the server fetches an address someone
+    # entered, with the checked names in the query.
+    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == ""
+    r = api_client.post("/api/integrations/unifi",
+                        json={"domain_check_resolver": " Cloudflare "})
+    assert r.status_code == 200 and r.json()["domain_check_resolver"] == "cloudflare"
+    for bad in ("https://resolver.example.net/dns-query", "quad9", "1.1.1.1"):
+        r = api_client.post("/api/integrations/unifi",
+                            json={"domain_check_resolver": bad})
+        assert r.status_code == 400
+        assert bad not in r.text                    # refused values are not echoed
+    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == "cloudflare"
+    # Other saves leave it alone; "" switches back to this server's DNS.
+    api_client.post("/api/integrations/unifi", json={"tier": "high"})
+    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == "cloudflare"
+    api_client.post("/api/integrations/unifi", json={"domain_check_resolver": ""})
+    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == ""
+
+
+def test_api_coverage_reports_filtered_names(api_client):
+    j = api_client.get("/api/integrations/unifi/withheld?kind=domain&tier=high").json()
+    assert j["filtered_withheld"] == 0
+    assert api_client.get("/api/integrations/unifi/withheld?kind=domain").json()[
+        "filtered_withheld"] == 0                    # arm off: the empty report has the key too
+
+
 def test_api_credentials_write_only(api_client, monkeypatch):
     from threatfeedme import core
     r = api_client.post("/api/integrations/unifi/credentials",
