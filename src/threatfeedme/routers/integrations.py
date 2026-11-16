@@ -23,6 +23,7 @@ from threatfeedme.pusher_unifi import (DEFAULT_MAX_ENTRIES, DEFAULT_MAX_PER_GROU
                                        LAST_PUSH_KEY, UniFiPusher,
                                        effective_block, push_to_unifi)
 from threatfeedme.routers.feeds import _write_env_var
+from threatfeedme.safety import SafetyFilter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -289,16 +290,27 @@ def unifi_withheld(kind: str = "ip", tier: Optional[str] = None,
     if use_tier not in _VALID_TIERS:
         return {"kind": kind, "tier": use_tier or "", "cap": 0, "entries": 0,
                 "tier_total": 0, "withheld_count": 0, "withheld": [],
-                "withheld_score_cutoff": None, "kept_score_floor": None}
+                "withheld_score_cutoff": None, "kept_score_floor": None,
+                "address_withheld": 0, "unresolved_withheld": 0,
+                "unchecked_withheld": 0, "address_withheld_sample": []}
     # Hostless on purpose: select() only reads the local corpus, so the
     # coverage view works before the operator has committed to a gateway.
     pusher = UniFiPusher(host="", tier=(use_tier if kind == "ip" else "high"),
                          domain_tier=(use_tier if kind == "domain" else ""),
                          group_prefix=block.get("group_prefix", "threatfeedme"),
                          max_entries=block.get("max_entries", DEFAULT_MAX_ENTRIES),
-                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP))
-    sel = pusher.select(core.db, kind, use_tier)
+                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP),
+                         safety=SafetyFilter.from_config(core.config))
+    # resolve=False: a GET must not start DNS lookups. The domain arm's
+    # address check answers from what the last push resolved; names it has
+    # no answer for are reported as unchecked.
+    sel = pusher.select(core.db, kind, use_tier, resolve=False)
     return {"kind": kind, "tier": use_tier, "cap": sel.cap,
+            "address_withheld": sel.protected_count,
+            "unresolved_withheld": sel.unresolved_count,
+            "unchecked_withheld": sel.unchecked_count,
+            "address_withheld_sample": [
+                {"value": value, "reason": reason} for value, reason in sel.protected],
             "entries": len(sel.values), "tier_total": sel.total,
             "withheld_count": max(0, sel.total - len(sel.values)),
             "withheld_score_cutoff": sel.score_cutoff,

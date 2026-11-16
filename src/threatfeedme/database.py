@@ -1589,6 +1589,14 @@ class Database:
             (name, _utcnow_iso(), added, removed, len(entries),
              json.dumps(added_sample), json.dumps(removed_sample)))
 
+    def application_lists_changed_at(self) -> Dict[str, str]:
+        """list name -> when its served content last changed. History gets a
+        row per real swap and the prune always keeps each list's newest."""
+        with self._cursor() as cur:
+            cur.execute("SELECT list_name, MAX(refreshed_at) AS at"
+                        " FROM application_list_history GROUP BY list_name")
+            return {r["list_name"]: r["at"] for r in cur.fetchall()}
+
     def get_history(self, name: str, limit: int = 50) -> List[Dict]:
         with self._cursor() as cur:
             cur.execute("SELECT * FROM application_list_history WHERE list_name = ?"

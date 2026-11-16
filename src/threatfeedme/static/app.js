@@ -1006,6 +1006,21 @@ function unifiCapNote(sum) {
     return s;
 }
 
+function unifiAddressNote(d) {
+    // The gateway blocks the ADDRESSES a listed domain resolves to, so the
+    // push holds back names on shared CDN or otherwise protected addresses
+    // and names that do not resolve. Say how many, or a short list looks
+    // like a broken push.
+    if (!d) return '';
+    let s = '';
+    if (d.address_withheld) s += ' · ' + d.address_withheld.toLocaleString() +
+        ' held back (resolve to shared CDN or protected addresses)';
+    if (d.unresolved_withheld) s += ' · ' + d.unresolved_withheld.toLocaleString() + ' not resolving';
+    if (d.unchecked_withheld) s += ' · ' + d.unchecked_withheld.toLocaleString() +
+        ' not checked yet (next push)';
+    return s;
+}
+
 function unifiRenderStatus(s) {
     const el = document.getElementById('unifi-status');
     if (!el) return;
@@ -1021,7 +1036,10 @@ function unifiRenderStatus(s) {
             let msg = 'Last push ' + at + ': ' + sum.entries.toLocaleString() +
                 ' IPs in ' + sum.groups + ' group(s)' + unifiCapNote(sum);
             if (sum.domains) msg += ' · ' + sum.domains.entries.toLocaleString() +
-                ' domains in ' + sum.domains.groups + ' list(s)' + unifiCapNote(sum.domains);
+                ' domains in ' + sum.domains.groups + ' list(s)' + unifiCapNote(sum.domains) +
+                unifiAddressNote(sum.domains);
+            if (sum.domains_withdrawn) msg += ' · domain push is off: emptied ' +
+                sum.domains_withdrawn + ' domain list(s) on the gateway';
             if (sum.domain_error) msg += ' · DOMAIN PUSH FAILED: ' + sum.domain_error;
             parts.push(msg);
         }
@@ -1067,12 +1085,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (ip === 'medium') msgs.push('IP Medium = 4 lists');
         if (ip === 'low') msgs.push('IP Everything = 10 lists');
         if (dom === 'medium') msgs.push('Domain Medium = 4 lists');
-        if (msgs.length) {
-            el.textContent = '⚠ ' + msgs.join(' · ') +
-                ' — UniFi allows ONE list per policy, so that means one policy per list (per direction). ' +
-                'All lists are created up front (some empty at first) so the policies you build now stay complete as the corpus grows. High = 1 list.';
-            el.style.display = '';
-        } else { el.style.display = 'none'; }
+        let text = '';
+        if (msgs.length) text = '⚠ ' + msgs.join(' · ') +
+            ' — UniFi allows ONE list per policy, so that means one policy per list (per direction). ' +
+            'All lists are created up front (some empty at first) so the policies you build now stay complete as the corpus grows. High = 1 list.';
+        // The gateway enforces a domain list by resolved address, not by
+        // name: say what that costs before the operator relies on it.
+        if (dom) text += (text ? ' ' : '⚠ ') +
+            'Domain lists: the gateway blocks the addresses these names resolve to, not the names. ' +
+            'Names on shared CDN addresses (most phishing sites) or not resolving are held back so other sites are not blocked with them; ' +
+            'expect a short list. For full domain coverage point a DNS filter at the domain feed URLs.';
+        el.textContent = text;
+        el.style.display = text ? '' : 'none';
     };
     document.getElementById('unifi-tier').addEventListener('change', warn);
     document.getElementById('unifi-domain-tier').addEventListener('change', warn);

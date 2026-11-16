@@ -533,6 +533,25 @@ threat-list URLs, an unknown option here is a `400`, so a misspelt option can
 never quietly serve a different list. Every format carries an ETag and
 `X-Entry-Count`.
 
+**Syncing lists into firewall objects.** Some firewalls can't turn a URL into
+objects a rule can use (Sophos, SonicWall): there, a script on your side
+creates address objects through the firewall's own API. Two read-only
+documents exist for that script:
+
+- `/lists/index.json` lists every served list with its `version`, `checksum`,
+  entry counts per kind and `changed_at`. Compare the checksum with the one
+  you last applied; if it is the same, there is nothing to do.
+- `/lists/<name>.json` is one list as one consistent document: `version`,
+  `checksum`, `entries`, and the same entries split into `ipv4`, `ipv6`,
+  `domains` and `urls`, the way firewall object models keep them apart. It
+  takes the options above; `version` and `checksum` always describe the whole
+  list.
+
+`checksum` is the SHA-256 of `/lists/<name>.txt` with no options. `version`
+goes up only when the list's content changes. Like the list URLs, both are
+unauthenticated, so anyone who can reach the server can see which lists are
+switched on, including the names of your own lists (never their source URLs).
+
 - **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
   [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP
@@ -595,10 +614,29 @@ Prefer files? The same settings live under `integrations.unifi` in
 Lists shrink to empty rather than being deleted when the set contracts (a
 list referenced by a policy can't be deleted, and an empty list matches
 nothing). IPv6 indicators are skipped (UniFi address lists are v4-only).
-Domain policies use Destination type *Domain → List*. Prefer keeping DNS
-filtering off-gateway? A Pi-hole or AdGuard Home polling
-`/feeds/domains/medium.txt` works as well — that path uses the plain
-feed URLs instead of the push.
+Domain policies use Destination type *Domain → List*.
+
+**What the domain lists can and cannot do.** A UniFi domain list in a
+firewall policy is not a DNS filter: the gateway blocks the *addresses* the
+listed names resolve to. Most phishing domains sit behind a CDN proxy, so
+blocking the name blocks one of the CDN's shared addresses and every
+unrelated site on it. The push therefore resolves each domain first and
+sends only names whose every address would be allowed on an IP list. Names
+on shared CDN addresses (commonly well over half of the High tier), names
+that do not resolve, and names pointing at private, protected or never-block
+addresses are held back; the panel's status line says how many. Expect a
+short list. Two limits remain: the gateway resolves the names itself, later,
+and may get a different answer, and other shared hosting is not recognised.
+For full domain coverage use a DNS filter instead: a Pi-hole or AdGuard
+Home polling `/feeds/domains/medium.txt` blocks by name and has none of
+this. Setting **Domains: off** empties the `threatfeedme-dom-*` lists on the
+next push.
+
+**Shared CDN addresses are never served.** Cloudflare's published proxy
+ranges are part of the safety floor (`safety.protect_known_good`), so an
+address inside them is dropped from every IP list and push at every tier.
+Add other networks, as single addresses or CIDR ranges, under
+`safety.known_good`.
 
 ### CrowdSec
 
@@ -800,6 +838,23 @@ automatically on startup:
   stays your call.
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
+
+**Upgrading to 2.7.3 with the UniFi push on.** What you will notice:
+
+- **The pushed domain list gets shorter, on purpose.** A UniFi domain list
+  blocks the addresses its names resolve to, so a phishing domain behind a
+  CDN blocked that CDN's shared addresses and every other site on them. A
+  domain now goes to the gateway only if every address it resolves to could
+  be on an IP list; the panel counts what was held back and why. On one
+  install 870 High domains became 242 pushed. The domain feed URLs are
+  unchanged: a DNS filter polling them still gets every domain.
+- **Cloudflare's published ranges leave every IP list** on the first refresh
+  (`safety.protect_known_good`, on by default).
+- **Domains: off now empties the domain lists on the gateway** at the next
+  push. Before, the last pushed list stayed there, still enforced.
+- **The server looks up the domains it is about to push** through its own
+  resolver (see [PRIVACY.md](PRIVACY.md)). Nothing is looked up unless the
+  UniFi domain push is on.
 
 **Upgrading to 2.5 ("Flytrap").** What you will notice:
 

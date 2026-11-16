@@ -122,6 +122,18 @@ integration login to `admin.api.crowdsec.net` (CrowdSec's servers) to
 download the blocklists your Console account subscribes to; CrowdSec's
 privacy policy governs that request.
 
+**To your DNS resolver, for the UniFi domain push, only if you switch it
+on.** Before each push of a domain tier to a UniFi gateway, the server looks
+up the domains it is about to send, through its own resolver, and holds back
+any that resolve to shared CDN or otherwise protected addresses
+(`resolved_guard.py`; answers are kept in memory for a few hours, never
+stored). These are lookups only: nothing connects to the names or their
+addresses. Your resolver, and anything upstream of it, sees the server ask
+for domains from the threat feeds, about as many per push as the tier holds.
+A resolver that reports or blocks lookups of malicious domains may flag the
+server for it; that is this check, not an infection. With the domain push
+off (the default), no indicator is ever looked up.
+
 **To your DNS resolver, only when you ask.** The dashboard's *Check & add*
 button (set-up guide and System → Dashboard hostnames) looks up the DNS name
 you typed, through the server's own resolver, to tell you whether it points

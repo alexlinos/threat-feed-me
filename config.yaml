@@ -440,10 +440,15 @@ safety:
   # Never block well-known public infrastructure (Google/Cloudflare/Quad9/OpenDNS
   # DNS resolvers, etc.) even if a feed lists it. Blocking these breaks name
   # resolution for the whole site.
+  # The same switch covers shared CDN proxy ranges (Cloudflare's published
+  # list): one address there fronts thousands of unrelated sites, so it is
+  # never served or pushed at any tier.
   protect_known_good: true
-  # Optional: extra IPs to always protect (your gateway, DNS, mail relay, ...).
+  # Optional: extra addresses or CIDR ranges to always protect (your gateway,
+  # DNS, mail relay, another CDN's ranges, ...).
   # known_good:
   #   - 203.0.113.10
+  #   - 198.51.100.0/24
   #
   # Domain feeds get the same floor: a core list of OS-update/CDN/mail
   # infrastructure is always protected (with all subdomains), and special-use

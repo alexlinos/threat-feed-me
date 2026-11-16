@@ -1056,6 +1056,17 @@ expect one all-entries-changed Azure alert.
   unknown option is a 400. `X-Entry-Count` (size before limit) on every
   `.txt` and every `/lists` format. The dashboard's URL builder probes with
   `X-TFM-Probe`, which the routes never record as a poll.
+- **List query API (issue #39, shipped in 2.7.3)**: `/lists/index.json`
+  (enabled lists with version, checksum, per-kind counts, changed_at) and a
+  structured `/lists/<name>.json` (version, checksum, entries, plus
+  ipv4/ipv6/domains/urls), for operator-side firewall-object sync scripts
+  (#40; allow-list sync never goes into core, the existing block-list
+  pushes stay). Unauthenticated like the rest of `/lists/` (maintainer-side
+  decision recorded on #39; private lists would be a token feature).
+  `checksum` = SHA-256 of the option-less `.txt` body. `entry_version` only
+  moves on a real content change: `refresh_list` skips the swap (and the
+  0/0 history row) when a refetch is identical. "index" is a reserved list
+  name. Field names are a public contract once scripts use them.
 - **Catalog page design** is modelled on a reference "source templates"
   page the maintainer chose: vendors listed on the left; per vendor a
   description, a link to the vendor's own docs on what to allow, tabs where
@@ -1090,6 +1101,55 @@ expect one all-entries-changed Azure alert.
   output with `python -m http.server`, set the scratch DB's
   `app_catalog_url` to the local `catalog/catalog.json`, and allow private
   feed URLs in the scratch config only (the guard refuses 127.0.0.1).
+
+## v2.7.3 (2026-11-16): UniFi push blocked a CDN's shared addresses
+
+Also in 2.7.3: the list query API (#39, above under v2.7.2) and the URL
+builder label fix. After a roll, an install with the UniFi push on needs no
+action: the first push withdraws the held-back domains.
+
+
+Report: "the UniFi push manages to block Cloudflare". Cause, measured on the
+pushing install: the IP list held no CDN address, but 543 of the 870 pushed
+High domains resolved into Cloudflare's proxy ranges (953 distinct shared
+addresses). A UniFi domain list in a firewall policy is enforced by the
+addresses its names resolve to, so each proxied phishing domain blocked a
+shared address and everything else on it. Same mechanism as the 2.6.3 GitHub
+outage; the shared-platform guard is name-based and cannot see a domain on
+its own name behind a proxy. What changed, and what to keep in mind:
+
+- **Shared CDN edge is part of the IP safety floor** (`safety.SHARED_EDGE`,
+  Cloudflare's published v4+v6 ranges, under `protect_known_good`). Checked
+  by overlap; the retroactive purge removed 893 such rows (all Low) from the
+  measured corpus. `safety.known_good` now takes CIDR ranges as well as
+  addresses (a range used to be dropped silently). Other CDNs are not
+  shipped: add a vendor only from its own published range file.
+- **A domain goes to UniFi only if every address it resolves to would be
+  allowed on an IP list** (`resolved_guard.py`, called from
+  `UniFiPusher._select`). Held back, each counted apart in the push summary:
+  protected addresses (shared edge, known-good, never-block, private or
+  reserved, which also stops a listed domain's owner aiming the gateway at
+  a LAN address), names that do not resolve, and names not checked inside
+  the 90 s lookup budget (fail closed; the cache fills across pushes). On
+  the measured tier: 242 pushed, 544 held back, 84 not resolving. The
+  selection runs before `jobs.write_lock` so DNS never holds the writer
+  lock. The coverage endpoint passes `resolve=False` (a GET starts no
+  lookups).
+- **Domains: off empties the lists** (`UniFiPusher.withdraw`). Off used to
+  skip the domain arm, leaving the last list on the gateway, enforced.
+- **Not solved, by nature**: the gateway resolves again later and may get a
+  different answer; other shared hosting (parking, website builders) is not
+  recognised. If collateral continues, retire the domain arm and point
+  UniFi users at a DNS filter on the domain feed URLs; do not grow the
+  range list into a CDN inventory.
+- **Diagnosing on a live network**: never resolve the pushed domains through
+  the LAN resolver; a gateway that snoops DNS for listed names may add
+  every answer to its block set. Use a public DoH resolver from the
+  workstation (the dry run did) or the lookup cache.
+- **Test trap**: suites that purge and re-import the package leave test
+  modules holding an older `resolved_guard`; conftest stubs `_lookup` on
+  every copy it has seen. A test that needs specific answers patches
+  `pu.resolved_guard.__dict__`, the copy its own pusher uses.
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
