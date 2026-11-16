@@ -625,6 +625,11 @@
                 <option value="high">Domains: High tier</option>
                 <option value="medium">Domains: Medium tier</option>
             </select>
+            <select id="unifi-domain-check" title="Where the domain push looks up each name's addresses before sending it. If this server's DNS filters threat domains (a gateway content filter, an ad blocker), it answers with a placeholder and those names are held back; a public resolver sees their real addresses. Choosing one sends the names being checked to that provider over HTTPS.">
+                <option value="" selected>Check addresses: this server's DNS</option>
+                <option value="cloudflare">Check addresses: Cloudflare DNS (public)</option>
+                <option value="google">Check addresses: Google DNS (public)</option>
+            </select>
             <button type="button" onclick="unifiSave()">Save</button>
             <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>
             <button type="button" class="mini-btn" onclick="unifiTest(this)" title="Logs in and lists the gateway's firewall groups; nothing is written. The first successful test pins the gateway's certificate.">Test connection</button>

@@ -118,6 +118,10 @@ class Selection:
     resolved_guard) because the gateway enforces a domain list by resolved
     address. Like never-block they are counted apart and are not part of
     ``total``; ``protected`` keeps a bounded (value, reason) sample.
+    ``filtered_count`` is the names answered only with a placeholder address
+    (a DNS filter in front of this server already blocks them, so their real
+    addresses are unknown); ``check_error`` says so when the chosen public
+    resolver could not be reached.
     """
     values: List[str]
     withheld: List[str]
@@ -131,6 +135,8 @@ class Selection:
     protected_count: int = 0
     unresolved_count: int = 0
     unchecked_count: int = 0
+    filtered_count: int = 0
+    check_error: str = ""
 
 
 class UniFiPusher:
@@ -141,11 +147,24 @@ class UniFiPusher:
                  domain_tier: str = "",
                  ip_policy_id: str = "", domain_policy_id: str = "",
                  timeout: int = 20, session=None, cert_sha256: str = None,
-                 safety: Optional[SafetyFilter] = None):
+                 safety: Optional[SafetyFilter] = None,
+                 domain_check_resolver: str = ""):
         # The filter resolved addresses answer to in the domain arm (the
         # shipped floor when the caller has no config to read one from).
         self.safety = safety if safety is not None else SafetyFilter()
         self.resolve_budget = resolved_guard.DEFAULT_BUDGET
+        # Which resolver the domain arm's address check asks. "" is this
+        # server's own; a name from resolved_guard.PUBLIC_RESOLVERS sends the
+        # names being checked to that provider (operator's choice, off by
+        # default). An unknown value falls back to the server's own: the
+        # check must never go to a host nobody chose.
+        resolver = str(domain_check_resolver or "").strip().lower()
+        if resolver and resolver not in resolved_guard.PUBLIC_RESOLVERS:
+            logger.warning("[unifi] unknown domain_check_resolver %r; using "
+                           "this server's resolver", domain_check_resolver)
+            resolver = ""
+        self.check_resolver = resolver
+        self.allow_private_urls = False     # safety.allow_private_feed_urls
         self._last_groups: Optional[Dict] = None
         host = (host or "").strip()
         # Strip any scheme, then drop anything after the first '/' — a path
@@ -230,6 +249,7 @@ class UniFiPusher:
             ip_policy_id=cfg.get('ip_policy_id', ''),
             domain_policy_id=cfg.get('domain_policy_id', ''),
             cert_sha256=cfg.get('cert_sha256'),
+            domain_check_resolver=cfg.get('domain_check_resolver', ''),
         )
 
     @classmethod
@@ -241,6 +261,8 @@ class UniFiPusher:
         pusher = cls.from_block(cfg)
         if pusher is not None:
             pusher.safety = SafetyFilter.from_config(config)
+            pusher.allow_private_urls = bool(
+                ((config or {}).get('safety') or {}).get('allow_private_feed_urls', False))
         return pusher
 
     # ---------------- UniFi OS API plumbing ----------------
@@ -476,6 +498,8 @@ class UniFiPusher:
         kept_floor: Optional[float] = None
         protected: List[Tuple[str, str]] = []
         protected_count = unresolved_count = unchecked_count = 0
+        filtered_count = 0
+        check_error = ""
         nb = getattr(wl_map, "never_block", None)
 
         def eligible():
@@ -504,9 +528,22 @@ class UniFiPusher:
         if kind == 'domain':
             # Materialized first so no read cursor stays open across lookups.
             rows = list(eligible())
+            public = (resolved_guard.PublicLookup(
+                self.check_resolver, allow_private=self.allow_private_urls)
+                if self.check_resolver else None)
             verdicts = resolved_guard.screen(
                 [value for value, _ in rows], cap, self._address_judge(nb),
-                resolve=resolve, budget=self.resolve_budget)
+                resolve=resolve, budget=self.resolve_budget, lookup=public,
+                source=self.check_resolver or resolved_guard.SYSTEM)
+            if public is not None and public.failed:
+                # A fixed sentence, never the exception text (it reaches the
+                # dashboard). Names it could not ask about are unchecked.
+                check_error = ("the public resolver did not answer"
+                               if public.down else
+                               "the public resolver failed for some names")
+                logger.warning("[unifi] %s (%s): %d lookup(s) failed; those "
+                               "names are held back and asked again next push",
+                               check_error, self.check_resolver, public.failed)
             stream = ((value, score, verdict, detail)
                       for (value, score), (verdict, detail) in zip(rows, verdicts))
         else:
@@ -518,6 +555,9 @@ class UniFiPusher:
                 protected_count += 1
                 if len(protected) < _ADDRESS_REPORT_CAP:
                     protected.append((value, detail))
+                continue
+            if verdict == resolved_guard.FILTERED:
+                filtered_count += 1
                 continue
             if verdict == resolved_guard.UNRESOLVED:
                 unresolved_count += 1
@@ -540,13 +580,16 @@ class UniFiPusher:
         if refused_count:
             logger.info("[unifi] refused %d never-block value(s) in the %s tier",
                         refused_count, tier_value)
-        if protected_count or unresolved_count or unchecked_count:
+        if protected_count or unresolved_count or unchecked_count or filtered_count:
             # ASCII only: Windows consoles default to cp1252.
             logger.warning(
                 "[unifi] %s domain tier: held back %d that resolve to shared or "
-                "protected addresses, %d that do not resolve, %d not checked "
-                "in time (checked on a later push)",
-                tier_value, protected_count, unresolved_count, unchecked_count)
+                "protected addresses, %d answered with a placeholder address "
+                "(a DNS filter in front of this server already blocks them), "
+                "%d that do not resolve, %d not checked in time (checked on a "
+                "later push)",
+                tier_value, protected_count, filtered_count, unresolved_count,
+                unchecked_count)
         if total > cap:
             # ASCII only: Windows consoles default to cp1252.
             logger.warning(
@@ -559,7 +602,9 @@ class UniFiPusher:
                          refused=refused, refused_count=refused_count,
                          protected=protected, protected_count=protected_count,
                          unresolved_count=unresolved_count,
-                         unchecked_count=unchecked_count)
+                         unchecked_count=unchecked_count,
+                         filtered_count=filtered_count,
+                         check_error=check_error)
 
     def select(self, db, kind: str, tier_value: str,
                resolve: bool = True) -> Selection:
@@ -808,11 +853,17 @@ def _add_coverage(summary: Dict, sel: "Selection") -> None:
     # The domain arm's address check (resolved_guard): names held back
     # because the gateway would block shared or protected addresses, names
     # that do not resolve, and names not checked inside the lookup budget.
+    # "filtered": answered only with a placeholder address, so a DNS filter
+    # in front of this server already blocks the name and its real addresses
+    # are unknown.
     for key, count in (("address_withheld", sel.protected_count),
+                       ("filtered_withheld", sel.filtered_count),
                        ("unresolved_withheld", sel.unresolved_count),
                        ("unchecked_withheld", sel.unchecked_count)):
         if count:
             summary[key] = count
+    if sel.check_error:
+        summary["check_error"] = sel.check_error
 
 
 def _push_to_unifi(db, config: Dict, pusher: Optional[UniFiPusher] = None,
@@ -865,6 +916,8 @@ def _push_to_unifi(db, config: Dict, pusher: Optional[UniFiPusher] = None,
                             list_count=TIER_LIST_COUNTS[pusher.domain_tier])
             summary["domains"] = d
             _add_coverage(d, dsel)
+            if pusher.check_resolver:
+                d["check_resolver"] = pusher.check_resolver
             # Same read-back for the domain arm (issue #21): the live policy
             # reads destination.web_group_id, a different object than the
             # domain-group we write. A mismatch is surfaced as an explicit

@@ -137,8 +137,10 @@ def test_screen_sorts_names_by_what_they_resolve_to():
     names = ["on-cdn.example.io", "own-host.example.io", "mixed.example.io",
              "dead.example.io", "sinkholed.example.io"]
     verdicts = rg.screen(names, 10, _judge, lookup=_lookups(table))
+    # A placeholder-only answer is a DNS filter talking, counted apart
+    # (tests/test_unifi_dns_filter.py).
     assert [v for v, _ in verdicts] == [rg.PROTECTED, rg.OK, rg.PROTECTED,
-                                        rg.UNRESOLVED, rg.PROTECTED]
+                                        rg.UNRESOLVED, rg.FILTERED]
     # The detail names the address, so an operator can see why.
     assert verdicts[0][1].startswith(EDGE_V4 + ":")
     assert verdicts[2][1].startswith(EDGE_V6 + ":")     # one bad address is enough
@@ -195,10 +197,14 @@ def test_screen_fails_closed_when_the_budget_is_spent():
     assert verdicts == [(rg.UNCHECKED, "")] and calls == []
 
 
-def test_a_lookup_that_raises_counts_as_not_resolving():
+def test_a_lookup_that_raises_leaves_the_name_unchecked():
+    # No answer is not "does not resolve": the name is held back this push
+    # and asked again on the next, with nothing cached in between.
     def boom(name):
         raise RuntimeError("resolver exploded")
-    assert rg.screen(["a.example.io"], 1, _judge, lookup=boom)[0][0] == rg.UNRESOLVED
+    assert rg.screen(["a.example.io"], 1, _judge, lookup=boom)[0][0] == rg.UNCHECKED
+    assert rg.screen(["a.example.io"], 1, _judge,
+                     lookup=_lookups({"a.example.io": [PLAIN]}))[0][0] == rg.OK
 
 
 def test_system_lookup_reads_addresses_and_swallows_resolver_errors(monkeypatch):
