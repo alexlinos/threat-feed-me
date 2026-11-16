@@ -1102,6 +1102,50 @@ expect one all-entries-changed Azure alert.
   `app_catalog_url` to the local `catalog/catalog.json`, and allow private
   feed URLs in the scratch config only (the guard refuses 127.0.0.1).
 
+## UniFi push blocked a CDN's shared addresses (2026-11-16, fix on 2.7)
+
+Report: "the UniFi push manages to block Cloudflare". Cause, measured on the
+pushing install: the IP list held no CDN address, but 543 of the 870 pushed
+High domains resolved into Cloudflare's proxy ranges (953 distinct shared
+addresses). A UniFi domain list in a firewall policy is enforced by the
+addresses its names resolve to, so each proxied phishing domain blocked a
+shared address and everything else on it. Same mechanism as the 2.6.3 GitHub
+outage; the shared-platform guard is name-based and cannot see a domain on
+its own name behind a proxy. What changed, and what to keep in mind:
+
+- **Shared CDN edge is part of the IP safety floor** (`safety.SHARED_EDGE`,
+  Cloudflare's published v4+v6 ranges, under `protect_known_good`). Checked
+  by overlap; the retroactive purge removed 893 such rows (all Low) from the
+  measured corpus. `safety.known_good` now takes CIDR ranges as well as
+  addresses (a range used to be dropped silently). Other CDNs are not
+  shipped: add a vendor only from its own published range file.
+- **A domain goes to UniFi only if every address it resolves to would be
+  allowed on an IP list** (`resolved_guard.py`, called from
+  `UniFiPusher._select`). Held back, each counted apart in the push summary:
+  protected addresses (shared edge, known-good, never-block, private or
+  reserved, which also stops a listed domain's owner aiming the gateway at
+  a LAN address), names that do not resolve, and names not checked inside
+  the 90 s lookup budget (fail closed; the cache fills across pushes). On
+  the measured tier: 242 pushed, 544 held back, 84 not resolving. The
+  selection runs before `jobs.write_lock` so DNS never holds the writer
+  lock. The coverage endpoint passes `resolve=False` (a GET starts no
+  lookups).
+- **Domains: off empties the lists** (`UniFiPusher.withdraw`). Off used to
+  skip the domain arm, leaving the last list on the gateway, enforced.
+- **Not solved, by nature**: the gateway resolves again later and may get a
+  different answer; other shared hosting (parking, website builders) is not
+  recognised. If collateral continues, retire the domain arm and point
+  UniFi users at a DNS filter on the domain feed URLs; do not grow the
+  range list into a CDN inventory.
+- **Diagnosing on a live network**: never resolve the pushed domains through
+  the LAN resolver; a gateway that snoops DNS for listed names may add
+  every answer to its block set. Use a public DoH resolver from the
+  workstation (the dry run did) or the lookup cache.
+- **Test trap**: suites that purge and re-import the package leave test
+  modules holding an older `resolved_guard`; conftest stubs `_lookup` on
+  every copy it has seen. A test that needs specific answers patches
+  `pu.resolved_guard.__dict__`, the copy its own pusher uses.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the

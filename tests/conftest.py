@@ -73,3 +73,20 @@ def _public_dns(monkeypatch):
     everything to a public address; tests of the guard itself override this."""
     from threatfeedme import feed_ingestor
     monkeypatch.setattr(feed_ingestor, "_host_addresses", lambda host: ["8.8.8.8"])
+    # The UniFi domain arm resolves every name it is about to push
+    # (resolved_guard). Same rule: no real DNS from a test. Everything
+    # resolves to one unprotected documentation-style public address; tests
+    # of the guard pass their own lookup. The cache is module state, so it is
+    # emptied around each test.
+    # Some suites purge and re-import threatfeedme, so a test can hold a
+    # pusher from an OLDER copy of the package than sys.modules has now.
+    # Every copy ever seen stays stubbed, or that pusher would do real DNS.
+    from threatfeedme import resolved_guard
+    if all(resolved_guard is not seen for seen in _RESOLVED_GUARDS):
+        _RESOLVED_GUARDS.append(resolved_guard)
+    for guard in _RESOLVED_GUARDS:
+        guard.clear_cache()
+        monkeypatch.setattr(guard, "_lookup", lambda name: ["5.6.7.8"])
+
+
+_RESOLVED_GUARDS = []
