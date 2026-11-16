@@ -614,10 +614,29 @@ Prefer files? The same settings live under `integrations.unifi` in
 Lists shrink to empty rather than being deleted when the set contracts (a
 list referenced by a policy can't be deleted, and an empty list matches
 nothing). IPv6 indicators are skipped (UniFi address lists are v4-only).
-Domain policies use Destination type *Domain → List*. Prefer keeping DNS
-filtering off-gateway? A Pi-hole or AdGuard Home polling
-`/feeds/domains/medium.txt` works as well — that path uses the plain
-feed URLs instead of the push.
+Domain policies use Destination type *Domain → List*.
+
+**What the domain lists can and cannot do.** A UniFi domain list in a
+firewall policy is not a DNS filter: the gateway blocks the *addresses* the
+listed names resolve to. Most phishing domains sit behind a CDN proxy, so
+blocking the name blocks one of the CDN's shared addresses and every
+unrelated site on it. The push therefore resolves each domain first and
+sends only names whose every address would be allowed on an IP list. Names
+on shared CDN addresses (commonly well over half of the High tier), names
+that do not resolve, and names pointing at private, protected or never-block
+addresses are held back; the panel's status line says how many. Expect a
+short list. Two limits remain: the gateway resolves the names itself, later,
+and may get a different answer, and other shared hosting is not recognised.
+For full domain coverage use a DNS filter instead: a Pi-hole or AdGuard
+Home polling `/feeds/domains/medium.txt` blocks by name and has none of
+this. Setting **Domains: off** empties the `threatfeedme-dom-*` lists on the
+next push.
+
+**Shared CDN addresses are never served.** Cloudflare's published proxy
+ranges are part of the safety floor (`safety.protect_known_good`), so an
+address inside them is dropped from every IP list and push at every tier.
+Add other networks, as single addresses or CIDR ranges, under
+`safety.known_good`.
 
 ### CrowdSec
 

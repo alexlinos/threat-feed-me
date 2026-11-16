@@ -252,6 +252,13 @@ you believe it is reachable, not just the CVE id.
   so anyone who can use the dashboard can point those integrations (and
   the credentials you saved for them, until the address change clears
   them) at a LAN host. Enable dashboard auth where that matters.
+- A UniFi domain list is enforced by resolved address, so whoever controls a
+  listed domain's DNS chooses what the gateway blocks. The push refuses
+  names that resolve to private, reserved, shared CDN, known-good or
+  never-block addresses at push time, but the gateway resolves again later
+  and may get a different answer, and a name can still be pointed at any
+  other public address. Use the IP lists and a DNS filter on the domain
+  feed URLs where that matters; the domain push is off by default.
 - The UniFi and CrowdSec **Test connection** buttons report whether the
   configured host could be reached and logged in to, so anyone who can use the
   dashboard can probe LAN hosts with them. Enable sign-in where that matters.

@@ -26,6 +26,24 @@ KNOWN_GOOD = [
     "4.2.2.1", "4.2.2.2",              # Level3
 ]
 
+# Shared CDN edge space: one address here fronts thousands of unrelated sites,
+# so a feed entry inside it names a site behind the proxy, not the attacker,
+# and blocking the address takes down everything else on it (a gateway
+# enforcing a pushed list did exactly that, 2026-11-16). The IP analogue of
+# scorer.DEFAULT_SHARED_PLATFORMS, but a hard floor: these never reach a
+# served list or a push at any tier. Checked by overlap, like the special
+# registries below. Cloudflare's published proxy ranges
+# (cloudflare.com/ips-v4 and /ips-v6, compared against the live files
+# 2026-11-16); operators add other networks with safety.known_good.
+SHARED_EDGE = [
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+    "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+]
+
 # The domain analogue of KNOWN_GOOD: infrastructure whose DNS-layer blocking
 # takes down OS updates, TLS revocation checks, or the org's mail — no matter
 # what a feed says (compromised pages ON these platforms belong in a URL/
@@ -107,13 +125,21 @@ class SafetyFilter:
         self.protect_known_good = protect_known_good
         self.min_prefix_v4 = int(min_prefix_v4 or 0)
         self.min_prefix_v6 = int(min_prefix_v6 or 0)
-        names = list(KNOWN_GOOD) + list(known_good or [])
-        self._known_good = []
-        for g in names:
+        # The protected floor as integer ranges per IP version: shipped
+        # resolvers, shared CDN edge space, and the operator's own entries
+        # (safety.known_good takes single addresses or CIDR ranges). Integer
+        # bounds because this runs once per stored indicator on every
+        # refresh; ipaddress.overlaps() per entry was the slow part.
+        self._known_good: Dict[int, List] = {4: [], 6: []}
+        for g in list(KNOWN_GOOD) + list(SHARED_EDGE) + list(known_good or []):
             try:
-                self._known_good.append(ipaddress.ip_address(g))
+                net = ipaddress.ip_network(str(g).strip(), strict=False)
             except ValueError:
                 continue
+            label = (str(net.network_address) if net.num_addresses == 1
+                     else str(net))
+            self._known_good[net.version].append(
+                (int(net.network_address), int(net.broadcast_address), label))
         # Canonicalized domain floor: the shipped core list plus the operator's
         # own domains from config (safety.known_good_domains — their mail
         # server, their SaaS tenant). Entries that don't normalize are dropped
@@ -148,9 +174,10 @@ class SafetyFilter:
 
     def _net_excluded_reason(self, net) -> Optional[str]:
         if self.protect_known_good:
-            for g in self._known_good:
-                if g in net:
-                    return f"protected public infrastructure ({g})"
+            lo, hi = int(net.network_address), int(net.broadcast_address)
+            for g_lo, g_hi, label in self._known_good[net.version]:
+                if lo <= g_hi and g_lo <= hi:
+                    return f"protected public infrastructure ({label})"
 
         if self.drop_private_reserved:
             for special in (_SPECIAL_V4 if net.version == 4 else _SPECIAL_V6):
@@ -162,6 +189,18 @@ class SafetyFilter:
             return f"netblock too wide (/{net.prefixlen}; minimum /{floor})"
 
         return None
+
+    def address_reason(self, address: str) -> Optional[str]:
+        """excluded_reason for one RESOLVED address: why blocking it would be
+        refused on an IP list, else None. A gateway that enforces a domain
+        list by the addresses the names resolve to is blocking those
+        addresses, so they answer to the same filter as a listed IP (see
+        resolved_guard). An unparseable address is refused, not waved on."""
+        try:
+            net = ipaddress.ip_network(str(address).split('%', 1)[0], strict=False)
+        except ValueError:
+            return "not an IP address"
+        return self._net_excluded_reason(net)
 
     def stored_value_reason(self, value: str, kind: str,
                             cidr: Optional[str] = None) -> Optional[str]:

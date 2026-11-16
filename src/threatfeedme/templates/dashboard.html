@@ -620,7 +620,7 @@
                 <option value="medium">IP: Medium tier</option>
                 <option value="low">IP: Everything (low)</option>
             </select>
-            <select id="unifi-domain-tier" title="Optionally also push a DOMAIN tier into Domain-type Network Lists (threatfeedme-dom-<tier>-N) — reference them in a policy, same as the IP lists">
+            <select id="unifi-domain-tier" title="Optionally also push a DOMAIN tier into Domain-type Network Lists (threatfeedme-dom-<tier>-N). The gateway blocks the addresses the names resolve to, so names on shared CDN addresses or not resolving are held back. Off empties the lists on the next push.">
                 <option value="" selected>Domains: off</option>
                 <option value="high">Domains: High tier</option>
                 <option value="medium">Domains: Medium tier</option>
