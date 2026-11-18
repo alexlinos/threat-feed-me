@@ -5190,9 +5190,11 @@
   "v6|us-east-1|AMAZON|2600:f0fb:c001::/48",
   "v6|us-east-1|AMAZON|2600:f0fb:c002::/56",
   "v6|us-east-1|AMAZON|2600:f0fb:c003::/48",
+  "v6|us-east-1|AMAZON|2600:f0fb:c007::/48",
   "v6|us-east-1|AMAZON|2600:f0fb:c0ff::/56",
   "v6|us-east-1|AMAZON|2600:f0fb:c800::/48",
   "v6|us-east-1|AMAZON|2600:f0fb:c801::/48",
+  "v6|us-east-1|AMAZON|2600:f0fb:c805::/48",
   "v6|us-east-1|AMAZON|2600:f0fb:c900:1000::/52",
   "v6|us-east-1|AMAZON|2600:f0fb:c900:2000::/52",
   "v6|us-east-1|AMAZON|2600:f0fb:c900:7000::/52",
@@ -5474,9 +5476,11 @@
   "v6|us-east-1|EC2|2600:f0fb:c001::/48",
   "v6|us-east-1|EC2|2600:f0fb:c002::/56",
   "v6|us-east-1|EC2|2600:f0fb:c003::/48",
+  "v6|us-east-1|EC2|2600:f0fb:c007::/48",
   "v6|us-east-1|EC2|2600:f0fb:c0ff::/56",
   "v6|us-east-1|EC2|2600:f0fb:c800::/48",
   "v6|us-east-1|EC2|2600:f0fb:c801::/48",
+  "v6|us-east-1|EC2|2600:f0fb:c805::/48",
   "v6|us-east-1|EC2|2600:f0fb:c900:1000::/52",
   "v6|us-east-1|EC2|2600:f0fb:c900:2000::/52",
   "v6|us-east-1|EC2|2600:f0fb:c900:7000::/52",
@@ -7056,6 +7060,6 @@
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f24:34::/48",
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f32:4000::/39"
  ],
- "fetched_at": "2026-11-17T16:10:09Z",
+ "fetched_at": "2026-11-18T15:46:13Z",
  "source": "aws_ip_ranges"
 }

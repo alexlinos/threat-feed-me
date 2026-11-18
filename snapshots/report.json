@@ -1,15 +1,20 @@
 {
- "fetched_at": "2026-11-17 16:10 UTC",
+ "fetched_at": "2026-11-18 15:46 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 7055,
+   "count": 7059,
    "baseline": false,
-   "added": 0,
+   "added": 4,
    "removed": 0,
-   "added_sample": [],
+   "added_sample": [
+    "v6|us-east-1|AMAZON|2600:f0fb:c007::/48",
+    "v6|us-east-1|AMAZON|2600:f0fb:c805::/48",
+    "v6|us-east-1|EC2|2600:f0fb:c007::/48",
+    "v6|us-east-1|EC2|2600:f0fb:c805::/48"
+   ],
    "removed_sample": [],
-   "pct_change": 0.0,
+   "pct_change": 0.06,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
@@ -103,23 +108,11 @@
    "status": "ok",
    "count": 105909,
    "baseline": false,
-   "added": 649,
-   "removed": 86,
-   "added_sample": [
-    "cidr|AzureArcInfrastructure.AustraliaEast|australiaeast|172.146.5.128/30",
-    "cidr|AzureArcInfrastructure.AustraliaEast|australiaeast|172.146.5.132/31",
-    "cidr|AzureArcInfrastructure.AustraliaEast|australiaeast|172.146.5.134/32",
-    "cidr|AzureArcInfrastructure.AustraliaEast|australiaeast|2603:1010:6:1a::5d5/128",
-    "cidr|AzureArcInfrastructure.AustraliaEast|australiaeast|2603:1010:6:1b::71c/126"
-   ],
-   "removed_sample": [
-    "cidr|AzureCloud.australiasoutheast|australiasoutheast|57.157.168.0/27",
-    "cidr|AzureCloud.australiasoutheast|australiasoutheast|57.157.168.32/28",
-    "cidr|AzureCloud.australiasoutheast|australiasoutheast|57.157.168.48/29",
-    "cidr|AzureCloud.australiasoutheast|australiasoutheast|57.157.168.56/30",
-    "cidr|AzureCloud.australiasoutheast|australiasoutheast|57.157.168.60/31"
-   ],
-   "pct_change": 0.7,
+   "added": 0,
+   "removed": 0,
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
    "min_v4_prefix": 11,
    "min_v6_prefix": 36,
    "alert": false,
