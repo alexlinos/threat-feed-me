@@ -26,6 +26,16 @@ Design constraints, learned from the community's scar tissue:
 
 Failures here must never break a refresh — the caller wraps the push and
 logs; the block lists keep serving either way.
+
+IP lists only. A domain arm (Domain-type network lists, 2.1 to 2.7.4) was
+RETIRED in 2.7.5: a domain list in a firewall policy is enforced by the
+addresses its names resolve to, so one listed name on shared hosting blocks
+every other site on that address. Three outages (a code host, a CDN, a
+static-site host) and three rounds of guards showed the premise was wrong,
+not the guards: the set of shared hosts has no end, a pre-push address check
+is a snapshot, and the gateway went on blocking addresses after the name had
+left the list. What remains of it here is clean-up: every push neutralises
+the lists that arm left on a gateway (withdraw).
 """
 import hashlib
 import json
@@ -36,14 +46,12 @@ import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from typing import Dict, List, Mapping, Optional, Tuple, cast
+from typing import Dict, List, Mapping, Optional, cast
 
 import requests
 
-from threatfeedme import resolved_guard
 from threatfeedme.exporter import firewall_value, is_included
 from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS
-from threatfeedme.safety import SafetyFilter
 
 logger = logging.getLogger(__name__)
 
@@ -76,14 +84,14 @@ _VALID_TIERS = ("high", "medium", "low")
 # strongest-kept truncation beyond it.
 TIER_LIST_COUNTS = {"high": 1, "medium": 4, "low": 10}
 
-# Which destination field each arm's policy must reference to actually act
-# on the pushed groups (issue #21). The live domain policy targets
-# matching_target=WEB and reads destination.web_group_id — a DIFFERENT
-# reference than the IP arm's ip_group_id — and it can point at a look-alike
-# object the pusher never writes, so a sync can report success while the
-# policy enforces something else entirely. When the operator names the
-# policies (ip_policy_id / domain_policy_id), every push reads them back and
-# fails its status unless the referenced object is one we just wrote.
+# Which destination field a policy must reference to actually act on the
+# pushed groups (issue #21). A policy can point at a look-alike object the
+# pusher never writes, so a sync can report success while the policy enforces
+# something else entirely. When the operator names the IP policy
+# (ip_policy_id), every push reads it back and fails its status unless the
+# referenced object is one we just wrote. The "domain" entry is what a
+# domain-list policy reads (destination.web_group_id, matching_target=WEB);
+# nothing pushes domains any more, the mapping documents the gateway.
 POLICY_DEST_FIELDS = {"ip": "ip_group_id", "domain": "web_group_id"}
 
 # The withheld tail retained per selection for the push summary / coverage API.
@@ -91,9 +99,14 @@ POLICY_DEST_FIELDS = {"ip": "ip_group_id", "domain": "web_group_id"}
 # just stop keeping the value list, so a pathological corpus can't make the
 # coverage report itself eat memory. The endpoint re-counts on demand.
 _WITHHELD_REPORT_CAP = 20000
-# Domains held back by the address check, kept with their reason for the
-# coverage view. The counts are always complete; only this sample is bounded.
-_ADDRESS_REPORT_CAP = 500
+
+# What a retired domain list is set to. The gateway refuses an EMPTY domain
+# list (api.err.FirewallGroupDomainMembersRequired, seen live: the 2.7.3
+# "off empties the lists" never worked on real hardware, only against a fake
+# that accepted it), and a list a policy references cannot be deleted. One
+# name under .invalid can never resolve (RFC 6761), so it matches nothing.
+DOMAIN_GROUP_TYPE = "domain-group"
+DOMAIN_PLACEHOLDER = "threatfeedme-empty.invalid"
 
 
 @dataclass
@@ -112,16 +125,6 @@ class Selection:
     vetoed before the cap ever applied — a separate, named exclusion (issue
     #19), not the same thing as whitelist or truncation and counted apart from
     both.
-
-    Domain arm only: ``protected_count`` / ``unresolved_count`` /
-    ``unchecked_count`` are names the address check held back (see
-    resolved_guard) because the gateway enforces a domain list by resolved
-    address. Like never-block they are counted apart and are not part of
-    ``total``; ``protected`` keeps a bounded (value, reason) sample.
-    ``filtered_count`` is the names answered only with a placeholder address
-    (a DNS filter in front of this server already blocks them, so their real
-    addresses are unknown); ``check_error`` says so when the chosen public
-    resolver could not be reached.
     """
     values: List[str]
     withheld: List[str]
@@ -131,12 +134,6 @@ class Selection:
     kept_floor: Optional[float] = None
     refused: List[str] = field(default_factory=list)
     refused_count: int = 0
-    protected: List[Tuple[str, str]] = field(default_factory=list)
-    protected_count: int = 0
-    unresolved_count: int = 0
-    unchecked_count: int = 0
-    filtered_count: int = 0
-    check_error: str = ""
 
 
 class UniFiPusher:
@@ -144,27 +141,8 @@ class UniFiPusher:
                  group_prefix: str = "threatfeedme", verify_ssl: bool = False,
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
-                 domain_tier: str = "",
-                 ip_policy_id: str = "", domain_policy_id: str = "",
-                 timeout: int = 20, session=None, cert_sha256: str = None,
-                 safety: Optional[SafetyFilter] = None,
-                 domain_check_resolver: str = ""):
-        # The filter resolved addresses answer to in the domain arm (the
-        # shipped floor when the caller has no config to read one from).
-        self.safety = safety if safety is not None else SafetyFilter()
-        self.resolve_budget = resolved_guard.DEFAULT_BUDGET
-        # Which resolver the domain arm's address check asks. "" is this
-        # server's own; a name from resolved_guard.PUBLIC_RESOLVERS sends the
-        # names being checked to that provider (operator's choice, off by
-        # default). An unknown value falls back to the server's own: the
-        # check must never go to a host nobody chose.
-        resolver = str(domain_check_resolver or "").strip().lower()
-        if resolver and resolver not in resolved_guard.PUBLIC_RESOLVERS:
-            logger.warning("[unifi] unknown domain_check_resolver %r; using "
-                           "this server's resolver", domain_check_resolver)
-            resolver = ""
-        self.check_resolver = resolver
-        self.allow_private_urls = False     # safety.allow_private_feed_urls
+                 ip_policy_id: str = "",
+                 timeout: int = 20, session=None, cert_sha256: str = None):
         self._last_groups: Optional[Dict] = None
         host = (host or "").strip()
         # Strip any scheme, then drop anything after the first '/' — a path
@@ -193,20 +171,10 @@ class UniFiPusher:
         self.tier = tier if tier in _VALID_TIERS else "high"
         if tier not in _VALID_TIERS:
             logger.warning("[unifi] unknown tier %r; using high", tier)
-        # Domain arm (optional, OFF by default): maintains Domain-type
-        # network lists ({prefix}-dom-{tier}-1..N) through the SAME
-        # firewall-group API as the IP arm — group_type 'domain-group'.
-        # Available on base firmware (no CyberSecure), and consumed the same
-        # way as the IP lists: the operator creates a policy referencing
-        # them. Empty string = don't push domains.
-        self.domain_tier = domain_tier if domain_tier in _VALID_TIERS else ""
-        if domain_tier and domain_tier not in _VALID_TIERS:
-            logger.warning("[unifi] unknown domain_tier %r; domain push off", domain_tier)
-        # Policy ids to verify after each arm's push (issue #21): the
-        # zone-based policy _id whose destination must reference the groups
-        # we wrote. Empty = no read-back check for that arm.
+        # Policy id to verify after the push (issue #21): the zone-based
+        # policy _id whose destination must reference the groups we wrote.
+        # Empty = no read-back check.
         self.ip_policy_id = (ip_policy_id or "").strip()
-        self.domain_policy_id = (domain_policy_id or "").strip()
         self.group_prefix = group_prefix or "threatfeedme"
         self.max_entries = max(1, int(max_entries))
         self.max_per_group = max(1, int(max_per_group))
@@ -245,11 +213,8 @@ class UniFiPusher:
             verify_ssl=bool(cfg.get('verify_ssl', False)),
             max_entries=cfg.get('max_entries', DEFAULT_MAX_ENTRIES),
             max_per_group=cfg.get('max_per_group', DEFAULT_MAX_PER_GROUP),
-            domain_tier=cfg.get('domain_tier', ''),
             ip_policy_id=cfg.get('ip_policy_id', ''),
-            domain_policy_id=cfg.get('domain_policy_id', ''),
             cert_sha256=cfg.get('cert_sha256'),
-            domain_check_resolver=cfg.get('domain_check_resolver', ''),
         )
 
     @classmethod
@@ -258,12 +223,7 @@ class UniFiPusher:
         cfg = effective_block(db, config)
         if not cfg.get('enabled'):
             return None
-        pusher = cls.from_block(cfg)
-        if pusher is not None:
-            pusher.safety = SafetyFilter.from_config(config)
-            pusher.allow_private_urls = bool(
-                ((config or {}).get('safety') or {}).get('allow_private_feed_urls', False))
-        return pusher
+        return cls.from_block(cfg)
 
     # ---------------- UniFi OS API plumbing ----------------
 
@@ -445,23 +405,8 @@ class UniFiPusher:
 
     # ---------------- Collection & sync ----------------
 
-    def _address_judge(self, never_block):
-        """Why a resolved address must not be blocked, for the domain arm:
-        the safety filter's verdict on it as an IP, then the operator's
-        never-block list. None means the address may be blocked."""
-        safety = self.safety
-
-        def judge(address: str) -> Optional[str]:
-            reason = safety.address_reason(address)
-            if reason:
-                return reason
-            if never_block is not None and never_block.matches(address):
-                return "on the never-block list"
-            return None
-        return judge
-
     def _select(self, db, kind: str, tier_value: str,
-                list_count: Optional[int], resolve: bool = True) -> Selection:
+                list_count: Optional[int]) -> Selection:
         """Whitelist- and v4-filter one tier's values and cap them in the
         deterministic total order that iter_indicators_by_tiers now streams.
 
@@ -474,12 +419,6 @@ class UniFiPusher:
         max_per_group). More than that would mint an extra list no policy
         references, so we truncate strongest-kept, per sync's fixed-count
         contract.
-
-        Domains pass one more gate before the cap: the gateway blocks the
-        addresses a listed name resolves to, so a name whose addresses the
-        IP filter would refuse (shared CDN edge above all) is held back, as
-        is one that does not resolve (resolved_guard). ``resolve`` false
-        answers from the lookup cache only, for the read-only coverage view.
         """
         if tier_value not in _VALID_TIERS:
             return Selection(values=[], withheld=[], cap=0, total=0)
@@ -496,10 +435,6 @@ class UniFiPusher:
         skipped_v6 = 0
         score_cutoff: Optional[float] = None
         kept_floor: Optional[float] = None
-        protected: List[Tuple[str, str]] = []
-        protected_count = unresolved_count = unchecked_count = 0
-        filtered_count = 0
-        check_error = ""
         nb = getattr(wl_map, "never_block", None)
 
         def eligible():
@@ -525,46 +460,7 @@ class UniFiPusher:
                     continue
                 yield value, ind.confidence_score
 
-        if kind == 'domain':
-            # Materialized first so no read cursor stays open across lookups.
-            rows = list(eligible())
-            public = (resolved_guard.PublicLookup(
-                self.check_resolver, allow_private=self.allow_private_urls)
-                if self.check_resolver else None)
-            verdicts = resolved_guard.screen(
-                [value for value, _ in rows], cap, self._address_judge(nb),
-                resolve=resolve, budget=self.resolve_budget, lookup=public,
-                source=self.check_resolver or resolved_guard.SYSTEM)
-            if public is not None and public.failed:
-                # A fixed sentence, never the exception text (it reaches the
-                # dashboard). Names it could not ask about are unchecked.
-                check_error = ("the public resolver did not answer"
-                               if public.down else
-                               "the public resolver failed for some names")
-                logger.warning("[unifi] %s (%s): %d lookup(s) failed; those "
-                               "names are held back and asked again next push",
-                               check_error, self.check_resolver, public.failed)
-            stream = ((value, score, verdict, detail)
-                      for (value, score), (verdict, detail) in zip(rows, verdicts))
-        else:
-            stream = ((value, score, resolved_guard.OK, "")
-                      for value, score in eligible())
-
-        for value, score, verdict, detail in stream:
-            if verdict == resolved_guard.PROTECTED:
-                protected_count += 1
-                if len(protected) < _ADDRESS_REPORT_CAP:
-                    protected.append((value, detail))
-                continue
-            if verdict == resolved_guard.FILTERED:
-                filtered_count += 1
-                continue
-            if verdict == resolved_guard.UNRESOLVED:
-                unresolved_count += 1
-                continue
-            if verdict == resolved_guard.UNCHECKED:
-                unchecked_count += 1
-                continue
+        for value, score in eligible():
             total += 1
             if len(kept) < cap:
                 kept.append(value)
@@ -580,16 +476,6 @@ class UniFiPusher:
         if refused_count:
             logger.info("[unifi] refused %d never-block value(s) in the %s tier",
                         refused_count, tier_value)
-        if protected_count or unresolved_count or unchecked_count or filtered_count:
-            # ASCII only: Windows consoles default to cp1252.
-            logger.warning(
-                "[unifi] %s domain tier: held back %d that resolve to shared or "
-                "protected addresses, %d answered with a placeholder address "
-                "(a DNS filter in front of this server already blocks them), "
-                "%d that do not resolve, %d not checked in time (checked on a "
-                "later push)",
-                tier_value, protected_count, filtered_count, unresolved_count,
-                unchecked_count)
         if total > cap:
             # ASCII only: Windows consoles default to cp1252.
             logger.warning(
@@ -599,21 +485,13 @@ class UniFiPusher:
                 tier_value, total, cap, cap, total - cap)
         return Selection(values=kept, withheld=withheld, cap=cap, total=total,
                          score_cutoff=score_cutoff, kept_floor=kept_floor,
-                         refused=refused, refused_count=refused_count,
-                         protected=protected, protected_count=protected_count,
-                         unresolved_count=unresolved_count,
-                         unchecked_count=unchecked_count,
-                         filtered_count=filtered_count,
-                         check_error=check_error)
+                         refused=refused, refused_count=refused_count)
 
-    def select(self, db, kind: str, tier_value: str,
-               resolve: bool = True) -> Selection:
+    def select(self, db, kind: str, tier_value: str) -> Selection:
         """A tier's selection with the fixed list-count cap applied — exactly
-        what the push writes, and what the coverage API reports. An unknown or
-        off tier selects nothing. ``resolve`` false keeps the domain arm's
-        address check to cached answers (no lookups)."""
-        return self._select(db, kind, tier_value, TIER_LIST_COUNTS.get(tier_value),
-                            resolve=resolve)
+        what the push writes, and what the coverage API reports. An unknown
+        tier selects nothing. Only kind 'ip' is ever pushed."""
+        return self._select(db, kind, tier_value, TIER_LIST_COUNTS.get(tier_value))
 
     def collect(self, db) -> List[str]:
         """The tier's IPv4/CIDR values, whitelist-applied, in deterministic
@@ -621,13 +499,6 @@ class UniFiPusher:
         the absolute max_entries ceiling only; the push path uses select(),
         which also applies the fixed-list-count cap."""
         return self._select(db, 'ip', self.tier, None).values
-
-    def collect_domains(self, db) -> List[str]:
-        """The domain tier's values, whitelist-applied, in deterministic score
-        order, capped like the IP arm (a content-filter list is compiled on
-        the gateway; unbounded lists are how UDMs get slow). The push path
-        uses select(), which also applies the fixed-list-count cap."""
-        return self._select(db, 'domain', self.domain_tier, None).values
 
     def sync(self, values: List[str], label: str = None,
              group_type: str = "address-group", list_count: int = None) -> Dict:
@@ -637,12 +508,10 @@ class UniFiPusher:
         referenced by a rule/policy can't be deleted; an empty group matches
         nothing).
 
-        Both arms share this: the IP arm labels groups {prefix}-{tier}
-        (address-group), the domain arm {prefix}-dom-{tier} (domain-group —
-        the Domain-type Network List on current firmware, same API). Stale
-        detection is scoped to the arm's OWN group_type, so the IP pass can
-        never empty the domain lists and vice versa, while still covering
-        both shrinkage and tier switches within an arm.
+        Groups are labelled {prefix}-{tier} (address-group). Stale detection
+        is scoped to the caller's OWN group_type, so the IP pass never touches
+        a domain-group (those are withdraw's business) while still covering
+        both shrinkage and tier switches.
 
         `list_count` fixes the number of lists (padding with empty ones):
         UniFi policies reference exactly one list each, so the count must
@@ -709,9 +578,9 @@ class UniFiPusher:
                 continue  # the other arm's groups are not ours to touch
             if not (name or "").startswith(marker) or name in current:
                 continue
-            if g.get('group_members') or []:
+            if (g.get('group_members') or []) != _cleared(group_type):
                 body = dict(g)
-                body['group_members'] = []
+                body['group_members'] = _cleared(group_type)
                 self._api('PUT', f"/rest/firewallgroup/{g['_id']}", json=body)
                 emptied += 1
 
@@ -725,27 +594,36 @@ class UniFiPusher:
 
 
     def withdraw(self, group_type: str, label: str) -> int:
-        """Empty every group of one arm ({prefix}-{label}*, of `group_type`)
-        and return how many held entries. For an arm the operator switched
-        off: the push used to simply stop visiting its lists, which left the
-        last contents on the gateway, still enforced, with nothing in the
-        panel saying so. Emptied, not deleted, for the same reason as stale
-        groups (a group a policy references cannot be deleted). Reuses the
-        listing the IP sync just read when there is one."""
+        """Neutralise every group named {prefix}-{label}* of `group_type` and
+        return how many still held real entries. Used for the retired domain
+        arm: its lists are still on gateways that ran it, still referenced by
+        the operator's Block policy, and a list nobody maintains keeps being
+        enforced. Neutralised, not deleted (a group a policy references
+        cannot be deleted): an address-group is emptied, a domain-group is
+        set to the one reserved name, because the gateway refuses an empty
+        domain list. A group already in that state is left alone, so a push
+        with nothing to clear makes no extra gateway call (it reuses the
+        listing the IP sync just read)."""
         groups = self._last_groups
         if groups is None:
             groups = {g.get('name'): g for g in self._api('GET', '/rest/firewallgroup')}
         marker = f"{self.group_prefix}-{label}"
-        emptied = 0
+        target = _cleared(group_type)
+        cleared = 0
         for name, g in groups.items():
             if g.get('group_type') != group_type or not (name or "").startswith(marker):
                 continue
-            if g.get('group_members') or []:
+            if list(g.get('group_members') or []) != target:
                 body = dict(g)
-                body['group_members'] = []
+                body['group_members'] = target
                 self._api('PUT', f"/rest/firewallgroup/{g['_id']}", json=body)
-                emptied += 1
-        return emptied
+                cleared += 1
+        return cleared
+
+
+def _cleared(group_type: str) -> List[str]:
+    """The members a group is set to when it must match nothing."""
+    return [DOMAIN_PLACEHOLDER] if group_type == DOMAIN_GROUP_TYPE else []
 
 
 def cert_fingerprint(host_url: str, timeout: float = 20) -> str:
@@ -816,22 +694,10 @@ def push_to_unifi(db, config: Dict) -> Optional[Dict]:
 
     Serialized (jobs.write_lock): the refresh, the whitelist export worker,
     the API and the CLI all push, and two concurrent syncs could interleave
-    their group edits on the gateway. The domain arm's selection runs BEFORE
-    the lock: its address check waits on DNS (up to the lookup budget), and
-    nothing else should queue behind that."""
+    their group edits on the gateway."""
     from threatfeedme import jobs
-    pusher = UniFiPusher.from_config(config, db=db)
-    if pusher is None:
-        return None
-    dsel: Optional[Selection] = None
-    derr: Optional[Exception] = None
-    if pusher.domain_tier:
-        try:
-            dsel = pusher.select(db, 'domain', pusher.domain_tier)
-        except Exception as e:      # reported as the domain arm's error below
-            derr = e
     with jobs.write_lock:
-        return _push_to_unifi(db, config, pusher, dsel, derr)
+        return _push_to_unifi(db, config)
 
 
 def _add_coverage(summary: Dict, sel: "Selection") -> None:
@@ -850,27 +716,10 @@ def _add_coverage(summary: Dict, sel: "Selection") -> None:
     # a named exclusion, counted apart from truncation (issue #19).
     if sel.refused_count:
         summary["never_block_refused"] = sel.refused_count
-    # The domain arm's address check (resolved_guard): names held back
-    # because the gateway would block shared or protected addresses, names
-    # that do not resolve, and names not checked inside the lookup budget.
-    # "filtered": answered only with a placeholder address, so a DNS filter
-    # in front of this server already blocks the name and its real addresses
-    # are unknown.
-    for key, count in (("address_withheld", sel.protected_count),
-                       ("filtered_withheld", sel.filtered_count),
-                       ("unresolved_withheld", sel.unresolved_count),
-                       ("unchecked_withheld", sel.unchecked_count)):
-        if count:
-            summary[key] = count
-    if sel.check_error:
-        summary["check_error"] = sel.check_error
 
 
-def _push_to_unifi(db, config: Dict, pusher: Optional[UniFiPusher] = None,
-                   dsel: Optional[Selection] = None,
-                   derr: Optional[Exception] = None) -> Optional[Dict]:
-    if pusher is None:
-        pusher = UniFiPusher.from_config(config, db=db)
+def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
+    pusher = UniFiPusher.from_config(config, db=db)
     if pusher is None:
         return None
     try:
@@ -901,54 +750,21 @@ def _push_to_unifi(db, config: Dict, pusher: Optional[UniFiPusher] = None,
         summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
         summary["created"], summary["updated"], summary["unchanged"],
         summary["emptied"], summary["withheld"])
-    # Domain arm: optional, and isolated — a domain-list failure must not
-    # roll back or hide the IP push that just succeeded. Its error is
-    # carried in the summary instead.
-    if pusher.domain_tier:
-        try:
-            if derr is not None:
-                raise derr
-            if dsel is None:
-                dsel = pusher.select(db, 'domain', pusher.domain_tier)
-            d = pusher.sync(dsel.values,
-                            label=f"dom-{pusher.domain_tier}",
-                            group_type="domain-group",
-                            list_count=TIER_LIST_COUNTS[pusher.domain_tier])
-            summary["domains"] = d
-            _add_coverage(d, dsel)
-            if pusher.check_resolver:
-                d["check_resolver"] = pusher.check_resolver
-            # Same read-back for the domain arm (issue #21): the live policy
-            # reads destination.web_group_id, a different object than the
-            # domain-group we write. A mismatch is surfaced as an explicit
-            # domain error (the IP push already succeeded and stands).
-            if pusher.domain_policy_id:
-                v = pusher.verify_policy_reference(pusher.domain_policy_id,
-                                                   d.get("written") or {}, "domain",
-                                                   filled=d.get("filled"))
-                d["policy_check"] = v
-                if not v["ok"]:
-                    raise RuntimeError(f"UniFi domain policy check failed: {v['error']}")
-            logger.info(
-                "[unifi] domain push: %d domains into %d list(s) [%s-dom-%s-*]: "
-                "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
-                d["entries"], d["groups"], pusher.group_prefix, pusher.domain_tier,
-                d["created"], d["updated"], d["unchanged"], d["emptied"], d["withheld"])
-        except Exception as e:
-            summary["domain_error"] = str(e)
-            logger.error("[unifi] domain push failed (IP push succeeded): %s", e)
-    else:
-        # Off means withdrawn: lists left over from when the arm was on are
-        # emptied, or the gateway keeps enforcing a list nobody maintains.
-        try:
-            emptied = pusher.withdraw("domain-group", "dom-")
-            if emptied:
-                summary["domains_withdrawn"] = emptied
-                logger.warning(
-                    "[unifi] domain push is off: emptied %d domain list(s) left "
-                    "on the gateway", emptied)
-        except Exception as e:
-            summary["domain_error"] = f"could not empty the domain lists: {e}"
-            logger.error("[unifi] could not empty the domain lists: %s", e)
+    # The retired domain arm's lists (2.1 to 2.7.4) are still on gateways that
+    # ran it. Neutralise them on every push; isolated, so a failure here never
+    # hides the IP push that just succeeded. The summary carries a fixed
+    # sentence, never the exception text: that names the gateway's address
+    # and reaches the dashboard.
+    try:
+        cleared = pusher.withdraw(DOMAIN_GROUP_TYPE, "dom-")
+        if cleared:
+            summary["domains_withdrawn"] = cleared
+            logger.warning(
+                "[unifi] the domain push is retired: replaced %d domain list(s) "
+                "left on the gateway with a placeholder that matches nothing",
+                cleared)
+    except Exception as e:
+        summary["domain_error"] = "could not clear the retired domain lists on the gateway"
+        logger.error("[unifi] could not clear the retired domain lists: %s", e)
     record_push_outcome(db, summary=summary)
     return summary

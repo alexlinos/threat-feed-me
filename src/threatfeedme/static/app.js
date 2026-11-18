@@ -1006,31 +1006,6 @@ function unifiCapNote(sum) {
     return s;
 }
 
-function unifiAddressNote(d) {
-    // The gateway blocks the ADDRESSES a listed domain resolves to, so the
-    // push holds back names on shared CDN or otherwise protected addresses
-    // and names that do not resolve. Say how many, or a short list looks
-    // like a broken push.
-    if (!d) return '';
-    let s = '';
-    if (d.address_withheld) s += ' · ' + d.address_withheld.toLocaleString() +
-        ' held back (resolve to shared CDN or protected addresses)';
-    // A placeholder answer (0.0.0.0, a block-page address) means a DNS filter
-    // in front of this server already blocks the name: its real addresses
-    // are unknown, so it is held back. Through a public resolver the same
-    // answer is simply where the name points.
-    if (d.filtered_withheld) s += ' · ' + d.filtered_withheld.toLocaleString() +
-        (d.check_resolver
-            ? ' pointing at a placeholder address'
-            : ' held back because this server\'s DNS answers them with a placeholder address ' +
-              '(a DNS filter already blocks them; choose a public resolver under "Check addresses" to check them)');
-    if (d.unresolved_withheld) s += ' · ' + d.unresolved_withheld.toLocaleString() + ' not resolving';
-    if (d.unchecked_withheld) s += ' · ' + d.unchecked_withheld.toLocaleString() +
-        ' not checked yet (next push)';
-    if (d.check_error) s += ' · address check: ' + d.check_error;
-    return s;
-}
-
 function unifiRenderStatus(s) {
     const el = document.getElementById('unifi-status');
     if (!el) return;
@@ -1045,12 +1020,11 @@ function unifiRenderStatus(s) {
             const sum = s.last_push.summary;
             let msg = 'Last push ' + at + ': ' + sum.entries.toLocaleString() +
                 ' IPs in ' + sum.groups + ' group(s)' + unifiCapNote(sum);
-            if (sum.domains) msg += ' · ' + sum.domains.entries.toLocaleString() +
-                ' domains in ' + sum.domains.groups + ' list(s)' + unifiCapNote(sum.domains) +
-                unifiAddressNote(sum.domains);
-            if (sum.domains_withdrawn) msg += ' · domain push is off: emptied ' +
-                sum.domains_withdrawn + ' domain list(s) on the gateway';
-            if (sum.domain_error) msg += ' · DOMAIN PUSH FAILED: ' + sum.domain_error;
+            // The domain push is retired: a push only clears what it left on
+            // the gateway. Say so once it has, and say if it could not.
+            if (sum.domains_withdrawn) msg += ' · domain push retired: replaced ' +
+                sum.domains_withdrawn + ' domain list(s) on the gateway with a placeholder that blocks nothing';
+            if (sum.domain_error) msg += ' · ' + sum.domain_error;
             parts.push(msg);
         }
     } else {
@@ -1069,8 +1043,10 @@ async function loadUnifiOnce() {
         document.getElementById('unifi-enabled').checked = !!s.enabled;
         document.getElementById('unifi-host').value = s.host || '';
         document.getElementById('unifi-tier').value = s.tier || 'high';
-        document.getElementById('unifi-domain-tier').value = s.domain_tier || '';
-        document.getElementById('unifi-domain-check').value = s.domain_check_resolver || '';
+        // Only an install that had the retired domain push switched on is
+        // told what happened to its list.
+        const retired = document.getElementById('unifi-domain-retired');
+        if (retired) retired.style.display = s.domain_tier_was ? '' : 'none';
         markSaved(document.getElementById('unifi-panel'));
         unifiRenderStatus(s);
     } catch (e) {
@@ -1091,36 +1067,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const warn = () => {
         const el = document.getElementById('unifi-tier-warning');
         const ip = document.getElementById('unifi-tier').value;
-        const dom = document.getElementById('unifi-domain-tier').value;
         const msgs = [];
         if (ip === 'medium') msgs.push('IP Medium = 4 lists');
         if (ip === 'low') msgs.push('IP Everything = 10 lists');
-        if (dom === 'medium') msgs.push('Domain Medium = 4 lists');
         let text = '';
         if (msgs.length) text = '⚠ ' + msgs.join(' · ') +
             ' — UniFi allows ONE list per policy, so that means one policy per list (per direction). ' +
             'All lists are created up front (some empty at first) so the policies you build now stay complete as the corpus grows. High = 1 list.';
-        // The gateway enforces a domain list by resolved address, not by
-        // name: say what that costs before the operator relies on it.
-        if (dom) text += (text ? ' ' : '⚠ ') +
-            'Domain lists: the gateway blocks the addresses these names resolve to, not the names. ' +
-            'Names on shared CDN addresses (most phishing sites) or not resolving are held back so other sites are not blocked with them; ' +
-            'expect a short list. For full domain coverage point a DNS filter at the domain feed URLs.';
         el.textContent = text;
         el.style.display = text ? '' : 'none';
     };
     document.getElementById('unifi-tier').addEventListener('change', warn);
-    document.getElementById('unifi-domain-tier').addEventListener('change', warn);
     box.addEventListener('toggle', () => { if (box.open) setTimeout(warn, 800); });
 });
+
+async function unifiDismissDomainNotice() {
+    // Clears what the retired domain push had saved; the notice is shown
+    // only while that is still there.
+    const r = await apiFetch('/api/integrations/unifi', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dismiss_domain_notice: true})});
+    if (r.ok) document.getElementById('unifi-domain-retired').style.display = 'none';
+    else alert('Could not save: the server isn\'t answering. Try again.');
+}
 
 async function unifiSave(quiet) {
     const body = {
         enabled: document.getElementById('unifi-enabled').checked,
         host: document.getElementById('unifi-host').value.trim(),
         tier: document.getElementById('unifi-tier').value,
-        domain_tier: document.getElementById('unifi-domain-tier').value,
-        domain_check_resolver: document.getElementById('unifi-domain-check').value,
     };
     const r = await apiFetch('/api/integrations/unifi', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});

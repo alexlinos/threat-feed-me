@@ -586,18 +586,11 @@ integrations:
     # and fits in one group; medium is ~2-4 groups. NEVER point this at
     # low/"everything" on a home gateway.
     tier: high
-    # Optionally ALSO push a domain tier into Domain-type network lists
-    # ({group_prefix}-dom-{tier}-1..N) — same firewall-group API as the IP
-    # arm, no CyberSecure required; reference the lists in a Block policy
-    # like the IP ones. Empty = off.
-    domain_tier: ""
-    # Where the domain arm looks up each name's addresses before pushing it
-    # (names on shared CDN or protected addresses are held back). Empty =
-    # this server's DNS. If that DNS filters threat domains it answers with
-    # a placeholder and those names are held back too; "cloudflare" or
-    # "google" asks that public resolver over HTTPS instead, which sends the
-    # names being checked to that provider (PRIVACY.md).
-    domain_check_resolver: ""
+    # IP lists only. The domain push (domain_tier, 2.1 to 2.7.4) was
+    # retired: a gateway enforces a domain list by the addresses its names
+    # resolve to, which blocks every other site on a shared address. A
+    # domain_tier left in an older config is ignored. For domains, use the
+    # gateway's own DNS filtering or a DNS filter on the domain feed URLs.
     group_prefix: threatfeedme
     # UDM certs are self-signed; enable only if yours has a real cert.
     verify_ssl: false

@@ -499,6 +499,29 @@ address-type feed import fed the wrong kind errors out on most firewalls.
 The on-disk exports split the same way (`*_confidence_ips.*` /
 `*_confidence_domains.*`).
 
+**Where each list belongs.** Many malicious sites sit behind a CDN, on
+addresses shared with thousands of unrelated sites. Whether a block list can
+take those sites down with it depends on how the firewall uses the list, not
+on the brand:
+
+| How the list is used | The firewall blocks by | Can it hit a shared CDN address? | Examples |
+|---|---|---|---|
+| IP list in a firewall rule | Address | Only if a shared address is on the list. Cloudflare's published proxy ranges are refused from every IP list. | FortiGate IP Address threat feed, PAN-OS External Dynamic List (IP), pfSense and OPNsense URL table aliases, Sophos third-party threat feed (IPv4) |
+| IP list in a DNS filter | The address a DNS answer contains | The same, and it drops the lookup of every name that resolves to a listed address. | FortiGate external IP block list in a DNS Filter profile |
+| Domain list in a DNS filter or another name-based feature | Name | No | FortiGate Domain Name threat feed (DNS Filter), PAN-OS External Dynamic List (Domain), Sophos third-party threat feed (domains), Pi-hole, AdGuard Home |
+| Domain or FQDN object in a firewall rule | The addresses the name resolves to | Yes | FortiGate FQDN address, PAN-OS FQDN address object, pfSense and OPNsense host aliases, Sophos FQDN host, MikroTik address-list DNS name, Cisco ASA and Secure Firewall FQDN object |
+
+So give the domain URLs to a feature that blocks by name, and never load
+them into address or FQDN objects that a rule resolves into IPs: each vendor
+in the last row documents that those are enforced by resolved address. The
+examples follow the vendors' own documentation, listed in the
+[2.7.4 release notes](https://github.com/alexlinos/threat-feed-me/releases/tag/v2.7.4);
+behaviour can differ by version, so check the page for yours. Other CDNs'
+ranges are not shipped: add any you never want blocked under
+`safety.known_good`, and prefer High or Medium for blocking. The UniFi push
+writes IP lists only, for the same reason (see
+[UniFi](#unifi-udm--udm-pro--udm-se)).
+
 **List size limits.** Many firewalls limit how many entries one list can hold
 (a mid-range FortiGate takes about 131,000 per connector; PAN-OS limits depend
 on the model). `?hosts=1` serves single addresses only, leaving out network
@@ -552,11 +575,11 @@ goes up only when the list's content changes. Like the list URLs, both are
 unauthenticated, so anyone who can reach the server can see which lists are
 switched on, including the names of your own lists (never their source URLs).
 
-- **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
+- **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed* (domain URLs as a *Domain Name* threat feed, used in a DNS Filter profile)
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
   [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP
-  and Domain network lists on the gateway after every refresh, managed from
-  the dashboard.
+  network lists on the gateway after every refresh, managed from the
+  dashboard. For domains, use the gateway's own DNS filtering.
 - **Sophos Firewall** (SFOS 21.0+): Active threat response → Third-party threat feeds → Add (type IPv4, action Block). SFOS
   "doesn't support IP address ranges, IPv6 addresses, network addresses, wildcard domains" (SFOS 21.5 help, *Configure third-party
   threat feeds*), so give it the list URL with `?hosts=1`: that serves single addresses only, with network entries left out
@@ -574,17 +597,16 @@ switched on, including the names of your own lists (never their source URLs).
 
 UniFi OS has no external-blocklist subscription, so threat-feed-me **pushes**
 instead of serving: after every refresh (and within seconds of any whitelist
-change) it maintains network lists on the gateway through the local API —
-**IP lists** `threatfeedme-<tier>-1..N` and, optionally, **Domain-type
-lists** `threatfeedme-dom-<tier>-1..N` (no CyberSecure required; chunked,
-because UniFi lists cap out around ~10k members). Everything is managed from
-the dashboard's **UniFi integration** panel:
+change) it maintains **IP lists** `threatfeedme-<tier>-1..N` on the gateway
+through the local API (chunked, because UniFi lists cap out around ~10k
+members). It pushes IP addresses only, never domains (see below).
+Everything is managed from the dashboard's **UniFi integration** panel:
 
 1. On the UDM, create a **dedicated local admin** restricted to the Network
    app (Admins & Users → Add Admin → *Restrict to local access only*).
 2. In the dashboard panel: enter the gateway address (e.g.
    `https://192.168.1.1`), pick the IP tier (**high** recommended for a
-   home gateway) and optionally a Domains tier, click **Set credentials**
+   home gateway), click **Set credentials**
    (stored write-only in the data volume's `.env`, never displayed again),
    then **Test connection** — it logs in and reads the gateway's lists
    without changing anything.
@@ -602,9 +624,7 @@ the dashboard's **UniFi integration** panel:
    Everything = 10, unused ones pre-created empty — so the policy set you
    build once stays complete as the corpus grows. Enable logging on the
    policies to see hits in the System Log / Flows. Membership updates
-   itself every refresh. (UI quirk: the Policy Table's Destination column
-   shows "–" for domain-list policies; open the policy — the reference is
-   saved and enforced.)
+   itself every refresh.
 
 Prefer files? The same settings live under `integrations.unifi` in
 `config.yaml` (the dashboard's values take precedence), credentials as
@@ -614,34 +634,27 @@ Prefer files? The same settings live under `integrations.unifi` in
 Lists shrink to empty rather than being deleted when the set contracts (a
 list referenced by a policy can't be deleted, and an empty list matches
 nothing). IPv6 indicators are skipped (UniFi address lists are v4-only).
-Domain policies use Destination type *Domain → List*.
 
-**What the domain lists can and cannot do.** A UniFi domain list in a
+**Domains are not pushed.** Earlier versions could also push a domain tier
+into a Domain-type list. That was retired, because a domain list in a
 firewall policy is not a DNS filter: the gateway blocks the *addresses* the
-listed names resolve to. Most phishing domains sit behind a CDN proxy, so
-blocking the name blocks one of the CDN's shared addresses and every
-unrelated site on it. The push therefore resolves each domain first and
-sends only names whose every address would be allowed on an IP list. Names
-on shared CDN addresses (commonly well over half of the High tier), names
-that do not resolve, and names pointing at private, protected or never-block
-addresses are held back; the panel's status line says how many. Expect a
-short list. Two limits remain: the gateway resolves the names itself, later,
-and may get a different answer, and other shared hosting is not recognised.
-For full domain coverage use a DNS filter instead: a Pi-hole or AdGuard
-Home polling `/feeds/domains/medium.txt` blocks by name and has none of
-this. Setting **Domains: off** empties the `threatfeedme-dom-*` lists on the
-next push.
+listed names resolve to. Many malicious sites sit on shared hosting (a CDN
+proxy, a static-site host, a website builder), so one listed name blocked an
+address that thousands of unrelated sites use. It took down a code host, a
+CDN and a static-site host on real networks, and checking each name's
+addresses before the push did not fix it: the set of shared hosts has no
+end, and the gateway went on blocking an address after the name had left the
+list. To block domains on a UniFi network, use the gateway's own DNS
+filtering (Content Filtering, Ad Blocking), or run a Pi-hole or AdGuard Home
+that polls `/feeds/domains/medium.txt`. Both block by name.
 
-**If this server's DNS already filters threat domains** (a UniFi gateway
-with content filtering or ad blocking on, a Pi-hole, AdGuard Home), it
-answers listed names with a placeholder such as `0.0.0.0` or the gateway's
-block-page address, and the check cannot see where they really point. Those
-names are held back and the status line counts them apart. On one network
-that was about 95% of the High tier, which left 31 of 870 domains pushed.
-To check them, set **Check addresses** in the UniFi panel to a public
-resolver (Cloudflare or Google, over HTTPS): it returns the real addresses.
-It is off by default because it sends the names being checked to that
-provider (see [PRIVACY.md](PRIVACY.md)).
+If the domain push was on, the next push replaces each
+`threatfeedme-dom-*` list on the gateway with one reserved name,
+`threatfeedme-empty.invalid`, which can never resolve and so blocks nothing
+(the gateway refuses an empty domain list, and a list a policy references
+cannot be deleted). Then delete your domain Block policy and the list in the
+UniFi console. If sites on shared hosting stay unreachable, restart the
+gateway: it can keep blocking addresses it learned from the old list.
 
 **Shared CDN addresses are never served.** Cloudflare's published proxy
 ranges are part of the safety floor (`safety.protect_known_good`), so an
@@ -850,28 +863,21 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
-**Upgrading to 2.7.3 or later with the UniFi push on.** What you will notice:
+**Upgrading to 2.7.5 with the UniFi push on.** What you will notice:
 
-- **The pushed domain list gets shorter, on purpose.** A UniFi domain list
-  blocks the addresses its names resolve to, so a phishing domain behind a
-  CDN blocked that CDN's shared addresses and every other site on them. A
-  domain now goes to the gateway only if every address it resolves to could
-  be on an IP list; the panel counts what was held back and why. Checked
-  through a public resolver, one install's 870 High domains became 242 to
-  push. The domain feed URLs are unchanged: a DNS filter polling them still
-  gets every domain.
-- **Behind a DNS filter it gets shorter still.** If the server's DNS already
-  blocks threat domains, most names come back as a placeholder address and
-  are held back: the same install pushed 31 through its gateway's DNS.
-  2.7.4 counts those apart and adds the **Check addresses** choice (see the
-  UniFi section above).
-- **Cloudflare's published ranges leave every IP list** on the first refresh
-  (`safety.protect_known_good`, on by default).
-- **Domains: off now empties the domain lists on the gateway** at the next
-  push. Before, the last pushed list stayed there, still enforced.
-- **The server looks up the domains it is about to push** through its own
-  resolver, or the public one you choose (see [PRIVACY.md](PRIVACY.md)).
-  Nothing is looked up unless the UniFi domain push is on.
+- **The domain push is gone.** If you had a Domains tier set, the next push
+  replaces the `threatfeedme-dom-*` list on the gateway with one reserved
+  name that blocks nothing, and the panel says so. The IP push is unchanged.
+  See [UniFi](#unifi-udm--udm-pro--udm-se) for why, and for what to use
+  for domains.
+- **Clean up on the gateway.** Delete the domain Block policy and the list
+  in the UniFi console. If sites on shared hosting (GitHub Pages, sites
+  behind Cloudflare) stay unreachable afterwards, restart the gateway.
+- **The server no longer looks up any domain.** The address check that
+  2.7.3 and 2.7.4 ran before a domain push, and its public-resolver option,
+  are removed with it.
+- **Cloudflare's published ranges are refused from every IP list**
+  (`safety.protect_known_good`, on by default; since 2.7.3).
 
 **Upgrading to 2.5 ("Flytrap").** What you will notice:
 
