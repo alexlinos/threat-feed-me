@@ -190,18 +190,6 @@ class SafetyFilter:
 
         return None
 
-    def address_reason(self, address: str) -> Optional[str]:
-        """excluded_reason for one RESOLVED address: why blocking it would be
-        refused on an IP list, else None. A gateway that enforces a domain
-        list by the addresses the names resolve to is blocking those
-        addresses, so they answer to the same filter as a listed IP (see
-        resolved_guard). An unparseable address is refused, not waved on."""
-        try:
-            net = ipaddress.ip_network(str(address).split('%', 1)[0], strict=False)
-        except ValueError:
-            return "not an IP address"
-        return self._net_excluded_reason(net)
-
     def stored_value_reason(self, value: str, kind: str,
                             cidr: Optional[str] = None) -> Optional[str]:
         """excluded_reason for a value ALREADY in the store, used by the

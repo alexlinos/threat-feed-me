@@ -598,13 +598,18 @@
            Everything = 10 — with unused lists created empty up front, so the policies you build
            once stay complete as the corpus grows into them. High is the recommended tier for
            exactly this reason.<br>
-           <b>Domains</b> can be pushed too (optional, no CyberSecure needed): set a Domains tier
-           above and the push maintains <b>Domain-type Network Lists</b> named
-           <code>threatfeedme-dom-&lt;tier&gt;-1..N</code> — reference them in a Block policy with
-           Destination type <i>Domain → List</i>. Known UniFi UI quirk: the Policy Table's
-           Destination column shows "–" for domain-list policies; open the policy to see the
-           reference (it's saved and enforced). Alternatively a Pi-hole/AdGuard polling the domain
-           feed URLs above does the same job off-gateway.</p>
+           <b>IP lists only.</b> The push does not send domains: a domain list in a firewall
+           policy blocks the addresses its names resolve to, and one listed name on shared
+           hosting blocks every other site on that address. For domains, use the gateway's own
+           DNS filtering (Content Filtering, Ad Blocking), or point a Pi-hole or AdGuard Home at
+           the domain feed URLs; both block by name.</p>
+        <p class="hint" id="unifi-domain-retired" style="display:none;color:var(--amber)">
+           <b>The domain push was retired.</b> It was switched on here, so the next push replaces
+           the <code>threatfeedme-dom-*</code> list on the gateway with one reserved name that
+           blocks nothing. The gateway can go on blocking addresses it already learned from the
+           old list: in UniFi, delete the Block policy that references the list (then the list
+           itself), and restart the gateway if sites on shared hosting stay unreachable.
+           <button type="button" class="mini-btn" onclick="unifiDismissDomainNotice()">Got it</button></p>
         <div class="wl-form" style="margin-top:8px" data-unsaved-scope>
             {# The bare switch shipped unlabeled and an operator saved with it
                untouched, then hit "enable the integration first" on Push —
@@ -619,16 +624,6 @@
                 <option value="high" selected>IP: High tier</option>
                 <option value="medium">IP: Medium tier</option>
                 <option value="low">IP: Everything (low)</option>
-            </select>
-            <select id="unifi-domain-tier" title="Optionally also push a DOMAIN tier into Domain-type Network Lists (threatfeedme-dom-<tier>-N). The gateway blocks the addresses the names resolve to, so names on shared CDN addresses or not resolving are held back. Off empties the lists on the next push.">
-                <option value="" selected>Domains: off</option>
-                <option value="high">Domains: High tier</option>
-                <option value="medium">Domains: Medium tier</option>
-            </select>
-            <select id="unifi-domain-check" title="Where the domain push looks up each name's addresses before sending it. If this server's DNS filters threat domains (a gateway content filter, an ad blocker), it answers with a placeholder and those names are held back; a public resolver sees their real addresses. Choosing one sends the names being checked to that provider over HTTPS.">
-                <option value="" selected>Check addresses: this server's DNS</option>
-                <option value="cloudflare">Check addresses: Cloudflare DNS (public)</option>
-                <option value="google">Check addresses: Google DNS (public)</option>
             </select>
             <button type="button" onclick="unifiSave()">Save</button>
             <button type="button" class="mini-btn" id="unifi-creds-btn" onclick="openUnifiCredsModal()">Set credentials</button>

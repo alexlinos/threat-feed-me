@@ -17,13 +17,12 @@ from pydantic import BaseModel
 
 from threatfeedme.auth import csrf_check, require_auth
 from threatfeedme.feed_ingestor import _redact
-from threatfeedme import core, resolved_guard
+from threatfeedme import core
 from threatfeedme.pusher_unifi import (DEFAULT_MAX_ENTRIES, DEFAULT_MAX_PER_GROUP,
                                        ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
                                        LAST_PUSH_KEY, UniFiPusher,
                                        effective_block, push_to_unifi)
 from threatfeedme.routers.feeds import _write_env_var
-from threatfeedme.safety import SafetyFilter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -88,16 +87,15 @@ def _status() -> dict:
         "host": block.get("host") or "",
         "site": block.get("site", "default"),
         "tier": block.get("tier", "high"),
-        # "" = domain push off; else the domain tier pushed into
-        # Domain-type network lists ({prefix}-dom-{tier}-1..N).
-        "domain_tier": block.get("domain_tier", ""),
-        # "" = the domain arm's address check asks this server's resolver;
-        # else the public resolver it asks (resolved_guard.PUBLIC_RESOLVERS).
-        "domain_check_resolver": block.get("domain_check_resolver", ""),
-        # Policy ids whose destinations must reference the pushed groups
-        # (issue #21 read-back); "" = no check for that arm.
+        # The domain push was retired in 2.7.5 (pusher_unifi). The tier an
+        # install had it set to is reported so the panel can tell that
+        # operator what happened to the list on their gateway; "" = never on.
+        "domain_push_retired": True,
+        "domain_tier_was": (block.get("domain_tier")
+                            if block.get("domain_tier") in _VALID_TIERS else ""),
+        # Policy id whose destination must reference the pushed groups
+        # (issue #21 read-back); "" = no check.
         "ip_policy_id": block.get("ip_policy_id", ""),
-        "domain_policy_id": block.get("domain_policy_id", ""),
         "group_prefix": block.get("group_prefix", "threatfeedme"),
         # Presence only — the values are write-only by design.
         "credentials_configured": bool(os.environ.get(ENV_USER)) and bool(os.environ.get(ENV_PASSWORD)),
@@ -128,14 +126,14 @@ class UniFiSettingsRequest(BaseModel):
     host: Optional[str] = None
     site: Optional[str] = None
     tier: Optional[str] = None
-    # "" turns the domain arm off (the default).
-    domain_tier: Optional[str] = None
-    # "" = this server's resolver (the default); else a public resolver by
-    # name. A closed list, never a URL.
-    domain_check_resolver: Optional[str] = None
-    # Zone-based policy ids to read back after each arm's push (issue #21).
+    # Zone-based policy id to read back after the push (issue #21).
     ip_policy_id: Optional[str] = None
-    domain_policy_id: Optional[str] = None
+    # domain_tier, domain_check_resolver and domain_policy_id belonged to the
+    # retired domain push. A dashboard tab left open across the upgrade still
+    # sends them; unknown fields are ignored, so its Save keeps working.
+    # True clears what that push had saved, which takes the panel's
+    # "domain push was retired" notice down once the operator has read it.
+    dismiss_domain_notice: Optional[bool] = None
 
 
 @router.post("/api/integrations/unifi")
@@ -143,16 +141,6 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
     """Update the runtime settings (merged over previously saved values)."""
     if request.tier is not None and request.tier not in _VALID_TIERS:
         raise HTTPException(status_code=400, detail="tier must be high, medium, or low")
-    if request.domain_tier is not None and request.domain_tier not in ("",) + _VALID_TIERS:
-        raise HTTPException(status_code=400,
-                            detail="domain_tier must be high, medium, low, or empty (off)")
-    if (request.domain_check_resolver is not None
-            and request.domain_check_resolver.strip().lower()
-            not in ("",) + tuple(resolved_guard.PUBLIC_RESOLVERS)):
-        raise HTTPException(
-            status_code=400,
-            detail="domain_check_resolver must be empty (this server's DNS) or one of: "
-                   + ", ".join(sorted(resolved_guard.PUBLIC_RESOLVERS)))
     if request.host is not None:
         host = request.host.strip()
         if host and not _HOST_RE.match(host):
@@ -180,13 +168,16 @@ def unifi_save(request: UniFiSettingsRequest, _=Depends(require_auth), _csrf=Dep
         _clear_credentials()
         credentials_cleared = True
         stored.pop("cert_sha256", None)     # the pin belongs to the old gateway
-    for field in ("enabled", "host", "site", "tier", "domain_tier",
-                  "ip_policy_id", "domain_policy_id"):
+    for field in ("enabled", "host", "site", "tier", "ip_policy_id"):
         value = getattr(request, field)
         if value is not None:
             stored[field] = value.strip() if isinstance(value, str) else value
-    if request.domain_check_resolver is not None:
-        stored["domain_check_resolver"] = request.domain_check_resolver.strip().lower()
+    if request.dismiss_domain_notice:
+        # "" rather than removed: it must also override a domain_tier still
+        # set in the config.yaml seed block.
+        stored["domain_tier"] = ""
+        for field in ("domain_check_resolver", "domain_policy_id"):
+            stored.pop(field, None)
     core.db.set_setting(SETTINGS_KEY, json.dumps(stored))
     status = _status()
     status["credentials_cleared"] = credentials_cleared
@@ -293,42 +284,26 @@ def unifi_withheld(kind: str = "ip", tier: Optional[str] = None,
     live corpus and contacts NO gateway, so it is safe to poll before the
     integration is even enabled.
 
-    `kind` is 'ip' or 'domain'; `tier` defaults to the configured push tier
-    (the domain tier for the domain arm). The domain arm being off, or an
-    unusable tier, reports nothing withheld rather than erroring."""
+    `kind` is 'ip'; `tier` defaults to the configured push tier. 'domain'
+    is still accepted, for callers written against the retired domain push,
+    and always reports nothing (and `retired`): no domain is pushed."""
     if kind not in ("ip", "domain"):
         raise HTTPException(status_code=400, detail="kind must be ip or domain")
     block = effective_block(core.db, core.config)
-    use_tier = (tier if tier is not None
-                else block.get("tier", "high") if kind == "ip"
-                else block.get("domain_tier", ""))
-    if use_tier not in _VALID_TIERS:
+    use_tier = tier if tier is not None else block.get("tier", "high")
+    if kind == "domain" or use_tier not in _VALID_TIERS:
         return {"kind": kind, "tier": use_tier or "", "cap": 0, "entries": 0,
                 "tier_total": 0, "withheld_count": 0, "withheld": [],
                 "withheld_score_cutoff": None, "kept_score_floor": None,
-                "address_withheld": 0, "filtered_withheld": 0,
-                "unresolved_withheld": 0,
-                "unchecked_withheld": 0, "address_withheld_sample": []}
+                "retired": kind == "domain"}
     # Hostless on purpose: select() only reads the local corpus, so the
     # coverage view works before the operator has committed to a gateway.
-    pusher = UniFiPusher(host="", tier=(use_tier if kind == "ip" else "high"),
-                         domain_tier=(use_tier if kind == "domain" else ""),
+    pusher = UniFiPusher(host="", tier=use_tier,
                          group_prefix=block.get("group_prefix", "threatfeedme"),
                          max_entries=block.get("max_entries", DEFAULT_MAX_ENTRIES),
-                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP),
-                         safety=SafetyFilter.from_config(core.config),
-                         domain_check_resolver=block.get("domain_check_resolver", ""))
-    # resolve=False: a GET must not start DNS lookups. The domain arm's
-    # address check answers from what the last push resolved; names it has
-    # no answer for are reported as unchecked.
-    sel = pusher.select(core.db, kind, use_tier, resolve=False)
-    return {"kind": kind, "tier": use_tier, "cap": sel.cap,
-            "address_withheld": sel.protected_count,
-            "filtered_withheld": sel.filtered_count,
-            "unresolved_withheld": sel.unresolved_count,
-            "unchecked_withheld": sel.unchecked_count,
-            "address_withheld_sample": [
-                {"value": value, "reason": reason} for value, reason in sel.protected],
+                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP))
+    sel = pusher.select(core.db, kind, use_tier)
+    return {"kind": kind, "tier": use_tier, "cap": sel.cap, "retired": False,
             "entries": len(sel.values), "tier_total": sel.total,
             "withheld_count": max(0, sel.total - len(sel.values)),
             "withheld_score_cutoff": sel.score_cutoff,

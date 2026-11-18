@@ -1211,6 +1211,51 @@ which is why it did not show this.
   renders a single newline in a release body as a line break, so write one
   line per paragraph or unwrap before `gh release create`.
 
+## v2.7.5: the UniFi domain push is RETIRED (maintainer, 2026-11-18)
+
+Everything above about a UniFi domain arm (2.1.0, 2.6.3, 2.7.3, 2.7.4) is
+history. Do not rebuild it, and do not add another guard to it.
+
+- **Why.** The day 2.7.4's public resolver went live on one install, the
+  list grew from 284 to 573 names and one of them was a custom domain on a
+  static-site host. The gateway blocked that host's four shared addresses
+  (a direct connection timed out; the neighbouring address in the same
+  block answered), so every site on the host was unreachable. 20 more
+  listed names sat on another host's shared address. Third outage of the
+  same kind. The maintainer's read, which is right: we were chasing a
+  design flaw. A domain list in a firewall policy is enforced by address;
+  the set of shared hosts has no end; a pre-push check is a snapshot.
+- **The gateway does not let go.** After the list no longer held the name,
+  and with no group on the gateway holding the name or the addresses, the
+  addresses stayed blocked for the 10+ minutes measured. Releasing them
+  takes a change on the gateway (delete the policy, or restart). This is
+  why "withdrawn on the next push" was never a real safety property.
+- **The gateway refuses an empty domain list**
+  (`api.err.FirewallGroupDomainMembersRequired`). 2.7.3's "off empties the
+  lists" never worked on hardware: the test fake accepted the request. The
+  fake now refuses it. A retired list is set to ONE reserved name,
+  `pusher_unifi.DOMAIN_PLACEHOLDER` (`.invalid`, never resolves).
+- **What the code does now.** `pusher_unifi` pushes IP lists only; every
+  push calls `withdraw("domain-group", "dom-")`, which neutralises leftover
+  lists and costs no gateway call when there is nothing to do.
+  `resolved_guard.py`, the public-resolver setting, `SafetyFilter.address_reason`
+  and the domain selects in the panel are gone, and with them every DNS
+  lookup of an indicator (PRIVACY.md lost two paragraphs). A stored
+  `domain_tier` is ignored; it only drives the panel's "was retired"
+  notice until the operator dismisses it (`dismiss_domain_notice`).
+  `/api/integrations/unifi/withheld?kind=domain` answers `retired`.
+- **Kept from 2.7.3**: Cloudflare's ranges in the IP safety floor
+  (`safety.SHARED_EDGE`), `safety.known_good` taking CIDRs, the list query
+  API. Those were right.
+- **If UniFi domains are ever wanted again**, the only sound route is a
+  name-based one: the gateway's content-filtering block list (the API was
+  CyberSecure-gated and undocumented when last tried, 2.1.0), never a
+  firewall object. The gateway's own DNS filter already answered most of
+  the tier with its block page on the network measured.
+- **Lesson for fakes**: a fake that accepts what the real device refuses
+  hides the bug the test exists to catch. When a live device rejects a
+  request, teach the fake the same refusal in the same change.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
