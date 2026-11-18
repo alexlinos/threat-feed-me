@@ -1151,7 +1151,7 @@ its own name behind a proxy. What changed, and what to keep in mind:
   every copy it has seen. A test that needs specific answers patches
   `pu.resolved_guard.__dict__`, the copy its own pusher uses.
 
-### The check behind a DNS filter (found on the 2.7.3 roll, fix on 2.7)
+### v2.7.4 (2026-11-18): the check behind a DNS filter (found on the 2.7.3 roll)
 
 Two installs that push to one gateway were rolled to 2.7.3 the day it
 shipped. Neither sent a CDN-hosted name again, but the lists collapsed (31
