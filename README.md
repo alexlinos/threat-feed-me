@@ -499,6 +499,29 @@ address-type feed import fed the wrong kind errors out on most firewalls.
 The on-disk exports split the same way (`*_confidence_ips.*` /
 `*_confidence_domains.*`).
 
+**Where each list belongs.** Many malicious sites sit behind a CDN, on
+addresses shared with thousands of unrelated sites. Whether a block list can
+take those sites down with it depends on how the firewall uses the list, not
+on the brand:
+
+| How the list is used | The firewall blocks by | Can it hit a shared CDN address? | Examples |
+|---|---|---|---|
+| IP list in a firewall rule | Address | Only if a shared address is on the list. Cloudflare's published proxy ranges are refused from every IP list. | FortiGate IP Address threat feed, PAN-OS External Dynamic List (IP), pfSense and OPNsense URL table aliases, Sophos third-party threat feed (IPv4) |
+| IP list in a DNS filter | The address a DNS answer contains | The same, and it drops the lookup of every name that resolves to a listed address. | FortiGate external IP block list in a DNS Filter profile |
+| Domain list in a DNS filter or another name-based feature | Name | No | FortiGate Domain Name threat feed (DNS Filter), PAN-OS External Dynamic List (Domain), Sophos third-party threat feed (domains), Pi-hole, AdGuard Home |
+| Domain or FQDN object in a firewall rule | The addresses the name resolves to | Yes | FortiGate FQDN address, PAN-OS FQDN address object, pfSense and OPNsense host aliases, Sophos FQDN host, MikroTik address-list DNS name, Cisco ASA and Secure Firewall FQDN object |
+
+So give the domain URLs to a feature that blocks by name, and never load
+them into address or FQDN objects that a rule resolves into IPs: each vendor
+in the last row documents that those are enforced by resolved address. The
+examples follow the vendors' own documentation, listed in the
+[2.7.4 release notes](https://github.com/alexlinos/threat-feed-me/releases/tag/v2.7.4);
+behaviour can differ by version, so check the page for yours. Other CDNs'
+ranges are not shipped: add any you never want blocked under
+`safety.known_good`, and prefer High or Medium for blocking. UniFi is the one
+integration that writes domains into a firewall object, which is why its
+push checks every name first (see [UniFi](#unifi-udm--udm-pro--udm-se)).
+
 **List size limits.** Many firewalls limit how many entries one list can hold
 (a mid-range FortiGate takes about 131,000 per connector; PAN-OS limits depend
 on the model). `?hosts=1` serves single addresses only, leaving out network
@@ -552,7 +575,7 @@ goes up only when the list's content changes. Like the list URLs, both are
 unauthenticated, so anyone who can reach the server can see which lists are
 switched on, including the names of your own lists (never their source URLs).
 
-- **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed*
+- **FortiGate:** Security Fabric → External Connectors → Create New → *IP Address Threat Feed* (domain URLs as a *Domain Name* threat feed, used in a DNS Filter profile)
 - **UniFi (UDM / UDM Pro / UDM SE):** UniFi can't poll a URL — use the built-in
   [push integration](#unifi-udm--udm-pro--udm-se) instead: it maintains IP
   and Domain network lists on the gateway after every refresh, managed from
@@ -637,7 +660,7 @@ with content filtering or ad blocking on, a Pi-hole, AdGuard Home), it
 answers listed names with a placeholder such as `0.0.0.0` or the gateway's
 block-page address, and the check cannot see where they really point. Those
 names are held back and the status line counts them apart. On one network
-that was about 95% of the High tier, which left 31 of 870 domains pushed.
+that was 809 of the 870 High-tier domains, which left 31 pushed.
 To check them, set **Check addresses** in the UniFi panel to a public
 resolver (Cloudflare or Google, over HTTPS): it returns the real addresses.
 It is off by default because it sends the names being checked to that
