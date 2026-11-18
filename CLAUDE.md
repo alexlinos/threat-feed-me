@@ -1189,6 +1189,27 @@ which is why it did not show this.
   templates and static files from the working tree. Switch the checkout
   back to the released commit after working on a branch, or the running
   server pairs old Python with new JavaScript.
+- **First real push through a public resolver** (2026-11-18, an install on
+  2.7.4 set to Cloudflare): 573 of 1,676 High domains pushed, up from 284
+  through its own DNS, no failed lookups, 37 s. A refresh that changes
+  nothing skips the push, so addresses are rechecked only when a push
+  happens.
+- **How other firewalls treat a domain** (each vendor's own documentation,
+  read 2026-11-18; the pages are linked from the v2.7.4 release notes). An
+  FQDN or domain object in a firewall rule is enforced by resolved address
+  on FortiGate, PAN-OS, pfSense, OPNsense, Sophos, MikroTik and Cisco.
+  Name-based: FortiGate's Domain Name threat feed (DNS Filter), PAN-OS
+  Domain EDLs, Sophos third-party feed domains (the least certain row: it
+  rests on a table covering all Sophos threat-feed modules). A FortiGate IP
+  feed used in a DNS Filter profile drops the lookup of any name that
+  resolves to a listed address, so a shared address on an IP list costs
+  more there than in a policy; the dashboard how-to suggests that use.
+  Ubiquiti documents neither how a firewall policy matches a domain list
+  nor the block address its content filter answers with. README "Where each
+  list belongs" carries the table: keep brand claims tied to a vendor page.
+- **Release notes**: v2.7.4 has a GitHub Release (it covers 2.7.3). GitHub
+  renders a single newline in a release body as a line break, so write one
+  line per paragraph or unwrap before `gh release create`.
 
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
