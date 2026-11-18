@@ -58,6 +58,16 @@ class FakeSession:
             return FakeResponse(raw=self.policies)
         if method == "GET" and url.endswith("/rest/firewallgroup"):
             return FakeResponse(list(self.groups.values()))
+        if method in ("POST", "PUT") and "/rest/firewallgroup" in url:
+            # A real gateway refuses a domain list with no members. The fake
+            # used to accept one, which is how "off empties the list" shipped
+            # in 2.7.3 without ever working on hardware.
+            group_type = (json or {}).get("group_type")
+            if method == "PUT":
+                group_type = group_type or self.groups[url.rsplit("/", 1)[1]].get("group_type")
+            if group_type == "domain-group" and not (json or {}).get("group_members"):
+                return FakeResponse(status=400, raw={"meta": {
+                    "rc": "error", "msg": "api.err.FirewallGroupDomainMembersRequired"}})
         if method == "POST" and url.endswith("/rest/firewallgroup"):
             gid = f"g{self._next_id}"
             self._next_id += 1
@@ -289,15 +299,17 @@ def test_api_unifi_withheld_endpoint(api_client):
     assert j["kept_score_floor"] == 0.08 and j["withheld_score_cutoff"] == 0.07
 
 
-def test_api_unifi_withheld_domain_off_is_empty(api_client):
+def test_api_unifi_withheld_reports_no_domains(api_client):
+    # The domain push is retired. Callers written against it still get an
+    # answer: nothing is pushed, nothing is withheld, and it says why.
     from threatfeedme import core
-    from threatfeedme.pusher_unifi import SETTINGS_KEY
-    core.db.set_setting(SETTINGS_KEY, json.dumps({"domain_tier": ""}))
-    try:
-        j = api_client.get("/api/integrations/unifi/withheld", params={"kind": "domain"}).json()
-    finally:
-        core.db.set_setting(SETTINGS_KEY, json.dumps({}))
-    assert j["withheld_count"] == 0 and j["cap"] == 0 and j["withheld"] == []
+    core.db.add_indicator("evil.example.io", "f1", {}, kind="domain")
+    core.db.set_indicator_score("evil.example.io", 0.9, "high")
+    for query in ({"kind": "domain"}, {"kind": "domain", "tier": "high"}):
+        j = api_client.get("/api/integrations/unifi/withheld", params=query).json()
+        assert j["retired"] is True
+        assert j["entries"] == 0 and j["withheld_count"] == 0 and j["withheld"] == []
+    assert api_client.get("/api/integrations/unifi/withheld").json()["retired"] is False
 
 
 # ---------------- sync reconciliation ----------------
@@ -394,69 +406,6 @@ def test_sync_empty_corpus_pushes_one_empty_group():
     assert g["name"] == "tfm-medium-1" and g["group_members"] == []
 
 
-# ---------------- domain arm (Content Filtering profile) ----------------
-
-def test_collect_domains_is_domain_only_and_whitelisted(tmp_path):
-    from threatfeedme.database import Database
-    db = Database(str(tmp_path / "t.db"))
-    db.add_indicator("203.0.113.1", "f1", {})                        # wrong kind
-    db.add_indicator("evil-a.example.io", "f1", {}, kind="domain")
-    db.add_indicator("evil-b.example.io", "f1", {}, kind="domain")
-    db.add_to_whitelist("evil-b.example.io", "fp", "t")
-    for v, tier in (("203.0.113.1", "high"), ("evil-a.example.io", "high"),
-                    ("evil-b.example.io", "high")):
-        db.set_indicator_score(v, 0.5, tier)
-    p = _pusher(FakeSession(), domain_tier="high")
-    assert p.collect_domains(db) == ["evil-a.example.io"]
-
-
-def test_domain_sync_creates_domain_groups_isolated_from_ip_groups():
-    """Both arms share sync() but scope stale detection to their own
-    group_type — the IP pass must never empty the domain lists (they share
-    the name prefix) and vice versa."""
-    s = FakeSession(groups=[
-        {"_id": "d1", "name": "tfm-dom-high-1", "group_type": "domain-group",
-         "group_members": ["old.example.io"]},
-    ])
-    p = _pusher(s, tier="high", domain_tier="high", max_per_group=2)
-    p.login()
-    # IP sync runs first and must not touch the (stale-looking) domain list.
-    p.sync(["198.51.100.1"])
-    assert s.groups["d1"]["group_members"] == ["old.example.io"]
-    # Domain sync updates its own list and leaves the IP group alone.
-    r = p.sync(["evil-a.example.io", "evil-b.example.io", "evil-c.example.io"],
-               label="dom-high", group_type="domain-group")
-    assert r["entries"] == 3 and r["groups"] == 2
-    assert r["updated"] == 1 and r["created"] == 1
-    by_name = {g["name"]: g for g in s.groups.values()}
-    assert by_name["tfm-dom-high-1"]["group_members"] == ["evil-a.example.io", "evil-b.example.io"]
-    assert by_name["tfm-dom-high-2"]["group_type"] == "domain-group"
-    assert by_name["tfm-high-1"]["group_members"] == ["198.51.100.1"]
-
-
-def test_push_includes_domain_summary(tmp_path, monkeypatch):
-    from threatfeedme.database import Database
-    from threatfeedme import pusher_unifi as pu
-    db = Database(str(tmp_path / "t.db"))
-    db.add_indicator("203.0.113.9", "f1", {})
-    db.add_indicator("evil.example.io", "f1", {}, kind="domain")
-    db.set_indicator_score("203.0.113.9", 0.9, "high")
-    db.set_indicator_score("evil.example.io", 0.9, "high")
-    monkeypatch.setenv(ENV_USER, "svc")
-    monkeypatch.setenv(ENV_PASSWORD, "pw")
-    session = FakeSession()
-    monkeypatch.setattr(pu.UniFiPusher, "from_config",
-                        classmethod(lambda cls, config, db=None: _pusher(
-                            session, tier="high", domain_tier="high")))
-    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
-        "enabled": True, "host": "192.168.1.1"}}})
-    assert summary["entries"] == 1                       # IP arm
-    assert summary["domains"]["entries"] == 1            # domain arm
-    assert "domain_error" not in summary
-    names = {g["name"]: g["group_type"] for g in session.groups.values()}
-    assert names == {"tfm-high-1": "address-group", "tfm-dom-high-1": "domain-group"}
-
-
 # ---------------- dashboard API (settings, credentials, test, push) ----------------
 
 @pytest.fixture(scope="module")
@@ -506,32 +455,43 @@ def test_api_settings_roundtrip_and_validation(api_client):
     assert api_client.get("/api/integrations/unifi").json()["host"] == "192.168.1.1"
 
 
-def test_api_domain_check_resolver_is_a_closed_choice(api_client):
-    # The address check may ask a public resolver, chosen by NAME. A typed
-    # URL would be one more place the server fetches an address someone
-    # entered, with the checked names in the query.
-    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == ""
-    r = api_client.post("/api/integrations/unifi",
-                        json={"domain_check_resolver": " Cloudflare "})
-    assert r.status_code == 200 and r.json()["domain_check_resolver"] == "cloudflare"
-    for bad in ("https://resolver.example.net/dns-query", "quad9", "1.1.1.1"):
-        r = api_client.post("/api/integrations/unifi",
-                            json={"domain_check_resolver": bad})
-        assert r.status_code == 400
-        assert bad not in r.text                    # refused values are not echoed
-    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == "cloudflare"
-    # Other saves leave it alone; "" switches back to this server's DNS.
-    api_client.post("/api/integrations/unifi", json={"tier": "high"})
-    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == "cloudflare"
-    api_client.post("/api/integrations/unifi", json={"domain_check_resolver": ""})
-    assert api_client.get("/api/integrations/unifi").json()["domain_check_resolver"] == ""
+def test_api_ignores_the_retired_domain_settings(api_client):
+    # A dashboard tab left open across the upgrade still posts these fields.
+    # Its Save must keep working, and nothing it sends may switch a domain
+    # push back on.
+    r = api_client.post("/api/integrations/unifi", json={
+        "tier": "high", "domain_tier": "high", "domain_check_resolver": "cloudflare",
+        "domain_policy_id": "pol-1"})
+    assert r.status_code == 200
+    j = api_client.get("/api/integrations/unifi").json()
+    assert j["domain_push_retired"] is True and j["domain_tier_was"] == ""
+    for gone in ("domain_tier", "domain_check_resolver", "domain_policy_id"):
+        assert gone not in j
 
 
-def test_api_coverage_reports_filtered_names(api_client):
-    j = api_client.get("/api/integrations/unifi/withheld?kind=domain&tier=high").json()
-    assert j["filtered_withheld"] == 0
-    assert api_client.get("/api/integrations/unifi/withheld?kind=domain").json()[
-        "filtered_withheld"] == 0                    # arm off: the empty report has the key too
+def test_api_tells_an_install_that_had_the_domain_push_on(api_client):
+    # The setting an older version saved is how the panel knows to explain
+    # what happened to the list on that operator's gateway, until dismissed.
+    from threatfeedme import core
+    from threatfeedme.pusher_unifi import SETTINGS_KEY
+    before = core.db.get_setting(SETTINGS_KEY)
+    core.db.set_setting(SETTINGS_KEY, json.dumps({
+        "host": "192.168.1.1", "domain_tier": "medium",
+        "domain_check_resolver": "google", "domain_policy_id": "pol-1"}))
+    try:
+        assert api_client.get("/api/integrations/unifi").json()["domain_tier_was"] == "medium"
+        # Unrelated saves leave the notice up.
+        api_client.post("/api/integrations/unifi", json={"tier": "high"})
+        assert api_client.get("/api/integrations/unifi").json()["domain_tier_was"] == "medium"
+        r = api_client.post("/api/integrations/unifi", json={"dismiss_domain_notice": True})
+        assert r.status_code == 200 and r.json()["domain_tier_was"] == ""
+        stored = json.loads(core.db.get_setting(SETTINGS_KEY))
+        # "" and not absent, so it also overrides a config.yaml seed value.
+        assert stored["domain_tier"] == ""
+        assert not {"domain_check_resolver", "domain_policy_id"} & set(stored)
+        assert stored["host"] == "192.168.1.1"
+    finally:
+        core.db.set_setting(SETTINGS_KEY, before or json.dumps({}))
 
 
 def test_api_credentials_write_only(api_client, monkeypatch):
@@ -649,7 +609,7 @@ def test_verify_policy_reference_passes_only_when_referenced_id_is_ours():
     written object id. Same id -> ok; a foreign look-alike object (the live
     bug: policy reads a web group the pusher never writes) -> explicit
     error, never a silent pass."""
-    p = _pusher(FakeSession(), ip_policy_id="pol-ip", domain_policy_id="pol-dom")
+    p = _pusher(FakeSession(), ip_policy_id="pol-ip")
     written = {"tfm-high-1": "g1"}
 
     s = FakeSession(policies=[_policy("pol-ip", "TFM IP", "ip_group_id", "g1")])
@@ -763,32 +723,6 @@ def test_push_succeeds_and_reports_check_when_policy_points_at_our_group(tmp_pat
     assert summary is not None
     assert summary["policy_check"]["ok"] is True
     assert "disabled" in summary["policy_check"]["warning"]
-
-
-def test_domain_policy_mismatch_is_an_explicit_domain_error(tmp_path, monkeypatch):
-    """The exact #21 shape: domain groups write fine (1765-style), the live
-    policy reads a 2015-member web group we never write. The domain arm's
-    status must say so explicitly while the IP push stands."""
-    from threatfeedme.database import Database
-    from threatfeedme import pusher_unifi as pu
-    db = Database(str(tmp_path / "t.db"))
-    db.add_indicator("203.0.113.9", "f1", {})
-    db.add_indicator("evil.example.io", "f1", {}, kind="domain")
-    db.set_indicator_score("203.0.113.9", 0.9, "high")
-    db.set_indicator_score("evil.example.io", 0.9, "high")
-    monkeypatch.setenv(ENV_USER, "svc")
-    monkeypatch.setenv(ENV_PASSWORD, "pw")
-    session = FakeSession(policies=[_policy("pol-dom", "TFM Dom", "web_group_id", "g-web-2015")])
-    monkeypatch.setattr(pu.UniFiPusher, "from_config",
-                        classmethod(lambda cls, config, db=None: _pusher(
-                            session, tier="high", domain_tier="high",
-                            domain_policy_id="pol-dom")))
-    summary = pu.push_to_unifi(db, {"integrations": {"unifi": {
-        "enabled": True, "host": "192.168.1.1"}}})
-    assert summary is not None
-    assert summary["entries"] == 1                          # IP push stands
-    assert "domain_error" in summary and "policy check failed" in summary["domain_error"]
-    assert summary["domains"]["policy_check"]["referenced_group_id"] == "g-web-2015"
 
 
 def test_no_policy_ids_means_no_policy_readback_calls():

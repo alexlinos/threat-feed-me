@@ -119,7 +119,7 @@ def test_wildcard_never_block_covers_subdomains_from_domain_select(tmp_path):
     for dom in ("bad.example", "login.bad.example", "good.example"):
         _seed_high(db, dom, kind="domain")
     db.add_never_block("*.bad.example", "domain")
-    p = UniFiPusher(host="", domain_tier="high", tier="high")
+    p = UniFiPusher(host="", tier="high")
     sel = p.select(db, "domain", "high")
     assert "good.example" in sel.values
     assert "bad.example" not in sel.values and "login.bad.example" not in sel.values

@@ -252,19 +252,12 @@ you believe it is reachable, not just the CVE id.
   so anyone who can use the dashboard can point those integrations (and
   the credentials you saved for them, until the address change clears
   them) at a LAN host. Enable dashboard auth where that matters.
-- A UniFi domain list is enforced by resolved address, so whoever controls a
-  listed domain's DNS chooses what the gateway blocks. The push refuses
-  names that resolve to private, reserved, shared CDN, known-good or
-  never-block addresses at push time, but the gateway resolves again later
-  and may get a different answer, and a name can still be pointed at any
-  other public address. Use the IP lists and a DNS filter on the domain
-  feed URLs where that matters; the domain push is off by default. The
-  check is only as good as the resolver it asks: one that filters threat
-  domains answers with a placeholder, and those names are held back because
-  their real addresses are unknown. The optional public resolver for the
-  check is chosen from a fixed list (no typed URL), fetched under the feed
-  SSRF guard with a capped read, and a resolver that fails leaves names
-  unchecked (held back), never treated as safe.
+- The UniFi push writes IP lists only. Its domain arm was retired in 2.7.5:
+  a gateway enforces a domain list in a firewall policy by the addresses the
+  names resolve to, so whoever controls a listed domain's DNS, or simply
+  hosts it on a shared address, chooses what the gateway blocks. A pre-push
+  address check (2.7.3, 2.7.4) could not make that safe. A push only
+  neutralises lists that arm left behind. Domains belong in a DNS filter.
 - The UniFi and CrowdSec **Test connection** buttons report whether the
   configured host could be reached and logged in to, so anyone who can use the
   dashboard can probe LAN hosts with them. Enable sign-in where that matters.
