@@ -1015,9 +1015,19 @@ function unifiAddressNote(d) {
     let s = '';
     if (d.address_withheld) s += ' · ' + d.address_withheld.toLocaleString() +
         ' held back (resolve to shared CDN or protected addresses)';
+    // A placeholder answer (0.0.0.0, a block-page address) means a DNS filter
+    // in front of this server already blocks the name: its real addresses
+    // are unknown, so it is held back. Through a public resolver the same
+    // answer is simply where the name points.
+    if (d.filtered_withheld) s += ' · ' + d.filtered_withheld.toLocaleString() +
+        (d.check_resolver
+            ? ' pointing at a placeholder address'
+            : ' held back because this server\'s DNS answers them with a placeholder address ' +
+              '(a DNS filter already blocks them; choose a public resolver under "Check addresses" to check them)');
     if (d.unresolved_withheld) s += ' · ' + d.unresolved_withheld.toLocaleString() + ' not resolving';
     if (d.unchecked_withheld) s += ' · ' + d.unchecked_withheld.toLocaleString() +
         ' not checked yet (next push)';
+    if (d.check_error) s += ' · address check: ' + d.check_error;
     return s;
 }
 
@@ -1060,6 +1070,7 @@ async function loadUnifiOnce() {
         document.getElementById('unifi-host').value = s.host || '';
         document.getElementById('unifi-tier').value = s.tier || 'high';
         document.getElementById('unifi-domain-tier').value = s.domain_tier || '';
+        document.getElementById('unifi-domain-check').value = s.domain_check_resolver || '';
         markSaved(document.getElementById('unifi-panel'));
         unifiRenderStatus(s);
     } catch (e) {
@@ -1109,6 +1120,7 @@ async function unifiSave(quiet) {
         host: document.getElementById('unifi-host').value.trim(),
         tier: document.getElementById('unifi-tier').value,
         domain_tier: document.getElementById('unifi-domain-tier').value,
+        domain_check_resolver: document.getElementById('unifi-domain-check').value,
     };
     const r = await apiFetch('/api/integrations/unifi', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});

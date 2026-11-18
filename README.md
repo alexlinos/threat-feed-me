@@ -632,6 +632,17 @@ Home polling `/feeds/domains/medium.txt` blocks by name and has none of
 this. Setting **Domains: off** empties the `threatfeedme-dom-*` lists on the
 next push.
 
+**If this server's DNS already filters threat domains** (a UniFi gateway
+with content filtering or ad blocking on, a Pi-hole, AdGuard Home), it
+answers listed names with a placeholder such as `0.0.0.0` or the gateway's
+block-page address, and the check cannot see where they really point. Those
+names are held back and the status line counts them apart. On one network
+that was about 95% of the High tier, which left 31 of 870 domains pushed.
+To check them, set **Check addresses** in the UniFi panel to a public
+resolver (Cloudflare or Google, over HTTPS): it returns the real addresses.
+It is off by default because it sends the names being checked to that
+provider (see [PRIVACY.md](PRIVACY.md)).
+
 **Shared CDN addresses are never served.** Cloudflare's published proxy
 ranges are part of the safety floor (`safety.protect_known_good`), so an
 address inside them is dropped from every IP list and push at every tier.
@@ -839,22 +850,28 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
-**Upgrading to 2.7.3 with the UniFi push on.** What you will notice:
+**Upgrading to 2.7.3 or later with the UniFi push on.** What you will notice:
 
 - **The pushed domain list gets shorter, on purpose.** A UniFi domain list
   blocks the addresses its names resolve to, so a phishing domain behind a
   CDN blocked that CDN's shared addresses and every other site on them. A
   domain now goes to the gateway only if every address it resolves to could
-  be on an IP list; the panel counts what was held back and why. On one
-  install 870 High domains became 242 pushed. The domain feed URLs are
-  unchanged: a DNS filter polling them still gets every domain.
+  be on an IP list; the panel counts what was held back and why. Checked
+  through a public resolver, one install's 870 High domains became 242 to
+  push. The domain feed URLs are unchanged: a DNS filter polling them still
+  gets every domain.
+- **Behind a DNS filter it gets shorter still.** If the server's DNS already
+  blocks threat domains, most names come back as a placeholder address and
+  are held back: the same install pushed 31 through its gateway's DNS.
+  2.7.4 counts those apart and adds the **Check addresses** choice (see the
+  UniFi section above).
 - **Cloudflare's published ranges leave every IP list** on the first refresh
   (`safety.protect_known_good`, on by default).
 - **Domains: off now empties the domain lists on the gateway** at the next
   push. Before, the last pushed list stayed there, still enforced.
 - **The server looks up the domains it is about to push** through its own
-  resolver (see [PRIVACY.md](PRIVACY.md)). Nothing is looked up unless the
-  UniFi domain push is on.
+  resolver, or the public one you choose (see [PRIVACY.md](PRIVACY.md)).
+  Nothing is looked up unless the UniFi domain push is on.
 
 **Upgrading to 2.5 ("Flytrap").** What you will notice:
 
