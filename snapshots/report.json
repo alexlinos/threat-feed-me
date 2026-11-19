@@ -1,20 +1,24 @@
 {
- "fetched_at": "2026-11-18 15:46 UTC",
+ "fetched_at": "2026-11-19 15:51 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 7059,
+   "count": 7060,
    "baseline": false,
    "added": 4,
-   "removed": 0,
+   "removed": 3,
    "added_sample": [
-    "v6|us-east-1|AMAZON|2600:f0fb:c007::/48",
-    "v6|us-east-1|AMAZON|2600:f0fb:c805::/48",
-    "v6|us-east-1|EC2|2600:f0fb:c007::/48",
-    "v6|us-east-1|EC2|2600:f0fb:c805::/48"
+    "v6|eu-central-1|AMAZON|2600:f0fb:c806::/48",
+    "v6|eu-central-1|EC2|2600:f0fb:c806::/48",
+    "v6|eusc-de-east-1|AMAZON|2001:3fc6:20::/43",
+    "v6|eusc-de-east-1|CLOUDFRONT|2001:3fc6:20::/43"
    ],
-   "removed_sample": [],
-   "pct_change": 0.06,
+   "removed_sample": [
+    "v6|GLOBAL|AMAZON|2001:3fc6:20::/43",
+    "v6|GLOBAL|CLOUDFRONT_ORIGIN_FACING|2001:3fc6:3c::/47",
+    "v6|GLOBAL|CLOUDFRONT|2001:3fc6:20::/43"
+   ],
+   "pct_change": 0.1,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
