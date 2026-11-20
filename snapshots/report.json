@@ -1,24 +1,17 @@
 {
- "fetched_at": "2026-11-19 15:51 UTC",
+ "fetched_at": "2026-11-20 15:34 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 7060,
+   "count": 7061,
    "baseline": false,
-   "added": 4,
-   "removed": 3,
+   "added": 1,
+   "removed": 0,
    "added_sample": [
-    "v6|eu-central-1|AMAZON|2600:f0fb:c806::/48",
-    "v6|eu-central-1|EC2|2600:f0fb:c806::/48",
-    "v6|eusc-de-east-1|AMAZON|2001:3fc6:20::/43",
-    "v6|eusc-de-east-1|CLOUDFRONT|2001:3fc6:20::/43"
+    "v6|us-east-1|EFS|2600:1f18:7cdd:1a00::/56"
    ],
-   "removed_sample": [
-    "v6|GLOBAL|AMAZON|2001:3fc6:20::/43",
-    "v6|GLOBAL|CLOUDFRONT_ORIGIN_FACING|2001:3fc6:3c::/47",
-    "v6|GLOBAL|CLOUDFRONT|2001:3fc6:20::/43"
-   ],
-   "pct_change": 0.1,
+   "removed_sample": [],
+   "pct_change": 0.01,
    "min_v4_prefix": null,
    "min_v6_prefix": 32,
    "alert": false,
@@ -138,13 +131,19 @@
   },
   "github_meta": {
    "status": "ok",
-   "count": 8517,
+   "count": 8523,
    "baseline": false,
-   "added": 0,
+   "added": 6,
    "removed": 0,
-   "added_sample": [],
+   "added_sample": [
+    "meta|packages|4.149.173.80/28",
+    "meta|packages|4.209.112.0/28",
+    "meta|web|172.130.99.48/28",
+    "meta|web|20.254.76.112/28",
+    "meta|web|20.64.190.224/28"
+   ],
    "removed_sample": [],
-   "pct_change": 0.0,
+   "pct_change": 0.07,
    "min_v4_prefix": 15,
    "min_v6_prefix": 29,
    "alert": false,

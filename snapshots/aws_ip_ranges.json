@@ -5555,6 +5555,7 @@
   "v6|us-east-1|EFS|2600:1f18:5914:9100::/56",
   "v6|us-east-1|EFS|2600:1f18:759e:7a00::/56",
   "v6|us-east-1|EFS|2600:1f18:7a7b:c400::/56",
+  "v6|us-east-1|EFS|2600:1f18:7cdd:1a00::/56",
   "v6|us-east-1|GLOBALACCELERATOR|2600:1f01:4804::/47",
   "v6|us-east-1|GLOBALACCELERATOR|2600:1f01:4806::/47",
   "v6|us-east-1|GLOBALACCELERATOR|2600:1f01:480c::/47",
@@ -7061,6 +7062,6 @@
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f24:34::/48",
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f32:4000::/39"
  ],
- "fetched_at": "2026-11-19T15:51:33Z",
+ "fetched_at": "2026-11-20T15:34:11Z",
  "source": "aws_ip_ranges"
 }
