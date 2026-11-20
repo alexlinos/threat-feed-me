@@ -120,7 +120,13 @@ def _status() -> dict:
         "cert_sha256": block.get("cert_sha256") or "",
         "verify_ssl": bool(block.get("verify_ssl", False)),
         "last_push": last,
+        "ownership_guard": _guard_status(),
     }
+
+
+def _guard_status() -> dict:
+    from threatfeedme import ownership_guard
+    return ownership_guard.status(core.db, core.config)
 
 
 def _saved_block() -> dict:
@@ -314,17 +320,26 @@ def unifi_withheld(kind: str = "ip", tier: Optional[str] = None,
                 "retired": kind == "domain"}
     # Hostless on purpose: select() only reads the local corpus, so the
     # coverage view works before the operator has committed to a gateway.
+    # The guard is built from the operator's config, as the push builds it:
+    # left to the pusher's default it would ignore safety.ownership_guard
+    # (a switched-off guard, an allowed range) and this preview would
+    # disagree with what the push then sends.
+    from threatfeedme.ownership_guard import OwnershipGuard
     pusher = UniFiPusher(host="", tier=use_tier,
                          group_prefix=block.get("group_prefix", "threatfeedme"),
                          max_entries=block.get("max_entries", DEFAULT_MAX_ENTRIES),
-                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP))
+                         max_per_group=block.get("max_per_group", DEFAULT_MAX_PER_GROUP),
+                         ownership_guard=OwnershipGuard.from_config(core.config, db=core.db))
     sel = pusher.select(core.db, kind, use_tier)
     return {"kind": kind, "tier": use_tier, "cap": sel.cap, "retired": False,
             "entries": len(sel.values), "tier_total": sel.total,
             "withheld_count": max(0, sel.total - len(sel.values)),
             "withheld_score_cutoff": sel.score_cutoff,
             "kept_score_floor": sel.kept_floor,
-            "withheld": sel.withheld}
+            "withheld": sel.withheld,
+            "ownership_refused_count": sel.ownership_refused_count,
+            "ownership_refused_by_vendor": sel.ownership_refused_by_vendor,
+            "ownership_refused": sel.ownership_refused}
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +378,7 @@ def _cs_status() -> dict:
         "machine_configured": _cs.CrowdSecPusher.credentials_configured(),
         "bouncer_configured": bool(os.environ.get(_cs.ENV_BOUNCER_KEY)),
         "last_push": last,
+        "ownership_guard": _guard_status(),
     }
 
 

@@ -266,6 +266,7 @@ def _existing_manifest(path: Path) -> dict:
 
 _GUARD_MIN_V4 = 8
 _GUARD_MIN_V6 = 20
+_GUARD_MAX_V4_COVERAGE = (2 ** 32) // 50
 _GITHUB_FRONTEND_KEYS = frozenset({"web", "api", "packages", "pages"})
 
 
@@ -368,6 +369,19 @@ def build_ownership_guard(snapshots_dir: Path, generated_at: str,
 
     ordered_vendors = {k: vendors[k] for k in sorted(vendors)}
     previous = _existing_manifest(out_path) if out_path is not None else {}
+    # Same limit the app applies when it reads the bundle (ownership_guard
+    # .MAX_V4_COVERAGE; this script runs without the package installed, so
+    # the number is repeated and a test keeps the two equal). Over it, keep
+    # the published file: installs would refuse the new one anyway, and a
+    # bundle this wide means a source changed shape, not that a vendor grew.
+    all_nets = [ipaddress.ip_network(c) for cidrs in ordered_vendors.values() for c in cidrs]
+    covered = sum(n.num_addresses for n in ipaddress.collapse_addresses(
+        [n for n in all_nets if n.version == 4]))
+    if covered > _GUARD_MAX_V4_COVERAGE:
+        print(f"WARN ownership guard would cover {covered:,} IPv4 addresses "
+              f"(limit {_GUARD_MAX_V4_COVERAGE:,}); keeping the published bundle",
+              file=sys.stderr)
+        return previous or {"schema_version": 1, "generated_at": generated_at, "vendors": {}}
     if previous.get("vendors") == ordered_vendors and previous.get("schema_version") == 1:
         doc = {
             "schema_version": 1,

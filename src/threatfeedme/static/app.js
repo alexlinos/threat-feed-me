@@ -1024,6 +1024,37 @@ function unifiCapNote(sum) {
     return s;
 }
 
+function refusedNote(sum) {
+    // What a push left out on purpose, so a shorter list is never read as a
+    // complete one: the operator's never-block entries, and addresses inside
+    // a vendor's shared front ends (named by vendor). Shared by the UniFi and
+    // CrowdSec status lines, which are written with textContent: vendor names
+    // come from a fetched bundle and from config.
+    if (!sum) return '';
+    let s = '';
+    if (sum.never_block_refused) s += ' · ' + sum.never_block_refused.toLocaleString() +
+        ' left out by your never-block list';
+    if (sum.ownership_refused) {
+        const by = sum.ownership_refused_by_vendor || {};
+        const names = Object.keys(by).sort().map(k => k + ' ' + by[k].toLocaleString());
+        s += ' · ' + sum.ownership_refused.toLocaleString() +
+            ' left out as shared vendor addresses' + (names.length ? ' (' + names.join(', ') + ')' : '');
+    }
+    return s;
+}
+
+function guardNote(g) {
+    // Which ranges the shared-address guard is working from. Only DNS
+    // resolvers and Cloudflare are built in; the other vendors arrive in a
+    // bundle fetched once a day, so say when that has not happened.
+    if (!g) return '';
+    if (!g.enabled) return 'Shared-address guard off';
+    if (g.bundle_loaded) return 'Shared-address guard: ' + g.vendors.length + ' vendor range sets';
+    if (!g.remote_enabled) return 'Shared-address guard: built-in ranges only';
+    return 'Shared-address guard: built-in ranges only (vendor ranges ' +
+        (g.fetch_failed ? 'could not be fetched' : 'not fetched yet') + ')';
+}
+
 function unifiRenderStatus(s) {
     const el = document.getElementById('unifi-status');
     if (!el) return;
@@ -1037,7 +1068,7 @@ function unifiRenderStatus(s) {
         else if (s.last_push.summary) {
             const sum = s.last_push.summary;
             let msg = 'Last push ' + at + ': ' + sum.entries.toLocaleString() +
-                ' IPs in ' + sum.groups + ' group(s)' + unifiCapNote(sum);
+                ' IPs in ' + sum.groups + ' group(s)' + unifiCapNote(sum) + refusedNote(sum);
             // The domain push is retired: a push only clears what it left on
             // the gateway. Say so once it has, and say if it could not.
             if (sum.domains_withdrawn) msg += ' · domain push retired: replaced ' +
@@ -1048,6 +1079,8 @@ function unifiRenderStatus(s) {
     } else {
         parts.push('No push yet');
     }
+    const guard = guardNote(s.ownership_guard);
+    if (guard) parts.push(guard);
     el.textContent = parts.join(' · ');
 }
 
@@ -1227,8 +1260,10 @@ function csRenderStatus(s) {
             (last.live_scenario ? ' (the previous list is still enforced)' : ''));
         else if (last.summary) parts.push('Last publish ' + at + ': ' +
             last.summary.entries.toLocaleString() + ' ' + last.summary.tier + '-tier IPs, ' +
-            last.summary.duration_h + 'h decisions');
+            last.summary.duration_h + 'h decisions' + refusedNote(last.summary));
     } else { parts.push('Not published yet'); }
+    const guard = guardNote(s.ownership_guard);
+    if (guard) parts.push(guard);
     el.textContent = parts.join(' · ');
 }
 

@@ -191,3 +191,86 @@ def test_scheduler_ownership_guard_poll_respects_interval(db, monkeypatch):
     live_sched._maybe_ownership_guard_poll(db=db, config={})
     live_sched._maybe_ownership_guard_poll(db=db, config={})
     assert len(calls) == 1
+
+
+def test_bundle_covering_too_much_of_ipv4_is_refused_and_the_last_one_kept(db):
+    """Each prefix passing the /8 floor is not enough: a few hundred valid
+    ranges can cover everything, and a guard that matches everything empties
+    every pushed list without an error."""
+    good = {"schema_version": 1, "vendors": {"m365": ["203.0.113.0/26"]}}
+    assert og.refresh_ownership_guard(db, {}, fetch=lambda u: json.dumps(good))["status"] == "synced"
+
+    wide = {"schema_version": 1,
+            "vendors": {"evil": [f"{n}.0.0.0/8" for n in range(1, 9)]}}   # 8 x /8 = 3.1%
+    res = og.refresh_ownership_guard(db, {}, fetch=lambda u: json.dumps(wide))
+    assert res["status"] == "error"
+    assert "limit" in res["reason"]
+    # the last good bundle is still the one in force
+    guard = og.OwnershipGuard.from_config({}, db=db)
+    assert guard.match("203.0.113.5") == "m365"
+    assert guard.match("198.51.100.77") is None
+
+
+def test_coverage_counts_overlapping_ranges_once():
+    assert og.v4_coverage(["192.0.2.0/24", "192.0.2.0/25", "2001:db8::/32", "junk"]) == 256
+
+
+def test_factory_and_app_share_one_coverage_limit():
+    assert bc._GUARD_MAX_V4_COVERAGE == og.MAX_V4_COVERAGE
+
+
+def test_factory_keeps_the_published_bundle_when_a_build_is_too_wide(tmp_path, capsys):
+    snaps = tmp_path / "snaps"
+    snaps.mkdir()
+    out_file = tmp_path / "ownership_guard.json"
+    _write_snap(snaps, "cloudflare_ips", ["v4|198.51.100.0/25"])
+    first = bc.build_ownership_guard(snaps, "2026-11-20T00:00:00Z", out_path=out_file)
+    published = out_file.read_text(encoding="utf-8")
+
+    _write_snap(snaps, "cloudflare_ips", [f"v4|{n}.0.0.0/8" for n in range(1, 9)])
+    again = bc.build_ownership_guard(snaps, "2026-11-21T00:00:00Z", out_path=out_file)
+    assert out_file.read_text(encoding="utf-8") == published
+    assert again["vendors"] == first["vendors"]
+    assert "keeping the published bundle" in capsys.readouterr().err
+
+
+def test_status_says_when_only_the_built_in_ranges_are_in_force(db):
+    s = og.status(db, {})
+    assert s["enabled"] and s["remote_enabled"] and not s["bundle_loaded"]
+    assert s["vendors"] == ["cloudflare", "dns_resolvers"]
+    assert s["fetch_failed"] is False
+
+    og.refresh_ownership_guard(db, {}, fetch=lambda u: "not json")
+    assert og.status(db, {})["fetch_failed"] is True
+
+    bundle = {"schema_version": 1, "vendors": {"m365": ["203.0.113.0/26"]}}
+    og.refresh_ownership_guard(db, {}, fetch=lambda u: json.dumps(bundle))
+    s = og.status(db, {})
+    assert s["bundle_loaded"] and "m365" in s["vendors"] and not s["fetch_failed"]
+    # no error text ever leaves the module through status
+    assert set(s) == {"enabled", "remote_enabled", "bundle_loaded", "vendors",
+                      "fetched_at", "fetch_failed"}
+
+    off = og.status(db, {"safety": {"ownership_guard": {"enabled": False}}})
+    assert off["enabled"] is False
+
+
+def test_preview_uses_the_operators_guard_settings(db, monkeypatch):
+    """The coverage preview must agree with the push: a guard the operator
+    switched off, or a range they allowed, applies to both."""
+    from threatfeedme.routers import integrations as integ
+    core = integ.core           # the copy the router itself reads
+    db.add_indicator("8.8.8.8", "feed_a")
+    db.set_indicator_score("8.8.8.8", 0.95, "high")
+    monkeypatch.setitem(core.__dict__, "db", db)
+
+    monkeypatch.setitem(core.__dict__, "config", {})
+    on = integ.unifi_withheld(kind="ip", tier="high", _=True)
+    assert on["entries"] == 0
+    assert on["ownership_refused_count"] == 1
+    assert on["ownership_refused_by_vendor"] == {"dns_resolvers": 1}
+
+    monkeypatch.setitem(core.__dict__, "config",
+                        {"safety": {"ownership_guard": {"enabled": False}}})
+    off = integ.unifi_withheld(kind="ip", tier="high", _=True)
+    assert off["entries"] == 1 and off["ownership_refused_count"] == 0

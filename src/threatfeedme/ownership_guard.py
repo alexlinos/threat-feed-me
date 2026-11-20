@@ -52,6 +52,17 @@ _MAX_GUARD_REDIRECTS = 5
 _ALLOWED_REDIRECT_SUFFIX = "githubusercontent.com"
 _MIN_V4_PREFIX = 8
 _MIN_V6_PREFIX = 20
+# The most IPv4 space one bundle may protect. The per-prefix floor above
+# stops a single absurd range, not a few hundred plausible ones: 256 valid
+# /8s cover every address, and a guard that matches everything empties
+# every install's pushed lists without one error. Built from the vendors'
+# files on 2026-11-20 the bundle covered 8.9 million addresses (0.21% of
+# IPv4), about 12 million once CloudFront's IPv4 ranges are in it; 2% is
+# several times that and still far from "everything". A bundle over the cap
+# is refused whole and the last good one stays in use. IPv6 has no cap:
+# its space is too large for a share of it to mean anything, and the /20
+# floor is what bounds a range there.
+MAX_V4_COVERAGE = (2 ** 32) // 50
 
 # Always-on baked floor so air-gapped installs and fresh boots before the first
 # remote refresh still protect core DNS resolvers and Cloudflare shared edge.
@@ -192,7 +203,25 @@ def parse_guard_doc(text: str) -> Dict[str, List[str]]:
             cleaned[vname] = valid_cidrs
     if not cleaned:
         raise OwnershipGuardError("ownership guard bundle contained no valid prefixes")
+    covered = v4_coverage(c for cidrs in cleaned.values() for c in cidrs)
+    if covered > MAX_V4_COVERAGE:
+        raise OwnershipGuardError(
+            f"ownership guard bundle covers {covered:,} IPv4 addresses, over the "
+            f"{MAX_V4_COVERAGE:,} limit; refusing it")
     return cleaned
+
+
+def v4_coverage(cidrs: Iterable[str]) -> int:
+    """How many IPv4 addresses a set of ranges covers, overlaps counted once."""
+    nets = []
+    for c in cidrs:
+        try:
+            net = ipaddress.ip_network(str(c).strip(), strict=False)
+        except ValueError:
+            continue
+        if net.version == 4:
+            nets.append(net)
+    return sum(n.num_addresses for n in ipaddress.collapse_addresses(nets))
 
 
 def refresh_ownership_guard(
@@ -229,6 +258,30 @@ def refresh_ownership_guard(
         total,
     )
     return {"status": "synced", "vendors": len(vendors), "prefixes": total}
+
+
+def status(db, config: Optional[Dict]) -> Dict:
+    """What the guard is working from right now, for the Integrations page.
+    The built-in ranges are only DNS resolvers and Cloudflare; everything
+    else arrives in the fetched bundle, and an operator reading the docs
+    would otherwise assume it is in force when it has never been fetched.
+    Never raises, and carries no error text: only whether the last fetch
+    failed."""
+    out = {"enabled": False, "remote_enabled": False, "bundle_loaded": False,
+           "vendors": [], "fetched_at": "", "fetch_failed": False}
+    try:
+        cfg = guard_config(config)
+        guard = OwnershipGuard.from_config(config, db=db)
+        out.update(enabled=guard.enabled,
+                   remote_enabled=bool(cfg.get("remote_enabled", True)),
+                   bundle_loaded=guard.remote_loaded,
+                   vendors=sorted(guard.vendor_counts))
+        if db is not None:
+            out["fetched_at"] = db.get_setting(GUARD_FETCHED_KEY) or ""
+            out["fetch_failed"] = bool(db.get_setting(GUARD_ERROR_KEY))
+    except Exception:
+        logger.exception("[ownership_guard] could not read the guard's state")
+    return out
 
 
 def _parse_range_bounds(value: str) -> Optional[Tuple[int, int, int]]:
