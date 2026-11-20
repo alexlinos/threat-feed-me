@@ -187,6 +187,12 @@ v2.4.19 and v2.5.0):
   SSRF guard with a 1 MB streaming cap, reject `local_file` and non-HTTP(S)
   entries in both `catalog_sync` and `Database.sync_catalog_feeds`, and enforce
   same-origin redirects on keyed feeds and Talos terms redirects.
+- **The shared-address guard's range bundle** (2.7.7, `ownership_guard.py`)
+  is fetched over HTTPS through the same connect-time SSRF guard with a
+  2 MB cap. A fetched bundle can only make a push leave addresses out, so
+  it is bounded: no range wider than /8 (IPv4) or /20 (IPv6), and no
+  bundle covering more than 2% of IPv4. One that fails either check is
+  refused whole and the last good bundle stays in use.
 - **Basic auth** compares credentials as bytes in constant time and always
   checks both fields. A sign-in set on the System page (v2.5.1) is stored as
   a salted scrypt hash, never the password; the password is always hashed,

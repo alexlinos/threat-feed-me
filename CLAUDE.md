@@ -1256,6 +1256,94 @@ history. Do not rebuild it, and do not add another guard to it.
   hides the bug the test exists to catch. When a live device rejects a
   request, teach the fake the same refusal in the same change.
 
+## v2.7.6 and 2.7.7 (2026-11-20): a hardening release, then its read-through
+
+2.7.6 (PR #49) was a wide hardening pass: the remote catalog through the
+connect-time SSRF guard, the UniFi certificate pin on the socket that
+carries the login (`_PinnedCertAdapter`, verified on a real TLS handshake
+over loopback, not against a gateway), no env proxies or redirects on UniFi
+sessions, CrowdSec credentials cleared on a scheme or TLS downgrade, scrypt
+slots on the password change, HTML security headers, and whitelist overlap
+for ranges. It was read end to end the same day and 2.7.7 is what that
+read-through changed. What to keep in mind:
+
+- **Whitelisting a host removes every listed range that contains it**
+  (2.7.6, intended, the never-block rule applied to the whitelist). One
+  address inside a listed /16 takes the /16 off the served lists and the
+  pushes.
+- **The parser cuts a line at `#` or `;` only when the text before it
+  already holds an address** (`_extract_ips_from_text`). 2.7.6 cut every
+  line, which lost a real entry on a live feed (a network name containing
+  `# 39` ahead of the address) and emptied semicolon-separated uploads with
+  the address past the first column. Measure a parser change on the live
+  roster against the previous release: the 14 keyless IP feeds parse
+  identically to 2.7.5 now.
+- **IPv6 from plain-text feeds is opt-in** (`include_ipv6` per feed,
+  `feeds_settings.ingest_ipv6` for the install). 2.7.6 switched it on for
+  every feed; a corpus that had no IPv6 would have gained it and every
+  firewall polling a list URL without `?family=4` would have received
+  IPv6 lines after an upgrade. The maintainer was told and let opt-in
+  stand; TAXII and CrowdSec feeds read IPv6 either way. No way yet to
+  change the flag on an existing feed other than adding it again.
+- **A suspicious vendor change holds that vendor only.** 2.7.6 skipped
+  the whole catalog build and commit on an alert with nothing able to
+  accept it, so the first alert would have frozen every vendor.
+  `infra_watch.py` now leaves an alerting source at its last good snapshot;
+  accepting is a manual run: `gh workflow run infra-list-watch.yml -f
+  accept_alert=true` (it accepts whatever every alerting vendor serves at
+  that moment, so read the alert issue first). Unchanged snapshots are not
+  rewritten, so a quiet day makes no commit.
+- **Every published AWS list was IPv6-only from 2.7.2 until 2.7.7.** AWS
+  puts IPv4 under `prefixes`; `normalize_aws` read `ipv4_prefixes`, a key
+  that does not exist, and the test fixture carried the same wrong key, so
+  everything passed. A family that parses to nothing is now a failed
+  fetch. The fix makes the AWS source grow by about 150% (10,767 IPv4
+  prefixes), which trips the alert: after it reaches main, run the workflow
+  once with `accept_alert=true`. Installs with an AWS list switched on then
+  get a refresh held for approval (the change threshold), which is right.
+  Lesson, again: write a vendor fixture from a saved copy of the vendor's
+  file, top-level keys included, never from the code that reads it.
+- **Retrain after rolling** (`scripts/predictor.sh both`): 2.7.6 changed
+  feature values (streak resets, IPv6 country) without changing feature
+  names, so the old model is accepted and its scores drift until the
+  weekly retrain.
+- 2.7.6 refused non-ASCII integration credentials; 2.7.7 takes them again
+  (control characters are still refused). Whether Grype ran before the
+  v2.7.6 tag is not recorded; run it on the review host before 2.7.7.
+
+### Shared-address guard on pushes (issue #18, `ownership_guard.py`)
+
+- **What it does.** At push time (UniFi and CrowdSec) an address or range
+  that overlaps a vendor's own shared front ends is left out: DNS resolvers
+  and Cloudflare are built in; Google's own services (its ranges minus the
+  ones it rents as Cloud), Microsoft 365, CloudFront and GitHub's
+  web/API/pages ranges come from `catalog/ownership_guard.json`, which the
+  catalog factory builds from the vendors' own files. Rentable compute
+  stays blockable on purpose. No lookup happens during a push.
+- **Measured** (bundle built from the published snapshots plus the fixed
+  AWS source, against a corpus copy of 223k IPs): 5 vendors, 13.1 million
+  addresses, 0.31% of IPv4; it withheld nothing from High or Medium and 92
+  addresses from Low. It is insurance: the issue found no outage, only that
+  nothing enforced the outcome.
+- **A bundle may cover at most 2% of IPv4** (`MAX_V4_COVERAGE`, repeated
+  in `build_catalog.py`; a test keeps them equal). The per-prefix floor
+  does not stop a few hundred valid ranges from covering everything, and a
+  guard that matches everything empties every pushed list with no error.
+  Over the cap the app keeps its last good bundle and the factory keeps the
+  published file.
+- **The bundle exists only once the workflow has run from main.** Until an
+  install has fetched it, only the built-in ranges are in force, which the
+  IP safety floor already refuses. The Integrations status lines say which
+  state an install is in (`ownership_guard.status`, no error text), and
+  show what a push left out, by vendor.
+- **Anything that previews a push builds the guard from config**
+  (`OwnershipGuard.from_config(core.config, db=...)`). A pusher left to its
+  default guard ignores `safety.ownership_guard`.
+- **Open, the maintainer's call:** the guard covers pushes only. Firewalls
+  polling the list URLs get the unguarded list, while Cloudflare's ranges
+  (2.7.3) are refused on every output. Either the vendor ranges join the
+  output filter, or the difference is documented as intended.
+
 ## Domain HIGH is provenance-first (v2.4.6, ratified 2026-08-20)
 
 Live data settled it: domain blocklists aggregate each other, so the
