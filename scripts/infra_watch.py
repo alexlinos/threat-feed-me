@@ -142,10 +142,20 @@ def fetch_github_meta():
 # --------------------------------------------------------------------------
 
 def normalize_aws(data: dict) -> set[str]:
+    # AWS names the two families differently: IPv4 is "prefixes" (entries
+    # keyed ip_prefix), IPv6 is "ipv6_prefixes" (entries keyed ipv6_prefix).
+    # This read "ipv4_prefixes" from the day the catalog shipped until
+    # 2.7.7, a key that does not exist, so every published AWS list was
+    # IPv6-only and nothing failed. A family that parses to nothing is now
+    # a failed fetch: the snapshot is kept and the run turns red.
     out = set()
-    for key, kind in (("ipv4_prefixes", "v4"), ("ipv6_prefixes", "v6")):
-        for p in data.get(key, []):
-            out.add(f"{kind}|{p.get('region','')}|{p.get('service','')}|{p['ip_prefix'] if kind == 'v4' else p['ipv6_prefix']}")
+    for key, field, kind in (("prefixes", "ip_prefix", "v4"),
+                             ("ipv6_prefixes", "ipv6_prefix", "v6")):
+        rows = data.get(key) or []
+        if not rows:
+            raise ValueError(f"AWS ranges: no {kind} entries under '{key}'")
+        for p in rows:
+            out.add(f"{kind}|{p.get('region','')}|{p.get('service','')}|{p[field]}")
     return out
 
 

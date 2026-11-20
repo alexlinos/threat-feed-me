@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import infra_watch as iw
@@ -21,14 +23,33 @@ def _source(name="t"):
 # --- normalizers -----------------------------------------------------------
 
 def test_normalize_aws():
+    # The shape of AWS's own ip-ranges.json, top-level keys included: IPv4
+    # under "prefixes", IPv6 under "ipv6_prefixes". This fixture used to say
+    # "ipv4_prefixes", the same wrong key the code read, so the test passed
+    # while every published AWS list held no IPv4 range at all.
     data = {
-        "ipv4_prefixes": [{"ip_prefix": "192.0.2.0/24", "region": "us-east-1", "service": "EC2"}],
-        "ipv6_prefixes": [{"ipv6_prefix": "2001:db8::/40", "region": "us-east-1", "service": "S3"}],
+        "syncToken": "0", "createDate": "2026-01-01-00-00-00",
+        "prefixes": [{"ip_prefix": "192.0.2.0/24", "region": "us-east-1",
+                      "service": "EC2", "network_border_group": "us-east-1"}],
+        "ipv6_prefixes": [{"ipv6_prefix": "2001:db8::/40", "region": "us-east-1",
+                           "service": "S3", "network_border_group": "us-east-1"}],
     }
     assert iw.normalize_aws(data) == {
         "v4|us-east-1|EC2|192.0.2.0/24",
         "v6|us-east-1|S3|2001:db8::/40",
     }
+
+
+@pytest.mark.parametrize("missing", ["prefixes", "ipv6_prefixes"])
+def test_normalize_aws_refuses_a_file_missing_a_family(missing):
+    """A renamed key must fail the fetch, not publish half the ranges."""
+    data = {
+        "prefixes": [{"ip_prefix": "192.0.2.0/24", "region": "r", "service": "EC2"}],
+        "ipv6_prefixes": [{"ipv6_prefix": "2001:db8::/40", "region": "r", "service": "S3"}],
+    }
+    del data[missing]
+    with pytest.raises(ValueError):
+        iw.normalize_aws(data)
 
 
 def test_normalize_m365_splits_ips_and_urls():
