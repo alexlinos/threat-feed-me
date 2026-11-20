@@ -1,21 +1,27 @@
 {
- "fetched_at": "2026-11-20 15:34 UTC",
+ "fetched_at": "2026-11-20 17:20 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 7061,
+   "count": 17828,
    "baseline": false,
-   "added": 1,
+   "added": 10767,
    "removed": 0,
    "added_sample": [
-    "v6|us-east-1|EFS|2600:1f18:7cdd:1a00::/56"
+    "v4|GLOBAL|AMAZON_CONNECT|15.193.0.0/19",
+    "v4|GLOBAL|AMAZON|1.178.172.0/23",
+    "v4|GLOBAL|AMAZON|1.178.72.0/21",
+    "v4|GLOBAL|AMAZON|1.179.14.0/23",
+    "v4|GLOBAL|AMAZON|1.179.52.0/22"
    ],
    "removed_sample": [],
-   "pct_change": 0.01,
-   "min_v4_prefix": null,
+   "pct_change": 152.49,
+   "min_v4_prefix": 11,
    "min_v6_prefix": 32,
-   "alert": false,
-   "alert_reasons": []
+   "alert": true,
+   "alert_reasons": [
+    "changed 152.5% of entries (threshold 10%)"
+   ]
   },
   "m365_endpoints": {
    "status": "ok",
@@ -133,17 +139,11 @@
    "status": "ok",
    "count": 8523,
    "baseline": false,
-   "added": 6,
+   "added": 0,
    "removed": 0,
-   "added_sample": [
-    "meta|packages|4.149.173.80/28",
-    "meta|packages|4.209.112.0/28",
-    "meta|web|172.130.99.48/28",
-    "meta|web|20.254.76.112/28",
-    "meta|web|20.64.190.224/28"
-   ],
+   "added_sample": [],
    "removed_sample": [],
-   "pct_change": 0.07,
+   "pct_change": 0.0,
    "min_v4_prefix": 15,
    "min_v6_prefix": 29,
    "alert": false,

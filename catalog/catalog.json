@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-20T15:34:14Z",
+ "generated_at": "2026-11-20T17:20:48Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -50,9 +50,20 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 3287,
-   "bytes": 67325,
+   "entries": 9403,
+   "bytes": 161701,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
+  },
+  {
+   "slug": "aws-amazon-appflow",
+   "name": "AWS Amazon Appflow",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services AMAZON_APPFLOW ranges, all regions.",
+   "format": "list",
+   "entries": 48,
+   "bytes": 774,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon-appflow.txt"
   },
   {
    "slug": "aws-amazon-connect",
@@ -61,9 +72,20 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON_CONNECT ranges, all regions.",
    "format": "list",
-   "entries": 15,
-   "bytes": 300,
+   "entries": 36,
+   "bytes": 612,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon-connect.txt"
+  },
+  {
+   "slug": "aws-api-gateway",
+   "name": "AWS Api Gateway",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services API_GATEWAY ranges, all regions.",
+   "format": "list",
+   "entries": 216,
+   "bytes": 3261,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-api-gateway.txt"
   },
   {
    "slug": "aws-aurora-dsql",
@@ -72,8 +94,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AURORA_DSQL ranges, all regions.",
    "format": "list",
-   "entries": 21,
-   "bytes": 508,
+   "entries": 42,
+   "bytes": 834,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-aurora-dsql.txt"
   },
   {
@@ -83,9 +105,31 @@
    "group": "All regions",
    "description": "Amazon Web Services CHIME_MEETINGS ranges, all regions.",
    "format": "list",
-   "entries": 1,
-   "bytes": 20,
+   "entries": 2,
+   "bytes": 35,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-chime-meetings.txt"
+  },
+  {
+   "slug": "aws-chime-voiceconnector",
+   "name": "AWS Chime Voiceconnector",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services CHIME_VOICECONNECTOR ranges, all regions.",
+   "format": "list",
+   "entries": 24,
+   "bytes": 358,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-chime-voiceconnector.txt"
+  },
+  {
+   "slug": "aws-cloud9",
+   "name": "AWS Cloud9",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services CLOUD9 ranges, all regions.",
+   "format": "list",
+   "entries": 44,
+   "bytes": 733,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-cloud9.txt"
   },
   {
    "slug": "aws-cloudfront",
@@ -94,8 +138,8 @@
    "group": "All regions",
    "description": "Amazon Web Services CLOUDFRONT ranges, all regions.",
    "format": "list",
-   "entries": 35,
-   "bytes": 690,
+   "entries": 252,
+   "bytes": 4083,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-cloudfront.txt"
   },
   {
@@ -105,9 +149,42 @@
    "group": "All regions",
    "description": "Amazon Web Services CLOUDFRONT_ORIGIN_FACING ranges, all regions.",
    "format": "list",
-   "entries": 37,
-   "bytes": 869,
+   "entries": 89,
+   "bytes": 1679,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-cloudfront-origin-facing.txt"
+  },
+  {
+   "slug": "aws-codebuild",
+   "name": "AWS Codebuild",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services CODEBUILD ranges, all regions.",
+   "format": "list",
+   "entries": 61,
+   "bytes": 1008,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-codebuild.txt"
+  },
+  {
+   "slug": "aws-dynamodb",
+   "name": "AWS Dynamodb",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services DYNAMODB ranges, all regions.",
+   "format": "list",
+   "entries": 96,
+   "bytes": 1398,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-dynamodb.txt"
+  },
+  {
+   "slug": "aws-ebs",
+   "name": "AWS Ebs",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services EBS ranges, all regions.",
+   "format": "list",
+   "entries": 105,
+   "bytes": 1756,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ebs.txt"
   },
   {
    "slug": "aws-ec2",
@@ -116,8 +193,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2 ranges, all regions.",
    "format": "list",
-   "entries": 2588,
-   "bytes": 52573,
+   "entries": 4496,
+   "bytes": 80238,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2.txt"
   },
   {
@@ -127,8 +204,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2_INSTANCE_CONNECT ranges, all regions.",
    "format": "list",
-   "entries": 37,
-   "bytes": 895,
+   "entries": 74,
+   "bytes": 1486,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2-instance-connect.txt"
   },
   {
@@ -138,8 +215,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EFS ranges, all regions.",
    "format": "list",
-   "entries": 95,
-   "bytes": 2328,
+   "entries": 197,
+   "bytes": 3917,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-efs.txt"
   },
   {
@@ -149,8 +226,8 @@
    "group": "All regions",
    "description": "Amazon Web Services GLOBALACCELERATOR ranges, all regions.",
    "format": "list",
-   "entries": 47,
-   "bytes": 940,
+   "entries": 181,
+   "bytes": 2901,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-globalaccelerator.txt"
   },
   {
@@ -160,8 +237,8 @@
    "group": "All regions",
    "description": "Amazon Web Services IVS_LOW_LATENCY ranges, all regions.",
    "format": "list",
-   "entries": 1,
-   "bytes": 20,
+   "entries": 2,
+   "bytes": 33,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ivs-low-latency.txt"
   },
   {
@@ -171,9 +248,31 @@
    "group": "All regions",
    "description": "Amazon Web Services IVS_REALTIME ranges, all regions.",
    "format": "list",
-   "entries": 150,
-   "bytes": 2951,
+   "entries": 254,
+   "bytes": 4468,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ivs-realtime.txt"
+  },
+  {
+   "slug": "aws-kinesis-video-streams",
+   "name": "AWS Kinesis Video Streams",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services KINESIS_VIDEO_STREAMS ranges, all regions.",
+   "format": "list",
+   "entries": 105,
+   "bytes": 1782,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-kinesis-video-streams.txt"
+  },
+  {
+   "slug": "aws-media-package-v2",
+   "name": "AWS Media Package V2",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services MEDIA_PACKAGE_V2 ranges, all regions.",
+   "format": "list",
+   "entries": 60,
+   "bytes": 1004,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-media-package-v2.txt"
   },
   {
    "slug": "aws-route53",
@@ -182,8 +281,8 @@
    "group": "All regions",
    "description": "Amazon Web Services ROUTE53 ranges, all regions.",
    "format": "list",
-   "entries": 14,
-   "bytes": 264,
+   "entries": 40,
+   "bytes": 649,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-route53.txt"
   },
   {
@@ -193,9 +292,31 @@
    "group": "All regions",
    "description": "Amazon Web Services ROUTE53_HEALTHCHECKS ranges, all regions.",
    "format": "list",
-   "entries": 26,
-   "bytes": 616,
+   "entries": 57,
+   "bytes": 1118,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-route53-healthchecks.txt"
+  },
+  {
+   "slug": "aws-route53-healthchecks-publishing",
+   "name": "AWS Route53 Healthchecks Publishing",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services ROUTE53_HEALTHCHECKS_PUBLISHING ranges, all regions.",
+   "format": "list",
+   "entries": 39,
+   "bytes": 592,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-route53-healthchecks-publishing.txt"
+  },
+  {
+   "slug": "aws-route53-resolver",
+   "name": "AWS Route53 Resolver",
+   "vendor": "AWS",
+   "group": "All regions",
+   "description": "Amazon Web Services ROUTE53_RESOLVER ranges, all regions.",
+   "format": "list",
+   "entries": 638,
+   "bytes": 10248,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-route53-resolver.txt"
   },
   {
    "slug": "aws-s3",
@@ -204,8 +325,8 @@
    "group": "All regions",
    "description": "Amazon Web Services S3 ranges, all regions.",
    "format": "list",
-   "entries": 664,
-   "bytes": 13207,
+   "entries": 1151,
+   "bytes": 20299,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-s3.txt"
   },
   {
@@ -215,8 +336,8 @@
    "group": "All regions",
    "description": "Amazon Web Services WORKSPACES_GATEWAYS ranges, all regions.",
    "format": "list",
-   "entries": 43,
-   "bytes": 809,
+   "entries": 116,
+   "bytes": 1904,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-workspaces-gateways.txt"
   },
   {
