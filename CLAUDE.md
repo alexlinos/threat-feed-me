@@ -1298,9 +1298,11 @@ read-through changed. What to keep in mind:
   that does not exist, and the test fixture carried the same wrong key, so
   everything passed. A family that parses to nothing is now a failed
   fetch. The fix makes the AWS source grow by about 150% (10,767 IPv4
-  prefixes), which trips the alert: after it reaches main, run the workflow
-  once with `accept_alert=true`. Installs with an AWS list switched on then
-  get a refresh held for approval (the change threshold), which is right.
+  prefixes), which tripped the alert; it was accepted with a manual run
+  on 2026-11-20, the day the fix reached main, and the published lists
+  carry IPv4 since then for every version. Installs with an AWS list
+  switched on get a refresh held for approval (the change threshold),
+  which is right.
   Lesson, again: write a vendor fixture from a saved copy of the vendor's
   file, top-level keys included, never from the code that reads it.
 - **Retrain after rolling** (`scripts/predictor.sh both`): 2.7.6 changed
@@ -1309,7 +1311,10 @@ read-through changed. What to keep in mind:
   weekly retrain.
 - 2.7.6 refused non-ASCII integration credentials; 2.7.7 takes them again
   (control characters are still refused). Whether Grype ran before the
-  v2.7.6 tag is not recorded; run it on the review host before 2.7.7.
+  v2.7.6 tag is not recorded. Scanned for 2.7.7: the 2.7.7 build and the
+  published 2.7.6 and 2.7.5 images are identical match for match (241,
+  none in app dependencies; SECURITY.md has the line). The review host
+  has no `jq`: summarise Grype's JSON with python3.
 
 ### Shared-address guard on pushes (issue #18, `ownership_guard.py`)
 
@@ -1331,7 +1336,8 @@ read-through changed. What to keep in mind:
   guard that matches everything empties every pushed list with no error.
   Over the cap the app keeps its last good bundle and the factory keeps the
   published file.
-- **The bundle exists only once the workflow has run from main.** Until an
+- **The bundle is published by the catalog workflow** (first on
+  2026-11-20; a fresh fork has none until its own workflow runs). Until an
   install has fetched it, only the built-in ranges are in force, which the
   IP safety floor already refuses. The Integrations status lines say which
   state an install is in (`ownership_guard.status`, no error text), and
