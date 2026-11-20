@@ -320,6 +320,8 @@ def sync_catalog(db, config: Dict, fetch: Optional[Callable[[str], str]] = None,
                           catalog_version=version)
             return result
         if version == stored_int and not force:
+            db.set_setting(CATALOG_FETCHED_KEY, _utcnow_iso())
+            db.delete_setting(CATALOG_ERROR_KEY)
             result.update(status="skipped", reason="version unchanged",
                           catalog_version=version)
             return result

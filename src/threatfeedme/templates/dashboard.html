@@ -390,7 +390,7 @@ window.tfmFeedBase = {{ feed_base|tojson }};
     <form class="wl-form" onsubmit="return addFeed(event)" style="margin-top:12px">
         <input class="ip" id="f-name" type="text" placeholder="feed name" required>
         <input class="reason" id="f-url" type="url" placeholder="https://example.com/blocklist.txt" required>
-        <select id="f-kind" title="What the feed's lines are: IP addresses/CIDRs, or domains">
+        <select id="f-kind" title="What the feed's lines are: IP addresses/CIDRs, or domains" onchange="feedKindChanged(this, 'f-ipv6-wrap')">
             <option value="ip">IP feed</option>
             <option value="domain">Domain feed</option>
         </select>
@@ -400,6 +400,9 @@ window.tfmFeedBase = {{ feed_base|tojson }};
             <option value="list">Plain list</option>
             <option value="taxii21">TAXII 2.1 collection</option>
         </select>
+        <label class="unifi-enable-label" id="f-ipv6-wrap" title="Also extract IPv6 addresses and CIDRs from this feed (off by default so IPv4-only firewalls polling bare /feeds/*.txt are unaffected)">
+            <input type="checkbox" id="f-ipv6"> include IPv6
+        </label>
         <label class="unifi-enable-label" id="f-key-wrap" hidden title="The server needs an API key or token; you'll set it with Set key after adding">
             <input type="checkbox" id="f-needs-key"> needs a key
         </label>
@@ -413,10 +416,13 @@ window.tfmFeedBase = {{ feed_base|tojson }};
         <input class="ip" id="u-name" type="text" placeholder="custom list name" required>
         <input id="u-file" type="file" accept=".txt,.csv,text/plain" required
                class="reason" style="padding:6px">
-        <select id="u-kind" title="What the uploaded lines are: IP addresses/CIDRs, or domains">
+        <select id="u-kind" title="What the uploaded lines are: IP addresses/CIDRs, or domains" onchange="feedKindChanged(this, 'u-ipv6-wrap')">
             <option value="ip">IP list</option>
             <option value="domain">Domain list</option>
         </select>
+        <label class="unifi-enable-label" id="u-ipv6-wrap" title="Also extract IPv6 addresses and CIDRs from this uploaded list">
+            <input type="checkbox" id="u-ipv6"> include IPv6
+        </label>
         <input id="u-weight" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px" title="Reputation weight 0-1 (1.0 = default; false-positive flags lower it automatically)">
         <button type="submit">⬆ Upload list</button>
     </form>

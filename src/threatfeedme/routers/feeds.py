@@ -134,6 +134,7 @@ def add_feed_source(request: FeedRequest, _=Depends(require_auth), _csrf=Depends
             local_file=request.local_file,
             enabled=request.enabled,
             indicator_kind=request.indicator_kind,
+            include_ipv6=request.include_ipv6,
             scraper=scraper,
         )
     except Exception as e:
@@ -190,6 +191,7 @@ async def upload_feed(
     weight: float = Form(1.0),
     feed_type: str = Form(FeedType.CUSTOM.value),
     indicator_kind: str = Form("ip"),
+    include_ipv6: bool = Form(False),
     file: UploadFile = File(...),
     _=Depends(require_auth),
     _csrf=Depends(csrf_check),
@@ -237,11 +239,11 @@ async def upload_feed(
     # every connection (a 5 MB list parses in ~1.5 s, longer on a small box,
     # plus any wait on the write lock). A worker thread stalls only this one.
     return await run_in_threadpool(_store_upload, bytes(data), name, dest, ftype, weight,
-                                   indicator_kind)
+                                   indicator_kind, bool(include_ipv6))
 
 
 def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: float,
-                  indicator_kind: str) -> WhitelistResponse:
+                  indicator_kind: str, include_ipv6: bool = False) -> WhitelistResponse:
     # Reject binary content: null bytes, or anything that isn't valid UTF-8
     # (strict decode rather than silently replacing mangled bytes).
     if b"\x00" in data:
@@ -255,14 +257,17 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
         if not indicators:
             raise HTTPException(status_code=422, detail="No valid domains found in file")
     else:
-        indicators = parse_feed_content(text)
+        from threatfeedme import pipeline as _pipeline
+        want_v6 = bool(include_ipv6 or _pipeline.resolve_ingest_ipv6(core.config))
+        indicators = (parse_feed_content(text, include_ipv6=True)
+                      if want_v6 else parse_feed_content(text))
         if not indicators:
             raise HTTPException(status_code=422, detail="No valid IPs or CIDRs found in file")
 
     feed = FeedSource(
         name=re.sub(r'[^A-Za-z0-9._-]', '_', name).strip('._')[:64],
         url=dest, feed_type=ftype, weight=weight, local_file=True, enabled=True,
-        indicator_kind=indicator_kind,
+        indicator_kind=indicator_kind, include_ipv6=bool(include_ipv6),
     )
     # Re-uploading your own list is how it gets updated; turning a REMOTE feed
     # (a shipped default, say) into an upload by reusing its name is not.

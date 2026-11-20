@@ -140,3 +140,72 @@ def test_source_that_parses_to_nothing_fails_and_keeps_its_snapshot(tmp_path, mo
     monkeypatch.setattr(iw, "SOURCES", [iw.Source("t", lambda: {"new": "shape"}, lambda d: set())])
     assert iw.main(["--snapshots", str(tmp_path), "--update"]) == 2
     assert (tmp_path / "t.json").read_text(encoding="utf-8") == old
+
+
+def test_alert_holds_only_alerting_source_and_accept_alert_advances_it(tmp_path, monkeypatch):
+    """One vendor alerting must hold only its snapshot while healthy vendors
+    still update; --accept-alert advances the held baseline and exits 0."""
+    good_old = json.dumps({"entries": [f"v4|r|s|192.0.2.{i}/32" for i in range(20)],
+                           "fetched_at": "2026-01-01T00:00:00Z", "source": "good"})
+    bad_old = json.dumps({"entries": [f"v4|r|s|198.51.100.{i}/32" for i in range(10)],
+                          "fetched_at": "2026-01-01T00:00:00Z", "source": "bad"})
+    same_old = json.dumps({"entries": ["v4|r|s|203.0.113.0/24"],
+                           "fetched_at": "2026-01-01T00:00:00Z", "source": "same"})
+    (tmp_path / "good.json").write_text(good_old, encoding="utf-8")
+    (tmp_path / "bad.json").write_text(bad_old, encoding="utf-8")
+    (tmp_path / "same.json").write_text(same_old, encoding="utf-8")
+
+    good_new = {f"v4|r|s|192.0.2.{i}/32" for i in range(21)}          # +5%, ok
+    bad_new = {f"v4|r|s|198.51.100.{i}/32" for i in range(20)}        # +100%, ALERT
+    same_new = {"v4|r|s|203.0.113.0/24"}                              # 0%, unchanged
+    monkeypatch.setattr(iw, "SOURCES", [
+        iw.Source("good", lambda: good_new, lambda d: d),
+        iw.Source("bad", lambda: bad_new, lambda d: d),
+        iw.Source("same", lambda: same_new, lambda d: d),
+    ])
+
+    assert iw.main(["--snapshots", str(tmp_path), "--update"]) == 1
+    assert set(json.loads((tmp_path / "good.json").read_text())["entries"]) == good_new
+    assert (tmp_path / "bad.json").read_text(encoding="utf-8") == bad_old
+    # Unchanged source must not be rewritten just to bump fetched_at.
+    assert (tmp_path / "same.json").read_text(encoding="utf-8") == same_old
+
+    # Explicit operator acceptance advances the held snapshot cleanly.
+    assert iw.main(["--snapshots", str(tmp_path), "--update", "--accept-alert"]) == 0
+    assert set(json.loads((tmp_path / "bad.json").read_text())["entries"]) == bad_new
+
+
+def test_github_meta_uses_token_and_get_retries_transient_503(monkeypatch):
+    seen_headers = []
+
+    class _Raw:
+        def __init__(self, data):
+            self._data = data
+        def read(self, n=-1, decode_content=True):
+            return self._data
+
+    class _Resp:
+        def __init__(self, status, data=b"{}"):
+            self.status_code = status
+            self.raw = _Raw(data)
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise iw.requests.HTTPError(f"{self.status_code}")
+
+    responses = iter([_Resp(503), _Resp(200, b'{"web": ["192.0.2.0/24"]}')])
+    monkeypatch.setattr(iw, "_sleep", lambda s: None)
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-gh-token")
+
+    def fake_get(url, headers=None, **kw):
+        seen_headers.append(dict(headers or {}))
+        return next(responses)
+
+    monkeypatch.setattr(iw.requests, "get", fake_get)
+    data = iw.fetch_github_meta()
+    assert data == {"web": ["192.0.2.0/24"]}
+    assert len(seen_headers) == 2
+    assert seen_headers[0]["Authorization"] == "Bearer synthetic-gh-token"

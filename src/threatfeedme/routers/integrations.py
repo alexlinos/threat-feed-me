@@ -65,16 +65,14 @@ def _scheme_downgraded(old_url: str, new_url: str) -> bool:
 
 
 def _validate_credential(value: str) -> None:
-    """Same validation discipline as routers/feeds.set_api_key: reject control
-    characters, oversized values (Windows 32 KB env cap), and non-ASCII BEFORE
-    writing anything to .env."""
-    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+    """Reject control characters (including CR/LF/NUL/C1) and oversized values
+    BEFORE writing to .env, while allowing printable UTF-8 passwords (e.g.
+    accented characters on a UniFi or CrowdSec gateway)."""
+    if any(ord(c) < 32 or ord(c) == 127 or (0x80 <= ord(c) <= 0x9F) for c in value):
         raise HTTPException(status_code=400, detail="Credential contains control characters")
     if len(value) > MAX_KEY_CHARS:
         raise HTTPException(status_code=400,
                             detail=f"Credential is longer than {MAX_KEY_CHARS} characters")
-    if not value.isascii():
-        raise HTTPException(status_code=400, detail="Credential must be plain ASCII text")
 
 
 def _host_key(host: str) -> str:

@@ -179,22 +179,56 @@ def test_redirect_scheme_downgrade_refused_for_url_key(db, monkeypatch):
         )
 
 
-def test_parse_feed_content_ipv6_bom_and_inline_comments():
+def test_parse_feed_content_ipv6_opt_in_bom_and_inline_comments():
     text = (
         "\ufeff# header 198.51.100.99\n"
+        "; comment 198.51.100.98\n"
         "198.51.100.1 # mirror 198.51.100.2\n"
         "203.0.113.0/24 ; SBL 198.51.100.3\n"
+        "Network # 39 198.51.100.7\n"
+        "scanner;198.51.100.8;high\n"
+        "scanner;2001:db8::8;high\n"
         "2001:4860:4860::8888\n"
         "2606:4700:4700::/48\n"
     )
-    parsed = {e["ip"]: e for e in fi.parse_feed_content(text)}
-    assert "198.51.100.1" in parsed
-    assert "198.51.100.2" not in parsed
-    assert "198.51.100.3" not in parsed
-    assert "198.51.100.99" not in parsed
-    assert parsed["203.0.113.0"]["cidr"] == "203.0.113.0/24"
+    # Default: IPv4 only (non-breaking for IPv4-only firewalls polling bare /feeds/*.txt)
+    v4_only = {e["ip"]: e for e in fi.parse_feed_content(text)}
+    assert "198.51.100.1" in v4_only
+    assert "198.51.100.2" not in v4_only
+    assert "198.51.100.3" not in v4_only
+    assert "198.51.100.98" not in v4_only
+    assert "198.51.100.99" not in v4_only
+    assert "198.51.100.7" in v4_only
+    assert "198.51.100.8" in v4_only
+    assert v4_only["203.0.113.0"]["cidr"] == "203.0.113.0/24"
+    assert "2001:db8::8" not in v4_only
+    assert "2001:4860:4860::8888" not in v4_only
+    assert "2606:4700:4700::" not in v4_only
+
+    # Opt-in include_ipv6=True: IPv6 addresses and CIDRs are extracted too
+    parsed = {e["ip"]: e for e in fi.parse_feed_content(text, include_ipv6=True)}
+    assert "2001:db8::8" in parsed
     assert "2001:4860:4860::8888" in parsed
     assert parsed["2606:4700:4700::"]["cidr"] == "2606:4700:4700::/48"
+
+
+def test_per_feed_include_ipv6_persists_and_controls_fetch(db, monkeypatch):
+    from threatfeedme import pipeline
+    feed_v4 = FeedSource(name="plain_v4", url="https://feeds.example.org/v4.txt")
+    feed_v6 = FeedSource(name="custom_v6", url="https://feeds.example.org/v6.txt", include_ipv6=True)
+    db.add_feed(feed_v4)
+    db.add_feed(feed_v6)
+    assert db.get_feed_source("plain_v4").include_ipv6 is False
+    assert db.get_feed_source("custom_v6").include_ipv6 is True
+    assert pipeline.resolve_ingest_ipv6({}) is False
+    assert pipeline.resolve_ingest_ipv6({"feeds_settings": {"ingest_ipv6": True}}) is True
+
+    ing = fi.FeedIngestor(db, allow_private_urls=True)
+    monkeypatch.setattr(ing, "_fetch_url", lambda f: "198.51.100.1\n2001:4860:4860::8888\n")
+    got_v4 = {e["ip"] for e in ing.fetch_feed(db.get_feed_source("plain_v4"))}
+    got_v6 = {e["ip"] for e in ing.fetch_feed(db.get_feed_source("custom_v6"))}
+    assert got_v4 == {"198.51.100.1"}
+    assert got_v6 == {"198.51.100.1", "2001:4860:4860::8888"}
 
 
 def test_negative_retry_after_clamps_to_zero(db, monkeypatch):
@@ -266,7 +300,7 @@ def test_crowdsec_scheme_downgrade_and_tls_disable_clear_credentials(db, tmp_pat
     assert crowdsec.ENV_BOUNCER_KEY not in os.environ
 
 
-def test_integration_credentials_reject_oversized_and_non_ascii(tmp_path, monkeypatch):
+def test_integration_credentials_reject_oversized_and_controls_allow_utf8(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "env_file", lambda: str(tmp_path / ".env"))
     with pytest.raises(HTTPException) as e1:
         int_router.unifi_credentials(
@@ -276,11 +310,37 @@ def test_integration_credentials_reject_oversized_and_non_ascii(tmp_path, monkey
     assert e1.value.status_code == 400
     with pytest.raises(HTTPException) as e2:
         int_router.crowdsec_credentials(
-            int_router.CrowdSecCredentialsRequest(bouncer_key="héllo"),
+            int_router.CrowdSecCredentialsRequest(bouncer_key="bad\nvalue"),
             _=True, _csrf=True,
         )
     assert e2.value.status_code == 400
+    with pytest.raises(HTTPException) as e3:
+        int_router.crowdsec_credentials(
+            int_router.CrowdSecCredentialsRequest(bouncer_key="bad\x85ctrl"),
+            _=True, _csrf=True,
+        )
+    assert e3.value.status_code == 400
     assert not (tmp_path / ".env").exists()
+
+    # Accented UTF-8 gateway passwords must still be accepted.
+    int_router.unifi_credentials(
+        int_router.UniFiCredentialsRequest(username="admin", password="café-pass-ñ"),
+        _=True, _csrf=True,
+    )
+    assert (tmp_path / ".env").exists()
+    monkeypatch.delenv(pusher_unifi.ENV_USER, raising=False)
+    monkeypatch.delenv(pusher_unifi.ENV_PASSWORD, raising=False)
+
+
+def test_catalog_unchanged_version_poll_clears_stale_error(db):
+    doc = "catalog_version: 3\nfeeds:\n  - name: f1\n    url: https://feeds.example.org/a.txt\n"
+    cfg = {"catalog": {"enabled": True, "url": "https://raw.githubusercontent.com/o/r/main/feed_catalog.yaml",
+                       "auto_add": True}, "feeds": []}
+    assert catalog_sync.sync_catalog(db, cfg, fetch=lambda u: doc)["status"] == "synced"
+    db.set_setting(catalog_sync.CATALOG_ERROR_KEY, "2026-11-04T00:00:00+00:00: ConnectionError")
+    res = catalog_sync.sync_catalog(db, cfg, fetch=lambda u: doc)
+    assert res["status"] == "skipped"
+    assert db.get_setting(catalog_sync.CATALOG_ERROR_KEY) is None
 
 
 # ---- 4. Vendor catalog & application lists ----------------------------------

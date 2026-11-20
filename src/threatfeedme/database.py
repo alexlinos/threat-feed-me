@@ -351,7 +351,8 @@ class Database:
                     enabled INTEGER NOT NULL DEFAULT 1,
                     added_by TEXT,
                     added_at TEXT,
-                    seed_fingerprint TEXT
+                    seed_fingerprint TEXT,
+                    include_ipv6 INTEGER NOT NULL DEFAULT 0
                 )
             """)
 
@@ -587,6 +588,11 @@ class Database:
             if f_cols and 'indicator_kind' not in f_cols:
                 try:
                     cursor.execute("ALTER TABLE feeds ADD COLUMN indicator_kind TEXT NOT NULL DEFAULT 'ip'")
+                except sqlite3.OperationalError:
+                    pass
+            if f_cols and 'include_ipv6' not in f_cols:
+                try:
+                    cursor.execute("ALTER TABLE feeds ADD COLUMN include_ipv6 INTEGER NOT NULL DEFAULT 0")
                 except sqlite3.OperationalError:
                     pass
 
@@ -2054,6 +2060,7 @@ class Database:
             # 'ip' so loading the roster can't crash.
             indicator_kind=(lambda k: k if k in ('ip', 'domain') else 'ip')(
                 row['indicator_kind'] if 'indicator_kind' in row.keys() else 'ip'),
+            include_ipv6=bool(row['include_ipv6']) if 'include_ipv6' in row.keys() else False,
         )
 
     def seed_feeds_from_config(self, config: Dict) -> int:
@@ -2073,13 +2080,13 @@ class Database:
                     "INSERT OR IGNORE INTO feeds "
                     "(name, url, feed_type, weight, update_interval, requires_auth, "
                     "auth_env, auth_header, local_file, scraper, enabled, added_by, "
-                    "added_at, seed_fingerprint, indicator_kind) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?, ?, ?)",
+                    "added_at, seed_fingerprint, indicator_kind, include_ipv6) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?, ?, ?, ?)",
                     (feed.name, feed.url, feed.feed_type.value, feed.weight,
                      feed.update_interval, int(feed.requires_auth), feed.auth_env,
                      feed.auth_header, int(feed.local_file), feed.scraper,
                      int(feed.enabled), now, _feed_fingerprint(feed),
-                     feed.indicator_kind or 'ip'),
+                     feed.indicator_kind or 'ip', int(feed.include_ipv6)),
                 )
                 seeded += 1
             return seeded
@@ -2273,8 +2280,8 @@ class Database:
                 "INSERT INTO feeds "
                 "(name, url, feed_type, weight, update_interval, requires_auth, "
                 "auth_env, auth_header, local_file, scraper, enabled, added_by, "
-                "added_at, seed_fingerprint, indicator_kind) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "added_at, seed_fingerprint, indicator_kind, include_ipv6) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(name) DO UPDATE SET "
                 "url = excluded.url, feed_type = excluded.feed_type, weight = excluded.weight, "
                 "update_interval = excluded.update_interval, "
@@ -2282,12 +2289,13 @@ class Database:
                 "auth_header = excluded.auth_header, local_file = excluded.local_file, "
                 "scraper = excluded.scraper, enabled = excluded.enabled, "
                 "seed_fingerprint = excluded.seed_fingerprint, "
-                "indicator_kind = excluded.indicator_kind",
+                "indicator_kind = excluded.indicator_kind, "
+                "include_ipv6 = excluded.include_ipv6",
                 (feed.name, feed.url, feed.feed_type.value, feed.weight,
                  feed.update_interval, int(feed.requires_auth), feed.auth_env,
                  feed.auth_header, int(feed.local_file), feed.scraper,
                  int(feed.enabled), added_by, now, seed_fingerprint,
-                 feed.indicator_kind or 'ip'),
+                 feed.indicator_kind or 'ip', int(feed.include_ipv6)),
             )
             cur.execute("DELETE FROM deleted_feeds WHERE name = ?", (feed.name,))
             if url_changed:

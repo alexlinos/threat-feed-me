@@ -129,6 +129,7 @@ const addFeed = guardSubmit(async function (e) {
         weight: isNaN(w) ? 1.0 : w,
         indicator_kind: document.getElementById('f-kind').value,
         format: document.getElementById('f-format').value,
+        include_ipv6: document.getElementById('f-kind').value === 'ip' && !!(document.getElementById('f-ipv6') && document.getElementById('f-ipv6').checked),
     };
     // A keyed TAXII feed gets its own TFM_FEED_<NAME> variable (the only kind
     // of custom key the server accepts, credentials.py); Set key fills it in.
@@ -155,6 +156,9 @@ const uploadFeed = guardSubmit(async function (e) {
     fd.append('name', document.getElementById('u-name').value.trim());
     fd.append('weight', document.getElementById('u-weight').value || '1.0');
     fd.append('indicator_kind', document.getElementById('u-kind').value);
+    if (document.getElementById('u-kind').value === 'ip' && document.getElementById('u-ipv6') && document.getElementById('u-ipv6').checked) {
+        fd.append('include_ipv6', 'true');
+    }
     fd.append('file', file);
     const r = await apiFetch('/api/feeds/upload', {method:'POST', body: fd});
     const j = await r.json().catch(() => ({}));
@@ -196,6 +200,16 @@ async function toggleFeed(el, name) {
         alert('Could not ' + (enabled ? 'enable' : 'disable') + ' "' + name + '"');
     } finally {
         el.disabled = false;
+    }
+}
+function feedKindChanged(sel, wrapId) {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const isIp = sel.value === 'ip';
+    wrap.hidden = !isIp;
+    if (!isIp) {
+        const cb = wrap.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
     }
 }
 function feedFormatChanged(sel) {

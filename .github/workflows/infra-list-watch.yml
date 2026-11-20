@@ -14,7 +14,13 @@ name: Infra list watch
 on:
   schedule:
     - cron: "17 6 * * *"   # daily, off the hour
-  workflow_dispatch:        # manual re-run while iterating on sources
+  workflow_dispatch:        # manual re-run while iterating on sources or accepting an alert
+    inputs:
+      accept_alert:
+        description: "Accept an alerting vendor change as the new snapshot baseline"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write    # commit snapshots to the orphan branch
@@ -68,27 +74,37 @@ jobs:
         # 2 = a source failed), read by the alert and fail steps below. It
         # must not end this step: the default shell is `bash -e`, and with
         # pipefail a non-zero exit used to stop the step before the code was
-        # recorded, so no alert issue could ever open.
+        # recorded, so no alert issue could ever open. Alerting sources are
+        # held at their last-good snapshot by infra_watch.py itself unless
+        # workflow_dispatch passes accept_alert=true, so healthy vendors still
+        # update while the suspicious one stays frozen for maintainer review.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCEPT_ALERT: ${{ inputs.accept_alert == true && '1' || '' }}
         run: |
           set +e
-          python scripts/infra_watch.py --snapshots .snaps/snapshots --update | tee watch.log
+          EXTRA=()
+          if [ -n "$ACCEPT_ALERT" ]; then
+            EXTRA+=(--accept-alert)
+          fi
+          python scripts/infra_watch.py --snapshots .snaps/snapshots --update "${EXTRA[@]}" | tee watch.log
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Build application catalog
         # Slice the snapshots into finished lists + catalog.json (issue #28).
-        # Skipped when infra_watch alerted (exit 1 = suspicious swing or wide
-        # prefix): hold the suspicious snapshot for maintainer review instead
-        # of publishing it straight to every install.
-        if: steps.watch.outputs.exit != '1'
+        # Alerting sources were held at their last-good snapshot above, so
+        # rebuilding publishes updates for all healthy vendors without leaking
+        # an unreviewed suspicious change.
         run: |
           python scripts/build_catalog.py --snapshots .snaps/snapshots --out .snaps/catalog
 
       - name: Commit changed snapshots
-        if: steps.watch.outputs.exit != '1'
+        # Only commit when at least one vendor snapshot or catalog file changed
+        # (report.md/report.json timestamps alone must not push daily no-op commits).
         run: |
           cd .snaps
-          git add -A snapshots catalog
-          if ! git diff --cached --quiet; then
+          if git status --porcelain snapshots catalog | grep -qvE '^.. snapshots/report\.(md|json)$'; then
+            git add -A snapshots catalog
             git commit -m "infra-watch: $(date -u +%F) snapshot refresh"
             git push origin HEAD:infra-snapshots
           fi
