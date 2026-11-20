@@ -145,7 +145,21 @@ def run(db_path: str, config_path: str, model_path: str = "",
     # gate's corpus counts can't see (pipeline.scoring_input_key).
     if written:
         from .pipeline import PREDICT_STAMP_KEY
-        db.set_setting(PREDICT_STAMP_KEY, datetime.now(timezone.utc).isoformat())
+        stamp = datetime.now(timezone.utc).isoformat()
+        for attempt in range(_LOCK_RETRIES):
+            try:
+                with db._cursor() as cur:
+                    cur.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+                    cur.execute(
+                        "INSERT INTO settings (key, value) VALUES (?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (PREDICT_STAMP_KEY, stamp))
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < _LOCK_RETRIES - 1:
+                    time.sleep(_LOCK_BACKOFF_S * (attempt + 1))
+                    continue
+                raise
 
     vals = [round(s, _ROUND) for s in scores.values() if s is not None]
     summary = {

@@ -20,7 +20,7 @@ from typing import Dict
 
 SETTINGS_KEY = "feed_polls"
 _FLUSH_EVERY_S = 60
-_MAX_PATHS = 64          # bounded: paths come from our own routes only
+_MAX_PATHS = 512         # bounded: threat feeds + TAXII + 200+ application lists
 _AGENT_LEN = 80
 
 _lock = threading.Lock()

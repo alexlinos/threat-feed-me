@@ -30,13 +30,16 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            constraints.txt
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -72,13 +75,16 @@ jobs:
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Build application catalog
-        # Slice the snapshots into finished lists + catalog.json (issue
-        # #28). Runs even when the watch alerted: a big upstream change is
-        # exactly when the published catalog should still be coherent.
+        # Slice the snapshots into finished lists + catalog.json (issue #28).
+        # Skipped when infra_watch alerted (exit 1 = suspicious swing or wide
+        # prefix): hold the suspicious snapshot for maintainer review instead
+        # of publishing it straight to every install.
+        if: steps.watch.outputs.exit != '1'
         run: |
           python scripts/build_catalog.py --snapshots .snaps/snapshots --out .snaps/catalog
 
       - name: Commit changed snapshots
+        if: steps.watch.outputs.exit != '1'
         run: |
           cd .snaps
           git add -A snapshots catalog

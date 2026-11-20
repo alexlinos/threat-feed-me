@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import re
+import tempfile
 import threading
 from typing import Optional
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap on uploaded lists
 MAX_KEY_CHARS = 4096                # an Authorization header value, generously
 _add_feed_lock = threading.Lock()
+_env_write_lock = threading.Lock()
 
 
 def _safe_upload_path(feed_name: str) -> str:
@@ -264,19 +266,31 @@ def _store_upload(data: bytes, name: str, dest: str, ftype: FeedType, weight: fl
     )
     # Re-uploading your own list is how it gets updated; turning a REMOTE feed
     # (a shipped default, say) into an upload by reusing its name is not.
-    # Checked before the file is written, so a refused upload leaves nothing.
-    existing = core.db.get_feed_source(feed.name)
-    if existing is not None and not existing.local_file:
-        raise HTTPException(
-            status_code=409,
-            detail=f"'{feed.name}' is a remote feed ({existing.url}); upload under another name",
-        )
+    # Checked and written atomically under _add_feed_lock so concurrent submits
+    # cannot race or expose a half-written file to a running fetch.
+    with _add_feed_lock:
+        existing = core.db.get_feed_source(feed.name)
+        if existing is not None and not existing.local_file:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{feed.name}' is a remote feed ({existing.url}); upload under another name",
+            )
 
-    # Persist the sanitized list, then register/point the feed at it.
-    with open(dest, "w", encoding="utf-8", newline="\n") as f:
-        for entry in indicators:
-            f.write((entry.get("cidr") or entry["ip"]) + "\n")
-    core.db.add_feed(feed)
+        # Persist the sanitized list atomically, then register/point the feed at it.
+        dest_dir = os.path.dirname(dest)
+        fd, tmp = tempfile.mkstemp(prefix=".upload-", suffix=".tmp", dir=dest_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                for entry in indicators:
+                    f.write((entry.get("cidr") or entry["ip"]) + "\n")
+            os.replace(tmp, dest)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        core.db.add_feed(feed)
     return WhitelistResponse(
         success=True,
         message=f"Uploaded '{feed.name}' with {len(indicators)} indicators",
@@ -295,7 +309,7 @@ def _delete_upload_file(feed: FeedSource) -> None:
     except FileNotFoundError:
         pass
     except OSError as e:
-        logger.warning(f"could not remove upload for deleted feed '{name}': {e}")
+        logger.warning(f"could not remove upload for deleted feed '{feed.name}': {e}")
 
 
 @router.delete("/api/feeds/{name}")
@@ -342,33 +356,40 @@ _ENV_VAR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def _write_env_var(path: str, var: str, value: Optional[str]) -> None:
-    """Set or remove VAR in the .env file, preserving other lines. Written
-    atomically; file permissions restricted best-effort (no-op on Windows)."""
-    lines = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            lines = [l.rstrip("\n") for l in f]
-    except (FileNotFoundError, OSError):
-        pass
-    lines = [l for l in lines if not l.strip().startswith(f"{var}=")]
-    if value is not None:
-        lines.append(f"{var}={value}")
-    tmp = path + ".tmp"
-    # Create the temp file 0600 from the first byte. It used to be created
-    # with the umask default (often world-readable) and only chmod'ed after
-    # the rename, leaving a window in which the secrets file was readable.
-    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-    try:
-        os.chmod(tmp, 0o600)   # O_CREAT's mode is ignored if tmp pre-existed
-    except OSError:
-        pass
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + ("\n" if lines else ""))
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    """Set or remove VAR in the .env file, preserving other lines. Serialized
+    with _env_write_lock and written atomically via a unique 0600 temp file so
+    concurrent credential updates never race or clobber each other."""
+    with _env_write_lock:
+        lines = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = [l.rstrip("\n") for l in f]
+        except (FileNotFoundError, OSError):
+            pass
+        lines = [l for l in lines if not l.strip().startswith(f"{var}=")]
+        if value is not None:
+            lines.append(f"{var}={value}")
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=parent)
+        try:
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(lines) + ("\n" if lines else ""))
+            os.replace(tmp, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 # ---------------------- Feed false-positive attributions ----------------------

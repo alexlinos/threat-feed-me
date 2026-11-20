@@ -43,7 +43,7 @@ def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = N
     nb = getattr(whitelist_map, "never_block", None)
     if nb and nb.matches(cidr or ip):
         return False
-    eff = effective_sources(ip, sources, whitelist_map)
+    eff = effective_sources(ip, sources, whitelist_map, cidr=cidr)
     if eff is None:
         return False
     if tier and len(eff) > 0:
@@ -51,11 +51,19 @@ def row_included(ip: str, sources, whitelist_map: dict, tier: ConfidenceTier = N
         # "exclude from high tier output only".
         tier_scope = f"tier:{tier.value}"
         if hasattr(whitelist_map, "scoped_feeds"):
-            scoped = whitelist_map.scoped_feeds(ip)
+            scoped = whitelist_map.scoped_feeds(cidr or ip)
+            if cidr and cidr != ip:
+                ip_scoped = whitelist_map.scoped_feeds(ip)
+                if ip_scoped:
+                    scoped = (set(scoped) if scoped else set()) | set(ip_scoped)
             if scoped and tier_scope in scoped:
                 return False
-        elif whitelist_map.get(ip) and tier_scope in whitelist_map.get(ip, set()):
-            return False
+        else:
+            scoped = set(whitelist_map.get(ip) or ())
+            if cidr and cidr != ip:
+                scoped |= set(whitelist_map.get(cidr) or ())
+            if tier_scope in scoped:
+                return False
     return len(eff) > 0
 
 
@@ -75,12 +83,19 @@ def _atomic_open(filepath: str, newline=None):
     the rename on one filesystem, which is what makes it atomic."""
     directory = os.path.dirname(os.path.abspath(filepath))
     fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=directory)
+    opened = False
     try:
-        with os.fdopen(fd, 'w', newline=newline) as f:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline=newline) as f:
+            opened = True
             yield f
         os.chmod(tmp, 0o644)
         os.replace(tmp, filepath)
     except BaseException:
+        if not opened:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             os.unlink(tmp)
         except OSError:

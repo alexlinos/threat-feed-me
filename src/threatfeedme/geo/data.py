@@ -63,7 +63,10 @@ class CountryBuckets:
         return cls(path.read_bytes())
 
     def country_for_ip(self, ip_int: int) -> str:
-        """ISO-3166 alpha-2 code for an integer IPv4, or 'ZZ' if unmapped."""
+        """ISO-3166 alpha-2 code for an integer IPv4, or 'ZZ' if unmapped or
+        not an IPv4 integer (IPv6 has no /16 table)."""
+        if ip_int < 0 or ip_int > 0xFFFFFFFF:
+            return "ZZ"
         idx = (ip_int >> 16) & 0xFFFF
         # idx is already the /16 index: A.B.0.0/16 -> A*256+B = ip_int>>16
         code_idx = struct.unpack_from("<H", self._buckets, idx * 2)[0]
@@ -75,6 +78,9 @@ class CountryBuckets:
         from ipaddress import ip_address
 
         try:
-            return self.country_for_ip(int(ip_address(ip)))
+            addr = ip_address(ip)
+            if addr.version != 4:
+                return "ZZ"
+            return self.country_for_ip(int(addr))
         except Exception:
             return "ZZ"

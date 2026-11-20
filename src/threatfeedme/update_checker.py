@@ -28,11 +28,15 @@ written on every ATTEMPT — a failed check earns the same rest as a
 successful one, so a down network is retried daily, not every scheduler
 tick) keeps one install at ~1 req/day.
 """
+import json
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
 
 import requests
+
+from threatfeedme.feed_ingestor import _read_capped_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,7 @@ AVAILABLE_KEY = "update_available"
 
 CHECK_INTERVAL_HOURS = 24.0
 FETCH_TIMEOUT_S = 10.0
+_MAX_UPDATE_BYTES = 2 * 1024 * 1024
 _USER_AGENT = "ThreatFeedMe/update-checker"
 
 # Same guard as the publish workflow (docker-publish.yml): whole string,
@@ -62,13 +67,32 @@ _USER_AGENT = "ThreatFeedMe/update-checker"
 _TAG_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
+class _CappedResponse:
+    """Thin wrapper over a streamed, byte-capped response body."""
+
+    def __init__(self, status_code: int, raw: bytes):
+        self.status_code = status_code
+        self._raw = raw
+
+    def json(self):
+        return json.loads(self._raw.decode("utf-8", errors="replace"))
+
+
 def _http_get(url: str, timeout: float):
     """Network seam (2.5.7 lesson: anything that opens a socket needs an
     injectable seam so no unit test can ever reach the network). Tests
-    patch this function; production is the only caller of requests.get."""
-    return requests.get(url, timeout=timeout, allow_redirects=True,
+    patch this function or requests.get; production is the only caller."""
+    resp = requests.get(url, timeout=timeout, allow_redirects=True, stream=True,
                         headers={"User-Agent": _USER_AGENT,
                                  "Accept": "application/vnd.github+json"})
+    try:
+        if getattr(resp, "status_code", None) != 200 or not hasattr(resp, "iter_content"):
+            return resp
+        raw = _read_capped_bytes(resp, "update_checker", _MAX_UPDATE_BYTES)
+        return _CappedResponse(resp.status_code, raw)
+    finally:
+        if hasattr(resp, "close"):
+            resp.close()
 
 
 def updates_config(config) -> dict:
@@ -131,6 +155,8 @@ def check_for_updates(db, config=None, now=None):
     url = cfg.get("url") or RELEASES_URL
     try:
         timeout = float(cfg.get("timeout_seconds", FETCH_TIMEOUT_S))
+        if not math.isfinite(timeout) or timeout <= 0:
+            timeout = FETCH_TIMEOUT_S
     except (TypeError, ValueError):
         timeout = FETCH_TIMEOUT_S
     ts = _now_iso(now)

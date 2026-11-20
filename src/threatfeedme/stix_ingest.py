@@ -107,6 +107,8 @@ def _observation(tokens: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
             else:
                 raise _Skip("unexpected token")
             i += 1
+            if i >= len(toks):
+                raise _Skip(f"trailing {word}")
     chains.append(chain)
     if has_parens and saw_and:
         raise _Skip("grouped AND")
@@ -153,6 +155,8 @@ def pattern_values(pattern: str) -> List[Tuple[str, str]]:
                 # (WITHIN, START, STOP, REPEATS): conditional, not a block.
                 raise _Skip(f"{word} between observations")
             i += 1
+            if i >= len(toks):
+                raise _Skip("trailing OR between observations")
     return values
 
 
@@ -173,18 +177,24 @@ def indicator_values(objects: Iterable[dict], kind: str,
     When one indicator id appears in several versions, the latest wins."""
     now = now or datetime.now(timezone.utc)
     wanted = _IP_PATHS if kind == "ip" else _DOMAIN_PATHS
-    latest: Dict[str, dict] = {}
+    latest: Dict[str, Tuple[datetime, dict]] = {}
+    _min_dt = datetime.min.replace(tzinfo=timezone.utc)
+    anon_seq = 0
     for obj in objects:
         if not isinstance(obj, dict) or obj.get("type") != "indicator":
             continue
-        oid = str(obj.get("id") or "")
+        oid = str(obj.get("id") or "").strip()
+        if not oid:
+            anon_seq += 1
+            oid = f"__anon_{anon_seq}"
+        mod_dt = _parse_time(obj.get("modified")) or _min_dt
         prev = latest.get(oid)
-        if prev is None or str(obj.get("modified") or "") >= str(prev.get("modified") or ""):
-            latest[oid] = obj
+        if prev is None or mod_dt >= prev[0]:
+            latest[oid] = (mod_dt, obj)
     out, seen = [], set()
     stats = {"indicators": 0, "revoked": 0, "expired": 0, "benign": 0,
              "not_stix": 0, "conditional": 0, "other_kind": 0}
-    for obj in latest.values():
+    for _mod_dt, obj in latest.values():
         stats["indicators"] += 1
         if obj.get("revoked") is True:
             stats["revoked"] += 1

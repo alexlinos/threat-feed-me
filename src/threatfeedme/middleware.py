@@ -131,7 +131,7 @@ ALLOWED_HOSTS_ENV = "TFM_ALLOWED_HOSTS"
 ALLOWED_HOSTS_SETTING = "allowed_hosts"
 ENFORCE_SETTING = "allowed_hosts_enforce"
 _EXEMPT_PREFIXES = ("/feeds/", "/lists/", "/taxii2/", "/static/")
-_EXEMPT_PATHS = frozenset({"/healthz", "/favicon.ico"})
+_EXEMPT_PATHS = frozenset({"/healthz", "/favicon.ico", "/taxii2"})
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
 _CACHE_TTL = 5.0
@@ -147,7 +147,12 @@ def host_of_header(value: Optional[str]) -> str:
     """Bare, lowercase host from a Host header: port and IPv6 brackets gone."""
     h = (value or "").strip().lower()
     if h.startswith("["):
-        return h[1:h.find("]")] if "]" in h else h[1:]
+        end = h.find("]")
+        if end != -1:
+            rest = h[end + 1:]
+            if not rest or (rest.startswith(":") and rest[1:].isdigit()):
+                return h[1:end]
+        return h
     if h.count(":") == 1:          # host:port (bare IPv6 has several colons)
         h = h.split(":", 1)[0]
     return h.rstrip(".")

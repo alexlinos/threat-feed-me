@@ -187,10 +187,12 @@ class FeatureBuilder:
                     continue
                 if addr.version == 4:
                     prefix_counts[_prefix4_for(addr)] += 1
+                    if buckets is not None:
+                        country_counts[buckets.country_for_ip(int(addr))] += 1
                 else:
                     prefix_counts[_prefix6_for(addr)] += 1
-                if buckets is not None:
-                    country_counts[buckets.country_for_ip(int(addr))] += 1
+                    if buckets is not None:
+                        country_counts["ZZ"] += 1
         self._prefix_counts = prefix_counts
         ranked = sorted(country_counts, key=lambda c: country_counts[c], reverse=True)
         self._country_rank = {c: i for i, c in enumerate(ranked)}
@@ -334,11 +336,15 @@ class FeatureBuilder:
                         streak += 1
                         max_streak = max(max_streak, streak)
                         gaps.append(delta)
+                    else:
+                        streak = 0  # sub-floor cadence blip breaks consecutive churn streak
                     # consumed either way: an unresolved short gap is
                     # cadence noise, and the NEXT return measures from the
                     # next leave after it (arrival-first tick ordering means
                     # same-tick pairs no longer land here)
                     last_leave = None
+                else:
+                    streak = 0      # arrival without a prior leave breaks streak
         if last_leave is not None:
             streak = 0  # trailing unanswered leave is not a churn cycle
 
@@ -373,6 +379,7 @@ class FeatureBuilder:
         if ev:
             last_event_age_h = max(0.0, (self.now - ev[-1][0]).total_seconds() / 3600.0)
 
+        addr = None
         try:
             addr = ipaddress.ip_address(ip_str)
             key = (_prefix4_for(addr) if addr.version == 4 else _prefix6_for(addr))
@@ -384,9 +391,9 @@ class FeatureBuilder:
 
         country = -1.0
         buckets = self._buckets
-        if buckets is not None:
+        if buckets is not None and addr is not None:
             try:
-                code = buckets.country_for_ip(int(ipaddress.ip_address(ip_str)))
+                code = buckets.country_for_ip(int(addr)) if addr.version == 4 else "ZZ"
                 country = float(self._country_rank.get(code, -1))
             except Exception:
                 country = -1.0
@@ -470,6 +477,8 @@ class Predictor:
 
     def score_many(self, ips: Iterable[str]) -> Dict[str, Optional[float]]:
         ips = list(ips)
+        if not ips:
+            return {}
         if not self.model_ready():
             return {ip: None for ip in ips}
         booster = self._load()

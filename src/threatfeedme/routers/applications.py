@@ -14,7 +14,9 @@ in threatfeedme.applications, applied at write time; there is no second
 filter here, and notably NOT the known-good output filter, which would
 strip these entries by design.
 """
+import csv
 import hashlib
+import io
 import json
 import logging
 from typing import Annotated, Optional
@@ -182,8 +184,11 @@ def list_csv(name: str, request: Request, limit: Optional[int] = _LIMIT,
              kind: _Kind = None, family: _Family = None, hosts: _Hosts = None,
              wildcards: _Wildcards = None):
     entries, total, _row = _served(request, name, "csv", limit, kind, family, hosts, wildcards)
-    return _respond(request, "".join(f"{e}\r\n" for e in entries),
-                    "text/csv; charset=utf-8", total)
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    for e in entries:
+        writer.writerow([e])
+    return _respond(request, buf.getvalue(), "text/csv; charset=utf-8", total)
 
 
 @router.get("/lists/{name}.json")
@@ -268,6 +273,8 @@ def add_application(req: ApplicationListRequest, _=Depends(require_auth),
         core.db.add_application_list(
             req.name, req.url, req.format, req.filter_expr, req.update_interval,
             req.min_v4_prefix, req.min_v6_prefix, req.change_threshold_pct)
+        if not req.enabled:
+            core.db.update_application_list(req.name, {"enabled": 0})
     except Exception:
         logger.exception("[applications] creating %s failed", req.name)
         raise HTTPException(status_code=500, detail="Could not create the list")

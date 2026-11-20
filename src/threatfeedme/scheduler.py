@@ -158,19 +158,20 @@ def _run_refresh_holding_lock(only: Optional[List[str]] = None) -> None:
     """Body of one refresh. The caller must already hold _refresh_lock and
     have set running=True; both are released/cleared here."""
     try:
-        result = pipeline.run_refresh(core.db, core.config, only=only)
-        _refresh_state["last_result"] = result
-        _refresh_state["last_error"] = None
-    except Exception as e:  # keep the scheduler/endpoint alive on failure
-        _refresh_state["last_error"] = str(e)
-        logger.error(f"Refresh failed: {e}")
-    try:
-        warm_dashboard_caches()     # still "running": the UI keeps its last numbers
-    except Exception as e:   # a cold cache just means the next click pays for it
-        logger.warning(f"Dashboard cache warm-up failed: {e}")
+        try:
+            result = pipeline.run_refresh(core.db, core.config, only=only)
+            _refresh_state["last_result"] = result
+            _refresh_state["last_error"] = None
+        except Exception as e:  # keep the scheduler/endpoint alive on failure
+            _refresh_state["last_error"] = str(e)
+            logger.error(f"Refresh failed: {e}")
+        try:
+            warm_dashboard_caches()     # still "running": the UI keeps its last numbers
+        except Exception as e:   # a cold cache just means the next click pays for it
+            logger.warning(f"Dashboard cache warm-up failed: {e}")
     finally:
-        _refresh_state["running"] = False
         _refresh_state["last_finished"] = datetime.now(timezone.utc).isoformat()
+        _refresh_state["running"] = False
         _refresh_lock.release()
 
 
@@ -208,7 +209,12 @@ def start_refresh_async(only: Optional[List[str]] = None) -> bool:
     if not _refresh_lock.acquire(blocking=False):
         return False
     _refresh_state["running"] = True
-    threading.Thread(target=_run_refresh_holding_lock, args=(only,), daemon=True).start()
+    try:
+        threading.Thread(target=_run_refresh_holding_lock, args=(only,), daemon=True).start()
+    except BaseException:
+        _refresh_state["running"] = False
+        _refresh_lock.release()
+        raise
     return True
 
 
@@ -246,7 +252,12 @@ def start_application_lists_pass() -> bool:
             with _apps_pass_lock:
                 _apps_pass_running = False
 
-    threading.Thread(target=_pass_thread_body, daemon=True, name="app-lists").start()
+    try:
+        threading.Thread(target=_pass_thread_body, daemon=True, name="app-lists").start()
+    except BaseException:
+        with _apps_pass_lock:
+            _apps_pass_running = False
+        raise
     return True
 
 

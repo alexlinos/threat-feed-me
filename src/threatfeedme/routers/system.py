@@ -1,6 +1,8 @@
 """The HTML dashboard page plus stats, settings, backup, and rescore endpoints."""
 import json
+import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -24,6 +26,13 @@ from threatfeedme.scorer import fp_penalty_factor, FP_DEGRADED_FACTOR
 from threatfeedme.telemetry import feed_telemetry
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_HTML_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+}
 
 
 # ==================== DASHBOARD (HTML) ====================
@@ -40,36 +49,41 @@ _REASON_BADGES = {
 # Keyed by indicator count so a refresh that changes the corpus invalidates
 # the cache; otherwise the map would show first-computed numbers until the
 # process restarted.
+_geo_lock = threading.Lock()
 _geo_cache = {"data": None, "total": None, "key": None}
 
 
-def _geo_counts(db):
-    """Country buckets for the dashboard geo heatmap, computed lazily and
-    cached. Returns [(name, count), ...] or [] if the compact geo table is
-    not built yet. Never runs on dashboard load — only on demand (see the
-    /api/geo/countries endpoint the heatmap <details> opens)."""
+def _geo_counts_and_total(db):
+    """Country buckets + total for the dashboard geo heatmap, computed lazily
+    and cached under _geo_lock so concurrent requests never see mismatched
+    data/total."""
     try:
         key = db.geo_cache_key()
     except Exception:
         key = None
-    if _geo_cache["data"] is not None and _geo_cache["key"] == key:
-        return _geo_cache["data"]
+    with _geo_lock:
+        if _geo_cache["data"] is not None and _geo_cache["key"] == key:
+            return _geo_cache["data"], _geo_cache["total"] or 0
     try:
         raw = db.country_counts()
     except Exception:
-        return []
+        return [], 0
     # ISO code alongside the name: the choropleth keys country shapes by code,
     # the ranked list shows the name.
     from threatfeedme.geo.countries import code_name
     data = [(iso, code_name(iso), n) for iso, n in raw]
     total = sum(row[2] for row in data)
-    # Set the cache key only AFTER data/total are fully computed, so a failure
-    # mid-build never advances the key while leaving stale data behind (which
-    # would permanently serve the old map under a new fingerprint).
-    _geo_cache["data"] = data
-    _geo_cache["total"] = total
-    _geo_cache["key"] = key
-    return data
+    with _geo_lock:
+        # Set the cache key only AFTER data/total are fully computed, so a failure
+        # mid-build never advances the key while leaving stale data behind.
+        _geo_cache["data"] = data
+        _geo_cache["total"] = total
+        _geo_cache["key"] = key
+    return data, total
+
+
+def _geo_counts(db):
+    return _geo_counts_and_total(db)[0]
 
 def _human_bytes(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -204,9 +218,12 @@ def _served_counts(db, wl_map):
     CIDR whitelist rules can exclude unbounded rows, so their presence
     falls back to the exact full walk. Both paths must agree — there is a
     parity test."""
-    # CIDR and wildcard-domain rules can each exclude unbounded rows —
-    # either forces the exact walk.
-    if getattr(wl_map, "cidr_rules", None) or getattr(wl_map, "wildcard_rules", None):
+    # CIDR, wildcard-domain, and never-block rules can each exclude unbounded
+    # or range-overlapping rows — any of them forces the exact walk so the
+    # dashboard counts always match what /feeds/* actually serves.
+    if (getattr(wl_map, "cidr_rules", None)
+            or getattr(wl_map, "wildcard_rules", None)
+            or getattr(wl_map, "never_block", None)):
         return _served_counts_walk(db, wl_map)
 
     raw = db.get_tier_kind_counts()
@@ -228,20 +245,44 @@ def _served_counts(db, wl_map):
     # (indexed lookup). Recompute its true inclusion and subtract what the
     # raw counts credited.
     seen = set()
-    for entry in db.get_whitelist():
-        ip = entry.ip
-        if ip in seen or "/" in ip:
-            continue
-        seen.add(ip)
-        ind = db.get_indicator(ip)
-        if ind is None:
-            continue
+
+    def _adjust(ind):
         kind = ind.kind if ind.kind in served else "ip"
         if not is_included(ind, wl_map):
             served[kind]["all"] -= 1
         for out in _OUTPUTS_CONTAINING[ind.tier]:
             if not is_included(ind, wl_map, tier=out):
                 served[kind][out.value] -= 1
+
+    import ipaddress as _ipaddress
+    for entry in db.get_whitelist():
+        ip = entry.ip
+        if ip in seen:
+            continue
+        seen.add(ip)
+        lookup_ip = ip
+        if "/" in ip:
+            # Non-host CIDRs already fell back to _served_counts_walk; a /32
+            # or /128 host entry still needs its single-IP lookup checked.
+            try:
+                lookup_ip = str(_ipaddress.ip_network(ip, strict=False).network_address)
+            except ValueError:
+                continue
+            if lookup_ip in seen:
+                continue
+            seen.add(lookup_ip)
+        ind = db.get_indicator(lookup_ip)
+        if ind is not None:
+            _adjust(ind)
+
+    # A host whitelist entry (e.g. 203.0.113.5) also overlaps CIDR netblock
+    # indicators (e.g. 203.0.113.0/24). Netblocks are a tiny fraction of the
+    # corpus, so scanning just them preserves exact parity with the full walk.
+    if getattr(wl_map, "addr_rules", None):
+        for ind in db.get_cidr_indicators():
+            if ind.ip not in seen:
+                seen.add(ind.ip)
+                _adjust(ind)
     return served, total_inds
 
 
@@ -579,7 +620,7 @@ def dashboard(request: Request, _=Depends(require_auth)):
         "feed_names": [fsrc.name for fsrc in feed_sources],
         "all_feeds": ALL_FEEDS,
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
-    })
+    }, headers=_HTML_SECURITY_HEADERS)
 
 
 @router.get("/indicators", response_class=HTMLResponse)
@@ -621,7 +662,7 @@ def indicators_page(request: Request, q: str = "", _=Depends(require_auth)):
         "all_feeds": ALL_FEEDS,
         "reason_options": WHITELIST_REASONS,
         "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
-    })
+    }, headers=_HTML_SECURITY_HEADERS)
 
 
 @router.get("/healthz")
@@ -658,7 +699,8 @@ def geo_countries(_=Depends(require_auth)):
     """Blocked-IP country breakdown. Computed lazily and cached — the
     dashboard heatmap <details> fetches this only when a user opens it, so
     normal dashboard loads never pay the geo cost."""
-    return {"data": _geo_counts(core.db), "total": _geo_cache["total"] or 0}
+    data, total = _geo_counts_and_total(core.db)
+    return {"data": data, "total": total}
 
 
 @router.get("/api/domains/tlds")
@@ -730,9 +772,10 @@ def catalog_pending_add(name: str, _=Depends(require_auth), _csrf=Depends(csrf_c
 @router.post("/api/catalog/{name}/dismiss")
 def catalog_pending_dismiss(name: str, _=Depends(require_auth), _csrf=Depends(csrf_check)):
     """Reject a pending catalog entry: the feed remove stores the
-    deleted_feeds tombstone, so a future catalog bump cannot resurrect it."""
+    deleted_feeds tombstone, so a future catalog bump cannot resurrect it.
+    Only acts on rows currently in the pending review queue."""
     feed = core.db.get_feed_source(name)
-    if feed is None:
+    if feed is None or name not in core.db.catalog_pending_names():
         raise HTTPException(status_code=404, detail="No pending catalog entry with that name")
     core.db.catalog_dismiss_pending(name)
     return {"success": True, "name": name}
@@ -911,12 +954,13 @@ def dashboard_auth_update(body: DashboardAuthRequest, request: Request,
     host check above. Locked out? `python -m threatfeedme.main
     --reset-dashboard-auth` on the host clears it."""
     from threatfeedme import auth
-    source = auth.auth_source()
-    if source == "env":
+    auth._ensure_auth_config()
+    if auth._AUTH_USER and auth._AUTH_PASSWORD:
         raise HTTPException(status_code=409, detail="The sign-in is set by the server's environment "
                             "(DASHBOARD_USER / DASHBOARD_PASSWORD); change it there")
-    if source == "dashboard":
-        if not auth.check_stored_password(auth.stored_credentials(), body.current_password):
+    stored = auth.stored_credentials()
+    if stored is not None:
+        if not auth.check_stored_password_bounded(stored, body.current_password):
             raise HTTPException(status_code=403, detail="Current password is wrong")
     elif not _bootstrap_host_ok(request):
         raise HTTPException(status_code=403, detail="Open the dashboard by its IP address (or a name "
@@ -941,5 +985,6 @@ def trigger_backup(_=Depends(require_auth), _csrf=Depends(csrf_check)):
     try:
         path = _run_backup()
         return {"success": True, "path": path}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+    except Exception:
+        logger.exception("[backup] manual backup failed")
+        raise HTTPException(status_code=500, detail="Backup failed; see the server log")

@@ -109,7 +109,7 @@ def collect_labels(db, exclude_sources: Set[str],
     return first_event, churn_returns, t_min, t_max
 
 
-def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
+def build_dataset(db, config: Dict, min_gap_h: Optional[float] = None,
                   horizon_h: int = HORIZON_H, snapshot_h: int = SNAPSHOT_H,
                   max_neg: int = MAX_NEG_PER_SNAPSHOT):
     """Returns (X, y, snap_index, snaps) with rows grouped by snapshot.
@@ -118,6 +118,10 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     """
     from .predictor import FeatureBuilder
     from .pipeline import churn_log_exclude
+
+    if min_gap_h is None:
+        pcfg = (config or {}).get("predictor") or {}
+        min_gap_h = float(pcfg.get("churn_min_gap_h", MIN_GAP_H))
 
     # churn_log_exclude names PLUS static (uploaded) feeds: neither carries
     # predictable churn, and both must drop from labels AND features or the
@@ -140,9 +144,14 @@ def build_dataset(db, config: Dict, min_gap_h: float = MIN_GAP_H,
     candidates = sorted(fb.candidate_ips())
     # first snapshot at t_min + step: at T == t_min every feature clamps to
     # before the FIRST logged event, i.e. an all-zero vector with some rows
-    # labeled positive, pure label noise (A2A review finding 3)
+    # labeled positive, pure label noise (A2A review finding 3).
+    # Stop at t_max - horizon whenever the log spans enough time for uncensored
+    # snapshots: snapshots in (t_max - horizon, t_max] have truncated label
+    # windows (right-censored, turning real returners into false negatives).
+    # Short synthetic/bootstrapping logs (< horizon + step) fall back to t_max.
     T = t_min + step
-    while T <= t_max:
+    end_T = t_max - horizon if (t_min + step <= t_max - horizon) else t_max
+    while T <= end_T:
         t = T.timestamp()
         cohort = [ip for ip in candidates if fb.in_corpus_at(ip, t, retention_s)]
         pos: List[str] = []
@@ -221,9 +230,19 @@ def _save_if_good(booster, auc: float, model_out: str) -> bool:
     if not auc >= MIN_HOLDOUT_AUC:           # also catches NaN
         print(f"holdout_auc {auc:.4f} is below {MIN_HOLDOUT_AUC}: kept the current model")
         return False
+    parent = os.path.dirname(model_out)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     tmp = model_out + ".tmp"
-    booster.save_model(tmp, num_iteration=booster.best_iteration)
-    os.replace(tmp, model_out)
+    try:
+        booster.save_model(tmp, num_iteration=booster.best_iteration)
+        os.replace(tmp, model_out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     print(f"model written: {model_out}")
     return True
 

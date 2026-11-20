@@ -136,9 +136,13 @@ class TestDataset:
             db.add_indicator(ip, "talos")
             cur = {tp_sentinel()} | {p for p, t in by_time if t <= 4 * i}
             db.update_source_sightings("talos", cur, _tick(4 * i))
-        # churner: leaves at 250, returns at 260 (gap 10h)
+        # churner: leaves at 250, returns at 260 (gap 10h); a non-churn leave
+        # on an unrelated source at 284 extends t_max past the 24h horizon so
+        # the T=244 snapshot is uncensored without adding any new IP.
         db.update_source_sightings("talos", {tp_sentinel()}, _tick(250))
         db.update_source_sightings("talos", {tp_sentinel()} | {p for p, _ in by_time}, _tick(260))
+        db.update_source_sightings("tail_clock", {tp_sentinel()}, _tick(0))
+        db.update_source_sightings("tail_clock", set(), _tick(284))
         cfg = {"retention": {"churn_log_exclude": []}}
         X, y, snap_ix, snaps = tp.build_dataset(
             db, cfg, horizon_h=24, snapshot_h=24, max_neg=1000)

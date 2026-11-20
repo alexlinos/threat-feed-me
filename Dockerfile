@@ -58,7 +58,7 @@ EXPOSE 8080
 # start-period: a first start after an upgrade may migrate the database before
 # serving (2.5.0: ~2 min on a 1.9 GB database); keep in sync with compose.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
-    CMD python -c "import os,socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); p=os.environ.get('DASHBOARD_PORT') or '8080'; s='https' if os.environ.get('TFM_TLS_CERT') else 'http'; sys.exit(0 if requests.get(s+'://'+ip+':'+p+'/healthz', timeout=5, verify=False).ok else 1)" || exit 1
+    CMD python -c "import os,socket,requests,sys; ip=socket.gethostbyname(socket.gethostname()); p=os.environ.get('DASHBOARD_PORT') or '8080'; s='https' if os.environ.get('TFM_TLS_CERT') else 'http'; sys.exit(0 if requests.get(s+'://'+ip+':'+p+'/healthz', timeout=5, verify=False, proxies={'http':None,'https':None}).ok else 1)" || exit 1
 
 # Default command: start dashboard immediately; run the pipeline in the
 # background so a failing/slow feed fetch never blocks startup.

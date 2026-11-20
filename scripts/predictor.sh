@@ -36,7 +36,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # is stamped with the app image id it came from, and rebuilt on mismatch.
 APP_ID="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE" 2>/dev/null || true)"
 BUILT_FROM="$(docker image inspect -f '{{index .Config.Labels "tfm.app_image_id"}}' "$IMAGE" 2>/dev/null || true)"
-if [ -z "$BUILT_FROM" ] || [ "$BUILT_FROM" != "$APP_ID" ]; then
+if [ -z "$BUILT_FROM" ] || { [ -n "$APP_ID" ] && [ "$BUILT_FROM" != "$APP_ID" ]; }; then
+  if [ -z "$APP_ID" ]; then
+    docker pull "$APP_IMAGE"
+    APP_ID="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE" 2>/dev/null || true)"
+  fi
   echo "[predictor] building $IMAGE from $APP_IMAGE (${APP_ID:-unknown}) ..."
   docker build -f "$HERE/Dockerfile.predictor" --build-arg "APP_IMAGE=$APP_IMAGE" \
     --label "tfm.app_image_id=$APP_ID" -t "$IMAGE" "$HERE"
@@ -56,7 +60,8 @@ else
 fi
 
 run() {  # run <module-and-args...>
-  docker run --rm --memory="$MEM" --cpus=2 \
+  docker run --rm --network=none --cap-drop=ALL --security-opt=no-new-privileges:true \
+    --memory="$MEM" --cpus=2 \
     -v "$VOLUME":/app/data \
     "${CFG_MOUNT[@]}" \
     -e THREATFEED_DB=/app/data/threatfeedme.db \

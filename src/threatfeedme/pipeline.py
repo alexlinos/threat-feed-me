@@ -337,7 +337,8 @@ def scoring_input_key(db: Database, config: Dict) -> str:
         model_mtime = os.path.getmtime(model_path) if predictor_live(config) else None
     except OSError:
         model_mtime = None
-    catalog = sorted((f.name, bool(f.enabled), float(f.weight), f.feed_type.value)
+    catalog = sorted((f.name, bool(f.enabled), float(f.weight), f.feed_type.value,
+                      f.url, bool(f.local_file))
                      for f in db.get_feed_sources())
     whitelist = sorted((w.ip, w.feed_name, w.reason_code, str(w.expires_at))
                        for w in db.get_whitelist())

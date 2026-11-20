@@ -150,11 +150,14 @@ def txt_with_count(db, name: str, kind: str, limit: Optional[int] = None,
     hosts/family variant is its own cached body."""
     if kind != "ip":
         family = None                # one cached body for every domain URL
-    key = (kind, name, hosts_only, family)
+    key = (getattr(db, "db_path", None), kind, name, hosts_only, family)
     version = db.serve_fingerprint()
     entry = _txt.get(key)
     if entry is None or entry.version != version:
         with _lock_for(key):
+            # Re-read fingerprint inside the lock so a slower thread cannot
+            # overwrite a newer cached body built while it waited.
+            version = db.serve_fingerprint()
             entry = _txt.get(key)
             if entry is None or entry.version != version:
                 entry = _build_txt(db, name, kind, version, hosts_only, family)

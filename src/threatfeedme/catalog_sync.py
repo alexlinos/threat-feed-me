@@ -35,6 +35,7 @@ The fetch reuses the ingestor's discipline (imported, not copied):
 ``_MAX_FETCH_BYTES`` capped reads, no env proxies, and the SSRF guard.
 """
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
@@ -43,8 +44,10 @@ import requests
 import yaml
 
 from threatfeedme.credentials import KeyPolicy, split_vars
-from threatfeedme.feed_ingestor import (_FETCH_TIMEOUT, _NO_PROXIES,
-                                        _read_capped, _require_public_url)
+from threatfeedme.feed_ingestor import (FeedIngestor, ResponseTooLargeError,
+                                        UnsafeURLError, _FETCH_TIMEOUT,
+                                        _read_capped_bytes, _require_public_url,
+                                        guarded_get)
 
 logger = logging.getLogger(__name__)
 
@@ -134,22 +137,27 @@ def _is_allowed_redirect(current: str, next_host: str) -> bool:
 
 
 def http_get_text(url: str) -> str:
-    """Fetch catalog text. Public HTTPS only (the feed path's SSRF guard),
-    no env proxies, capped streamed read, manual same-CDN redirects.
-    Module-level so tests can replace the seam instead of the network."""
+    """Fetch catalog text. Public HTTPS only (connect-time SSRF guard via
+    guarded_get), no env proxies, capped streamed read at 1 MB, manual
+    same-CDN redirects. Module-level so tests can replace the seam."""
     if not url.lower().startswith("https://"):
         raise CatalogError(f"catalog URL must be https:// (got scheme from {url!r})")
     resp = None
     current = url
     try:
         for _hop in range(_MAX_CATALOG_REDIRECTS + 1):
-            _require_public_url(current)   # SSRF guard, reused from the feed fetch
-            resp = requests.get(current, stream=True, timeout=_FETCH_TIMEOUT,
-                                allow_redirects=False, proxies=_NO_PROXIES)
+            _require_public_url(current)   # early SSRF check (clear error)
+            # Arm the connect-time DNS-pinning guard on every hop (closing the
+            # rebinding window between _require_public_url and connect).
+            resp = guarded_get(current, allow_private=False, get=requests.get,
+                               timeout=_FETCH_TIMEOUT, allow_redirects=False)
             if resp.status_code in (301, 302, 303, 307, 308):
-                loc = resp.headers.get("location", "")
-                next_url = urljoin(current, loc)
+                loc = (resp.headers.get("location") or "").strip()
                 resp.close()
+                resp = None
+                if not loc:
+                    raise CatalogError("catalog redirect missing Location header")
+                next_url = urljoin(current, loc)
                 if not next_url.lower().startswith("https://"):
                     raise CatalogError("catalog redirect left TLS; keeping last state")
                 if not _is_allowed_redirect(current, _host_of(next_url)):
@@ -160,13 +168,17 @@ def http_get_text(url: str) -> str:
                 continue
             if resp.status_code != 200:
                 raise CatalogError(f"catalog fetch got HTTP {resp.status_code}")
-            text = _read_capped(resp, "feed_catalog")
-            if len(text.encode("utf-8", errors="replace")) > _SOFT_MAX_CATALOG_BYTES:
-                raise CatalogError("catalog document is implausibly large (>1 MB)")
-            return text
+            try:
+                raw = _read_capped_bytes(resp, "feed_catalog",
+                                         max_bytes=_SOFT_MAX_CATALOG_BYTES)
+            except ResponseTooLargeError:
+                raise CatalogError("catalog document is implausibly large (>1 MB)") from None
+            return raw.decode(resp.encoding or "utf-8", errors="replace")
         raise CatalogError("catalog exceeded the redirect limit")
     except CatalogError:
         raise
+    except UnsafeURLError as e:
+        raise CatalogError(str(e)) from None
     except requests.RequestException as e:
         raise CatalogError(f"catalog fetch failed: {type(e).__name__}") from None
     finally:
@@ -206,19 +218,44 @@ def parse_catalog(text: str) -> Tuple[int, List[Dict]]:
     return version, valid
 
 
+_FEED_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+_AUTH_HEADER_RE = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}\Z")
+
+
 def _keys_shipped_only(feeds: List[Dict], config: Dict) -> List[Dict]:
-    """Drop entries that name a key outside the shipped set. TFM_FEED_* keys
-    are the operator's own and may go to any host, so a catalog entry naming
-    one (a new feed, or a URL change to a seeded one) could send it to a host
-    of the catalog's choosing. Shipped keys stay bound to their shipped hosts
-    by KeyPolicy, so those are safe to reference."""
+    """Drop entries that violate remote-catalog safety rails:
+      - local_file=True (a remote catalog must never point feeds at container
+        filesystem paths; baked local samples come from config.yaml only);
+      - non-http(s) URLs, malformed feed names, bad auth headers, or unknown
+        scrapers;
+      - keys outside the shipped set (TFM_FEED_* keys may go to any host, so a
+        catalog entry naming one could exfiltrate it).
+    """
     shipped = KeyPolicy.from_config(config).bound
     keep = []
     for f in feeds:
+        name = str(f.get("name") or "")
+        url = str(f.get("url") or "").strip()
+        if f.get("local_file"):
+            continue
+        if not _FEED_NAME_RE.fullmatch(name) or not re.search(r"[A-Za-z0-9]", name):
+            logger.warning("[catalog] ignoring entry %r: invalid feed name", name)
+            continue
+        if not re.match(r"https?://", url, re.IGNORECASE) or len(url) > 2048:
+            logger.warning("[catalog] ignoring entry %r: URL must be http(s)", name)
+            continue
+        auth_header = f.get("auth_header")
+        if auth_header is not None and not _AUTH_HEADER_RE.fullmatch(str(auth_header)):
+            logger.warning("[catalog] ignoring entry %r: invalid auth_header", name)
+            continue
+        scraper = f.get("scraper")
+        if scraper is not None and scraper not in FeedIngestor._SCRAPERS:
+            logger.warning("[catalog] ignoring entry %r: unknown scraper %r", name, scraper)
+            continue
         bad = [v for v in split_vars(f.get("auth_env")) if v not in shipped]
         if bad:
             logger.warning("[catalog] ignoring entry %r: it names key(s) %s, which "
-                           "the catalog may not use", f.get("name"), ", ".join(bad))
+                           "the catalog may not use", name, ", ".join(bad))
         else:
             keep.append(f)
     return keep

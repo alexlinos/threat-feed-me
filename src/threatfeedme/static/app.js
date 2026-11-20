@@ -643,7 +643,7 @@ async function loadIndicators() {
                 '<td title="independent witnesses (overlap-discounted)">' + esc(votes) + '</td>' +
                 '<td class="muted" style="font-size:.82em">' + esc(i.sources.join(', ')) + '</td>' +
                 '<td>' + sub + '</td>' +
-                '<td><button class="mini-btn" data-ip="' + esc(i.ip) + '" onclick="openWhitelistModal(this.dataset.ip)">Whitelist…</button> <a class="vt-btn" href="https://www.virustotal.com/gui/search/' + encodeURIComponent(i.value) + '" target="_blank" title="Look up on VirusTotal">VT</a></td></tr>';
+                '<td><button class="mini-btn" data-ip="' + esc(i.ip) + '" onclick="openWhitelistModal(this.dataset.ip)">Whitelist…</button> <a class="vt-btn" href="https://www.virustotal.com/gui/search/' + encodeURIComponent(i.value) + '" target="_blank" rel="noopener noreferrer" title="Look up on VirusTotal">VT</a></td></tr>';
         }).join('');
     }
     const start = indTotal ? indOffset + 1 : 0;
@@ -700,7 +700,9 @@ async function openFpModal(feed) {
     list.textContent = 'Loading…';
     openModal('fp-modal');
     try {
-        const j = await (await fetch('/api/feeds/' + encodeURIComponent(feed) + '/false-positives')).json();
+        const r = await fetch('/api/feeds/' + encodeURIComponent(feed) + '/false-positives');
+        if (!r.ok) throw new Error(r.status);
+        const j = await r.json();
         document.getElementById('fp-modal-summary').textContent =
             j.count + ' flagged of ' + j.reported.toLocaleString() + ' reported — reputation reduced ~' + j.penalty_pct + '%';
         list.innerHTML = j.entries.length ? j.entries.map(e =>
@@ -743,7 +745,9 @@ async function openWhitelistModal(ip) {
     if (urlCode) { urlCode.textContent = ''; urlCode.title = ''; }   // never carry over
     if (urlField) urlField.hidden = true;
     try {
-        const j = await (await fetch('/api/indicators/' + encodeURIComponent(ip))).json();
+        const r = await fetch('/api/indicators/' + encodeURIComponent(ip));
+        if (!r.ok) throw new Error(r.status);
+        const j = await r.json();
         const sources = j.sources || [];
         srcBox.innerHTML = sources.length
             ? sources.map(s => '<code>' + esc(s) + '</code>').join(' ')
@@ -1599,14 +1603,22 @@ const catState = {vendor: null, group: null, filter: ''};
 let catData = null;
 let appRows = [];
 
+function appBaseUrl() {
+    return (typeof window !== 'undefined' && window.tfmFeedBase) || location.origin;
+}
+
 async function loadApplications() {
     try {
-        const j = await (await apiFetch('/api/applications')).json();
-        appRows = j.applications || [];
-        appsLoaded = true;
+        const r = await apiFetch('/api/applications');
+        if (r.ok) {
+            const j = await r.json();
+            appRows = j.applications || [];
+            appsLoaded = true;
+        }
     } catch (e) { /* offline / auth: the view stays empty, message row says it */ }
     try {
-        catData = await (await apiFetch('/api/applications/catalog')).json();
+        const r = await apiFetch('/api/applications/catalog');
+        catData = r.ok ? await r.json() : null;
     } catch (e) { catData = null; /* catalog is an offer; your own lists still work */ }
     renderCatalog();
     renderApplications(appRows);
@@ -1635,7 +1647,7 @@ function appStatus(r) {
 
 function appUrlCell(name) {
     return '<div class="url-row"><input class="url-box" type="text" readonly value="' +
-        esc(location.origin + '/lists/' + encodeURIComponent(name) + '.txt') +
+        esc(appBaseUrl() + '/lists/' + encodeURIComponent(name) + '.txt') +
         '" onclick="this.select()" aria-label="' + esc(name) + ' list URL">' +
         '<button class="copy-btn" type="button" onclick="copyUrl(this)">Copy</button></div>';
 }
@@ -1720,9 +1732,18 @@ function catRows(rows) {
                   '<input type="checkbox" data-slug="' + esc(r.slug) + '"' + (r.enabled ? ' checked' : '') +
                   ' aria-label="' + esc(r.name) + '"><span></span></label></td></tr>');
         if (r.enabled) {
+            const catActions =
+                ' <button class="mini-btn" type="button" data-name="' + esc(r.slug) +
+                '" onclick="appRefresh(this.dataset.name)">Refresh</button>' +
+                (r.pending
+                    ? ' <button class="mini-btn" type="button" data-name="' + esc(r.slug) +
+                      '" onclick="appPending(this.dataset.name,\'approve\')">Approve</button>' +
+                      ' <button class="mini-btn" type="button" data-name="' + esc(r.slug) +
+                      '" onclick="appPending(this.dataset.name,\'reject\')">Discard</button>'
+                    : '');
             html += '<tr class="cat-detail"><td colspan="3">' + appUrlCell(r.slug) +
-                '<p class="cat-status">' + appStatus(r) + '</p>' +
-                ubBody(location.origin + '/lists/' + encodeURIComponent(r.slug), 'app') + '</td></tr>';
+                '<p class="cat-status">' + appStatus(r) + catActions + '</p>' +
+                ubBody(appBaseUrl() + '/lists/' + encodeURIComponent(r.slug), 'app') + '</td></tr>';
         }
         return html;
     }).join('');
@@ -1792,12 +1813,12 @@ function renderApplications(rows) {
     tb.innerHTML = own.map(r => {
         const n = esc(r.name);
         const actions =
-            '<button class="mini-btn" type="button" onclick="appRefresh(\'' + n + '\')">Refresh</button> ' +
+            '<button class="mini-btn" type="button" data-name="' + n + '" onclick="appRefresh(this.dataset.name)">Refresh</button> ' +
             (r.pending
-                ? '<button class="mini-btn" type="button" onclick="appPending(\'' + n + '\',\'approve\')">Approve</button> ' +
-                  '<button class="mini-btn" type="button" onclick="appPending(\'' + n + '\',\'reject\')">Discard</button> '
+                ? '<button class="mini-btn" type="button" data-name="' + n + '" onclick="appPending(this.dataset.name,\'approve\')">Approve</button> ' +
+                  '<button class="mini-btn" type="button" data-name="' + n + '" onclick="appPending(this.dataset.name,\'reject\')">Discard</button> '
                 : '') +
-            '<button class="rm-btn" type="button" onclick="appDelete(\'' + n + '\')">Delete</button>';
+            '<button class="rm-btn" type="button" data-name="' + n + '" onclick="appDelete(this.dataset.name)">Delete</button>';
         return '<tr><td><b>' + n + '</b><div class="cat-desc"><a href="' + esc(r.source_url || '#') +
             '" target="_blank" rel="noopener noreferrer">source ↗</a></div></td>' +
             '<td>' + (r.entry_count ? r.entry_count.toLocaleString() : '—') + '</td>' +
@@ -1806,25 +1827,40 @@ function renderApplications(rows) {
             '<td>' + appUrlCell(r.name) + '</td>' +
             '<td class="app-actions">' + actions + '</td></tr>' +
             '<tr class="ub-tr"><td colspan="6">' +
-            ubBody(location.origin + '/lists/' + encodeURIComponent(r.name), 'app') + '</td></tr>';
+            ubBody(appBaseUrl() + '/lists/' + encodeURIComponent(r.name), 'app') + '</td></tr>';
     }).join('');
 }
 async function appRefresh(name) {
-    const j = await (await apiFetch('/api/applications/' + encodeURIComponent(name) + '/refresh',
-                                    {method: 'POST'})).json();
+    const res = await apiFetch('/api/applications/' + encodeURIComponent(name) + '/refresh',
+                               {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        appMsg(name + ': ' + (detailText(j.detail) || ('refresh failed (' + res.status + ')')));
+        return;
+    }
     appMsg(name + ': ' + (j.outcome || (j.success ? 'ok' : 'failed')) +
            (j.error ? ' (' + j.error + ')' : ''));
     loadApplications();
 }
 async function appPending(name, verdict) {
-    await apiFetch('/api/applications/' + encodeURIComponent(name) + '/pending/' + verdict,
-                   {method: 'POST'});
+    const res = await apiFetch('/api/applications/' + encodeURIComponent(name) + '/pending/' + verdict,
+                               {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        appMsg(name + ': ' + (detailText(j.detail) || ('action failed (' + res.status + ')')));
+        return;
+    }
     appMsg(name + ': held refresh ' + (verdict === 'approve' ? 'approved and serving' : 'discarded'));
     loadApplications();
 }
 async function appDelete(name) {
     if (!confirm('Delete application list ' + name + '? Its served URL will 404.')) return;
-    await apiFetch('/api/applications/' + encodeURIComponent(name), {method: 'DELETE'});
+    const res = await apiFetch('/api/applications/' + encodeURIComponent(name), {method: 'DELETE'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        appMsg(name + ': ' + (detailText(j.detail) || ('delete failed (' + res.status + ')')));
+        return;
+    }
     appMsg(name + ' deleted');
     loadApplications();
 }
@@ -2044,7 +2080,7 @@ document.addEventListener('input', (ev) => {
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('apps-add-form');
     if (!form) return;
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', guardSubmit(async (ev) => {
         ev.preventDefault();
         const fd = new FormData(form);
         const body = {
@@ -2055,9 +2091,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const res = await apiFetch('/api/applications',
             {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         const j = await res.json().catch(() => ({}));
-        appMsg(j.message || j.detail || ('save failed (' + res.status + ')'));
+        appMsg(j.message || detailText(j.detail) || ('save failed (' + res.status + ')'));
         if (res.ok) { form.reset(); loadApplications(); }
-    });
+    }));
 });
 
 

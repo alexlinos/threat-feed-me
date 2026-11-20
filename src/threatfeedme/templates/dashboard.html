@@ -33,6 +33,7 @@
    the server's default (the guide until a firewall has polled an IP list).
    app.js takes over from here. #}
 <script>
+window.tfmFeedBase = {{ feed_base|tojson }};
 (function () {
     var views = ['guide', 'lists', 'applications', 'feeds', 'integrations', 'system'];
     var h = (location.hash || '').replace('#', '').split('/')[0];

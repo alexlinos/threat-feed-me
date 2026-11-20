@@ -147,7 +147,9 @@ class Database:
         # and read of the main file paid for it. Attached as `churn` on every
         # connection, so queries still see one database.
         self.churn_path = os.path.splitext(db_path)[0] + "-churn.db"
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        parent = os.path.dirname(db_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self._init_schema()
 
     def _get_connection(self, any_thread: bool = False) -> sqlite3.Connection:
@@ -591,16 +593,19 @@ class Database:
             # `ip` is UNIQUE, so SQLite already keeps an index on it; this one
             # duplicated it (24 MB on prod) and cost every insert twice.
             cursor.execute("DROP INDEX IF EXISTS idx_indicators_ip")
+            # Likewise: UNIQUE(indicator_id, source_name) on indicator_sources
+            # and UNIQUE(ip, feed_name) on whitelist already index their
+            # leftmost columns (`indicator_id` and `ip`).
+            cursor.execute("DROP INDEX IF EXISTS idx_sources_indicator")
+            cursor.execute("DROP INDEX IF EXISTS idx_whitelist_ip")
             # The indicators page orders by score with LIMIT/OFFSET; without
             # this index every page request re-sorts the whole table (multi-
             # second at 600k+ rows, live-observed struggling on prod).
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_score ON indicators(confidence_score DESC, ip)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_tier ON indicators(tier)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sources_indicator ON indicator_sources(indicator_id)")
             # The pulse row's "new in 24h" range count. first_seen is written
             # on insert only, so upserts of existing rows never touch it.
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_indicators_first_seen ON indicators(first_seen)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_ip ON whitelist(ip)")
             # Per-fetch metadata (v2.5.0): feed_type, feed_weight and
             # fetched_at were rewritten into every row on every fetch and read
             # by nothing (94 MB on prod). Strip them once; the VACUUM below
@@ -1158,11 +1163,12 @@ class Database:
                 # Two cheap phases instead: scan just the values in sort
                 # order, filter+page in Python, then hydrate only the page.
                 cur.execute(
-                    f"SELECT i.ip FROM indicators i{where_sql} "
+                    f"SELECT i.ip, json_extract(i.metadata, '$.cidr') AS cidr "
+                    f"FROM indicators i{where_sql} "
                     "ORDER BY i.confidence_score DESC, i.ip",
                     params)
                 surviving = [r['ip'] for r in cur.fetchall()
-                             if ALL_FEEDS not in matcher.scoped_feeds(r['ip'])]
+                             if ALL_FEEDS not in matcher.scoped_feeds(r['cidr'] or r['ip'])]
                 total = len(surviving)
                 page_ips = surviving[offset:offset + limit]
                 if page_ips:
@@ -1181,12 +1187,13 @@ class Database:
             rows = []
             for row in page_rows:
                 ip = row['ip']
-                if matcher is not None and ALL_FEEDS in matcher.scoped_feeds(ip):
-                    continue
                 meta = json.loads(row['metadata']) if row['metadata'] else {}
+                cidr = _meta_cidr(meta)
+                if matcher is not None and ALL_FEEDS in matcher.scoped_feeds(cidr or ip):
+                    continue
                 rows.append({
                     "ip": ip,
-                    "value": _meta_cidr(meta) or ip,
+                    "value": cidr or ip,
                     "tier": row['tier'],
                     "confidence_score": round(row['confidence_score'], 3),
                     "effective_votes": (round(row['effective_votes'], 2)
@@ -1195,6 +1202,18 @@ class Database:
                     "submitted_url": meta.get('url'),
                 })
             return {"total": total, "rows": rows}
+
+    def get_cidr_indicators(self) -> List[ThreatIndicator]:
+        """Return IP indicators whose metadata carries a 'cidr' netblock.
+        Netblocks are a tiny fraction of the corpus (~1.5k vs 800k+ hosts),
+        so callers checking host-vs-netblock overlap can scan just these."""
+        with self._cursor() as cur:
+            cur.execute(
+                f"SELECT i.*, {_sources_sql(False)} AS sources_str "
+                "FROM indicators i WHERE i.kind = 'ip' "
+                "AND json_extract(i.metadata, '$.cidr') IS NOT NULL"
+            )
+            return [self._row_to_indicator(row) for row in cur.fetchall()]
 
 
     def country_counts(self) -> list:
@@ -1390,7 +1409,12 @@ class Database:
                          reason_code: str = REASON_OTHER) -> bool:
         """Add (or update) a whitelist entry."""
         now = _utcnow_iso()
-        expires = expires_at.isoformat() if expires_at else None
+        if expires_at is not None:
+            exp_utc = (expires_at.astimezone(timezone.utc) if expires_at.tzinfo
+                       else expires_at.replace(tzinfo=timezone.utc))
+            expires = exp_utc.isoformat()
+        else:
+            expires = None
         feed_name = feed_name or ALL_FEEDS
         with self._cursor() as cur:
             cur.execute("""
@@ -1505,10 +1529,11 @@ class Database:
     def delete_application_list(self, name: str) -> bool:
         with self._cursor() as cur:
             cur.execute("DELETE FROM application_lists WHERE name = ?", (name,))
+            affected = cur.rowcount
             cur.execute("DELETE FROM application_list_entries WHERE list_name = ?", (name,))
             cur.execute("DELETE FROM application_list_history WHERE list_name = ?", (name,))
             cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))
-            return cur.rowcount > 0
+            return affected > 0
 
     def get_application_list(self, name: str) -> Optional[Dict]:
         with self._cursor() as cur:
@@ -1655,24 +1680,37 @@ class Database:
 
     def approve_pending(self, name: str) -> Optional[Dict]:
         """Serve the held version. The approved swap records history like a
-        normal refresh so the 30-day diff stays complete. One transaction, so
-        a pending row written meanwhile is never deleted unseen."""
-        with self._cursor() as cur:
-            cur.execute("SELECT * FROM application_list_pending WHERE list_name = ?", (name,))
-            row = cur.fetchone()
-            if not row:
-                return None
-            pending = dict(row)
-            pending["entries"] = json.loads(pending["entries"])
-            pending["added_sample"] = json.loads(pending["added_sample"])
-            pending["removed_sample"] = json.loads(pending["removed_sample"])
-            self._replace_entries_tx(cur, name, pending["entries"], pending["added"],
-                                     pending["removed"],
-                                     [s["e"] for s in pending["added_sample"]],
-                                     [s["e"] for s in pending["removed_sample"]])
-            cur.execute("UPDATE application_lists SET last_status='approved held refresh'"
-                        " WHERE name=?", (name,))
-            cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+        normal refresh so the 30-day diff stays complete. BEGIN IMMEDIATE holds
+        the write lock from the initial SELECT so a pending row written
+        meanwhile is never overwritten and deleted unseen."""
+        conn = self._get_connection()
+        conn.isolation_level = None
+        try:
+            cur = conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute("SELECT * FROM application_list_pending WHERE list_name = ?", (name,))
+                row = cur.fetchone()
+                if not row:
+                    cur.execute("ROLLBACK")
+                    return None
+                pending = dict(row)
+                pending["entries"] = json.loads(pending["entries"])
+                pending["added_sample"] = json.loads(pending["added_sample"])
+                pending["removed_sample"] = json.loads(pending["removed_sample"])
+                self._replace_entries_tx(cur, name, pending["entries"], pending["added"],
+                                         pending["removed"],
+                                         [s["e"] for s in pending["added_sample"]],
+                                         [s["e"] for s in pending["removed_sample"]])
+                cur.execute("UPDATE application_lists SET last_status='approved held refresh'"
+                            " WHERE name=?", (name,))
+                cur.execute("DELETE FROM application_list_pending WHERE list_name = ?", (name,))
+                cur.execute("COMMIT")
+            except BaseException:
+                cur.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
         return pending
 
     def reject_pending(self, name: str) -> bool:
@@ -2046,6 +2084,23 @@ class Database:
                 seeded += 1
             return seeded
 
+    @staticmethod
+    def _reset_feed_url_state(cur, feed_name: str) -> None:
+        """Clear HTTP validators, membership baseline, and shrink-guard state
+        when a feed's URL changes so the new source isn't diffed against the
+        old list."""
+        cur.execute(
+            "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
+            (feed_name,),
+        )
+        cur.execute("DELETE FROM source_state WHERE source_name = ?", (feed_name,))
+        cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (feed_name,))
+        cur.execute("DELETE FROM source_left WHERE source_name = ?", (feed_name,))
+        cur.execute(
+            "DELETE FROM settings WHERE key IN (?, ?)",
+            (SHRINK_STREAK_KEY.format(feed_name), SHRINK_ACCEPTED_KEY.format(feed_name)),
+        )
+
     def sync_default_feeds(self, config: Dict) -> Dict[str, List[str]]:
         """Merge the shipped default feeds into an existing database on app
         update, without touching user data or customizations.
@@ -2146,6 +2201,8 @@ class Database:
                          feed.scraper, feed.indicator_kind or 'ip', interval,
                          int(enabled), new_fp, feed.name),
                     )
+                    if row.url != feed.url:
+                        self._reset_feed_url_state(cur, feed.name)
                 actions["updated"].append(feed.name)
             elif interval != row.update_interval or enabled != row.enabled:
                 with self._cursor() as cur:
@@ -2234,22 +2291,7 @@ class Database:
             )
             cur.execute("DELETE FROM deleted_feeds WHERE name = ?", (feed.name,))
             if url_changed:
-                cur.execute(
-                    "UPDATE feed_stats SET etag = NULL, last_modified = NULL WHERE feed_name = ?",
-                    (feed.name,),
-                )
-                # A new URL is a new source. Its membership baseline (and the
-                # shrink guard's streak and accepted-collapse flag) describe the
-                # OLD list: left in place, the first fetch of the new list is
-                # diffed against it, so a legitimate new list reads as a mass
-                # leave or a "collapse". Same reset remove_feed performs.
-                cur.execute("DELETE FROM source_state WHERE source_name = ?", (feed.name,))
-                cur.execute("DELETE FROM source_seeded WHERE source_name = ?", (feed.name,))
-                cur.execute("DELETE FROM source_left WHERE source_name = ?", (feed.name,))
-                cur.execute(
-                    "DELETE FROM settings WHERE key IN (?, ?)",
-                    (SHRINK_STREAK_KEY.format(feed.name), SHRINK_ACCEPTED_KEY.format(feed.name)),
-                )
+                self._reset_feed_url_state(cur, feed.name)
 
     def remove_feed(self, name: str) -> bool:
         """Remove a configured feed and purge the data it contributed.
@@ -2324,22 +2366,37 @@ class Database:
 
     def backup_database(self, dest_dir: str, keep: int = 7) -> str:
         """Write consistent, WAL-safe snapshots of the DB and its churn log to
-        dest_dir (threat_feeds-<ts>.db and threat_feeds-<ts>.churn.db). The
-        churn log is the predictor's ground truth: weeks to rebuild."""
+        dest_dir (threat_feeds-<ts>.db and threat_feeds-<ts>.churn.db). Written
+        to .tmp files first and renamed atomically so a failed backup never
+        leaves a truncated file that rotates out a good one."""
         os.makedirs(dest_dir, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         dest = os.path.join(dest_dir, f'threat_feeds-{ts}.db')
-        for path, out in ((self.db_path, dest),
-                          (self.churn_path, os.path.join(dest_dir, f'threat_feeds-{ts}.churn.db'))):
-            src = sqlite3.connect(path)
-            try:
-                dst = sqlite3.connect(out)
+        pairs = ((self.db_path, dest),
+                 (self.churn_path, os.path.join(dest_dir, f'threat_feeds-{ts}.churn.db')))
+        tmps = []
+        try:
+            for path, out in pairs:
+                tmp = out + ".tmp"
+                tmps.append((tmp, out))
+                src = sqlite3.connect(path)
                 try:
-                    src.backup(dst)
+                    dst = sqlite3.connect(tmp)
+                    try:
+                        src.backup(dst)
+                    finally:
+                        dst.close()
                 finally:
-                    dst.close()
-            finally:
-                src.close()
+                    src.close()
+            for tmp, out in tmps:
+                os.replace(tmp, out)
+        except BaseException:
+            for tmp, _out in tmps:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            raise
 
         self._prune_backups(dest_dir, keep)
         return dest
@@ -2437,15 +2494,20 @@ class Database:
                 feed = FeedSource(**feed_cfg)
             except Exception:
                 continue
+            # Defense-in-depth: a remote catalog may never register or mutate
+            # a local-file feed or a non-http(s) URL.
+            if feed.local_file or not (feed.url or "").lower().startswith(("http://", "https://")):
+                continue
             if feed.name in tombstoned:
                 actions["skipped_deleted"].append(feed.name)
                 continue
             new_fp = _feed_fingerprint(feed)
             if feed.name not in existing:
+                needs_key = bool(feed.requires_auth or feed.auth_env or "{auth_key}" in (feed.url or ""))
                 enabled = feed.enabled
                 if not auto_add:
                     enabled = False     # pending: invisible to fetch/score
-                elif feed.requires_auth:
+                elif needs_key:
                     enabled = False     # keyless-impossible never auto-live
                 self.add_feed(feed.model_copy(update={"enabled": enabled}),
                               added_by=self.CATALOG_ADDED_BY, seed_fingerprint=new_fp)
@@ -2465,6 +2527,8 @@ class Database:
             # a NULL fingerprint and stays frozen, protecting URL overrides
             # through catalog plumbing updates (acceptance criterion 3).
             row = existing[feed.name]
+            if row.local_file:
+                continue
             seeded = _fingerprint_value(fingerprints.get(feed.name),
                                         'update_interval')
             interval = (feed.update_interval
@@ -2482,6 +2546,8 @@ class Database:
                          feed.scraper, feed.indicator_kind or 'ip', interval, new_fp,
                          feed.name),
                     )
+                    if row.url != feed.url:
+                        self._reset_feed_url_state(cur, feed.name)
                 actions["updated"].append(feed.name)
             elif interval != row.update_interval:
                 with self._cursor() as cur:
@@ -2505,7 +2571,8 @@ class Database:
         if feed is None:
             return False
         self.delete_setting(self.CATALOG_PENDING_PREFIX + name)
-        if not feed.requires_auth:
+        needs_key = bool(feed.requires_auth or feed.auth_env or "{auth_key}" in (feed.url or ""))
+        if not needs_key:
             self.set_feed_enabled(name, True)
         return True
 
