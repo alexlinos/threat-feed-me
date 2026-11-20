@@ -15,7 +15,7 @@
 # declares (a new key's allowed host is a release decision). Mirror changes into config.yaml's feeds: so fresh air-gapped
 # installs get them too (tests/test_catalog.py checks the two agree).
 
-catalog_version: 2
+catalog_version: 3
 feeds:
 - name: talos_snort
   url: https://snort.org/downloads/ip-block-list/terms
@@ -47,6 +47,7 @@ feeds:
   feed_type: threat_intel
   indicator_kind: domain
   update_interval: 3600
+  requires_auth: true
   auth_env: URLHAUS_AUTH_KEY
   scraper: urlhaus_keyed_csv
   enabled: false

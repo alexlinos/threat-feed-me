@@ -247,7 +247,9 @@ class ConfidenceScorer:
         config_urls = config.get('config_feed_urls') or {
             f.get('name'): f.get('url')
             for f in config.get('feeds', []) or [] if isinstance(f, dict)}
-        self.authoritative_sources = set(auth_cfg)   # no DB (unit tests): trust config
+        # No DB (unit tests): trust config; with a DB, fail closed until
+        # provenance is verified against the stored feed rows below.
+        self.authoritative_sources = set() if self.db is not None else set(auth_cfg)
         # Shared-platform guard (see DEFAULT_SHARED_PLATFORMS). Config may
         # override the curated list; an explicit empty list disables it.
         shared = resolve_shared_platforms(config)
@@ -272,7 +274,8 @@ class ConfidenceScorer:
                 self.authoritative_sources = verified
             except Exception:
                 logger.exception("[score] could not load the feed roster; "
-                                 "feed types and enabled state unknown this rescore")
+                                 "feed types and enabled state unknown this rescore; "
+                                 "authoritative force-HIGH disabled")
 
         # Apply the false-positive penalty: feeds users have flagged as noisy
         # get their reputation reduced, so their IPs score lower and fall out
@@ -318,6 +321,8 @@ class ConfidenceScorer:
             tier = self._determine_tier(score, len(sources or []), sources)
         else:
             med_b, high_b = self._stored_breaks(kind=indicator.kind)
+            med_b = max(med_b, self.medium_floor)
+            high_b = max(high_b, self.high_floor, med_b)
             tier = self._tier_from_votes(votes, sources, med_b, high_b,
                                          kind=indicator.kind,
                                          value=indicator.ip)
@@ -427,19 +432,26 @@ class ConfidenceScorer:
         and the whitelist scoping map. Tier is decided by the caller — with
         effective-votes tiering it needs the whole population's vote
         distribution, which no single indicator can know."""
-        # Apply whitelist scoping: drop globally-whitelisted IPs entirely and
-        # remove any per-feed-whitelisted sources.
-        eff = effective_sources(indicator.ip, indicator.sources, whitelist_map)
+        # Apply whitelist scoping: drop globally-whitelisted IPs/CIDRs entirely
+        # and remove any per-feed-whitelisted sources.
+        cidr = (indicator.metadata or {}).get('cidr')
+        eff = effective_sources(indicator.ip, indicator.sources, whitelist_map, cidr=cidr)
         if eff is None:
             return 0.0, 0.0, None
         sources = [s for s in eff if s not in self.disabled_sources]
         # CIDR-aware when given a WhitelistMatcher; plain dict falls back to
         # exact match. Used below to skip re-adding a netblock source that has
-        # been whitelisted for this IP.
+        # been whitelisted for this IP/CIDR.
         if hasattr(whitelist_map, "scoped_feeds"):
-            scoped = whitelist_map.scoped_feeds(indicator.ip)
+            scoped = whitelist_map.scoped_feeds(cidr or indicator.ip)
+            if cidr and cidr != indicator.ip:
+                ip_scoped = whitelist_map.scoped_feeds(indicator.ip)
+                if ip_scoped:
+                    scoped = (set(scoped) if scoped else set()) | set(ip_scoped)
         else:
-            scoped = whitelist_map.get(indicator.ip, set())
+            scoped = set(whitelist_map.get(indicator.ip) or ())
+            if cidr and cidr != indicator.ip:
+                scoped |= set(whitelist_map.get(cidr) or ())
 
         # IP-over-CIDR overlap: an IP inside a netblock reported by another
         # feed gains that feed as a corroborating source, using the netblock's
@@ -578,8 +590,12 @@ class ConfidenceScorer:
             self._persist_fingerprint(votes, kind=kind)
             return med_b, high_b
 
-        # Distribution unchanged -> keep the stable boundaries.
-        return self._stored_breaks(kind=kind)
+        # Distribution unchanged -> keep the stable boundaries, while still
+        # enforcing configured floors as hard minimums if an operator raised them.
+        med_b, high_b = self._stored_breaks(kind=kind)
+        med_b = max(med_b, self.medium_floor)
+        high_b = max(high_b, self.high_floor, med_b)
+        return med_b, high_b
 
     def _load_fingerprint(self, kind: str = 'ip') -> Optional[dict]:
         key = self.TIER_FINGERPRINT_KEY_DOMAINS if kind == 'domain' \
@@ -881,8 +897,13 @@ class ConfidenceScorer:
         if last_seen_dt.tzinfo is None:
             last_seen_dt = last_seen_dt.replace(tzinfo=timezone.utc)
 
-        hours_ago = (now - last_seen_dt).total_seconds() / 3600
-        half_life = self.config.get('scoring', {}).get('decay_half_life_hours', 72)
+        hours_ago = max(0.0, (now - last_seen_dt).total_seconds() / 3600)
+        try:
+            half_life = float(self.config.get('scoring', {}).get('decay_half_life_hours', 72))
+        except (TypeError, ValueError):
+            half_life = 72.0
+        if not math.isfinite(half_life) or half_life <= 0:
+            half_life = 72.0
         return math.pow(0.5, hours_ago / half_life)
 
     def _has_intel_source(self, sources: Optional[List[str]]) -> bool:

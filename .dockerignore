@@ -4,12 +4,18 @@
 .gitignore
 .dockerignore
 .claude
+.hermes
+.github
+.snaps
 .venv
 venv
 env
 __pycache__
 *.pyc
 .pytest_cache
+pytest-of-*
+tmp-scratch
+tmp*
 build
 dist
 *.egg-info
@@ -18,7 +24,9 @@ dist
 data
 output
 *.db
+**/*.db
 *.db-*
+**/*.db-*
 .env
 *.env
 

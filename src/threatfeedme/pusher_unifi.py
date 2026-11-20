@@ -49,6 +49,24 @@ from urllib.parse import urlsplit
 from typing import Dict, List, Mapping, Optional, cast
 
 import requests
+from requests.adapters import HTTPAdapter
+
+_REAL_SESSION_CLS = requests.Session
+
+
+class _PinnedCertAdapter(HTTPAdapter):
+    """HTTPAdapter that pins every TLS handshake to an exact SHA-256 leaf
+    certificate fingerprint via urllib3's assert_fingerprint, eliminating the
+    probe-then-login TOCTOU window on self-signed gateways."""
+
+    def __init__(self, fingerprint: str, **kwargs):
+        self._fingerprint = fingerprint
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["assert_fingerprint"] = self._fingerprint
+        pool_kwargs["assert_hostname"] = False
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
 
 from threatfeedme.exporter import firewall_value, is_included
 from threatfeedme.models import ConfidenceTier, CUMULATIVE_TIERS
@@ -179,7 +197,12 @@ class UniFiPusher:
         self.max_entries = max(1, int(max_entries))
         self.max_per_group = max(1, int(max_per_group))
         self.timeout = timeout
-        self.session = session if session is not None else requests.Session()
+        if session is not None:
+            self.session = session
+        else:
+            self.session = requests.Session()
+            # Never route LAN gateway credentials through an env proxy (matches crowdsec.py).
+            self.session.trust_env = False
         self.session.verify = verify_ssl
         # Trust-on-first-use (2.5.7): UDM certificates are self-signed, so
         # verify_ssl is off by default and the admin password went over a
@@ -189,7 +212,8 @@ class UniFiPusher:
         # verify_ssl on, the CA check does this job and the pin is unused.
         self.pinned_cert = (cert_sha256 or "").strip().lower() or None
         self.seen_cert: Optional[str] = None
-        if not verify_ssl:
+        self._mount_cert_pin(self.pinned_cert)
+        if not verify_ssl and self.host:
             # Self-signed UDM cert: silence the per-request nag, we said so once.
             try:
                 import urllib3
@@ -197,6 +221,13 @@ class UniFiPusher:
             except Exception:
                 pass
         self._csrf: Optional[str] = None
+
+    def _mount_cert_pin(self, fingerprint: Optional[str]) -> None:
+        """Bind real requests sessions to the pinned SHA-256 leaf cert on the
+        exact TLS socket used for login and API calls."""
+        if (fingerprint and not self.session.verify
+                and isinstance(self.session, _REAL_SESSION_CLS)):
+            self.session.mount("https://", _PinnedCertAdapter(fingerprint))
 
     @classmethod
     def from_block(cls, cfg: Dict) -> Optional["UniFiPusher"]:
@@ -235,6 +266,8 @@ class UniFiPusher:
         Test button, so the operator can verify host/credentials before
         enabling the push."""
         self.check_certificate(learn=True)      # the pin's first look, or its check
+        if self.seen_cert and not self.pinned_cert:
+            self._mount_cert_pin(self.seen_cert)
         self.login()
         groups = self._api('GET', '/rest/firewallgroup')
         ours = [g.get('name') for g in groups
@@ -269,9 +302,21 @@ class UniFiPusher:
                 f"UniFi push enabled but {ENV_USER} / {ENV_PASSWORD} are not set "
                 "(add them to the data volume's .env or the environment)")
         self.check_certificate()        # before the password leaves the box
-        r = self.session.post(f"{self.host}/api/auth/login",
-                              json={"username": user, "password": password},
-                              timeout=self.timeout)
+        extra = {"allow_redirects": False} if isinstance(self.session, _REAL_SESSION_CLS) else {}
+        try:
+            r = self.session.post(f"{self.host}/api/auth/login",
+                                  json={"username": user, "password": password},
+                                  timeout=self.timeout, **extra)
+        except requests.exceptions.SSLError as e:
+            if "fingerprints did not match" in str(e).lower():
+                raise RuntimeError(
+                    "the gateway's TLS certificate changed since it was pinned; "
+                    "if you replaced it, use Trust the new certificate in the "
+                    "UniFi panel to re-test and pin it"
+                ) from e
+            raise
+        if getattr(r, "is_redirect", False) or 300 <= getattr(r, "status_code", 200) < 400:
+            raise RuntimeError("UniFi login: gateway answered a redirect; refusing to follow")
         r.raise_for_status()
         # UniFi OS hands the CSRF token back as a response header; mutating
         # Network-app calls must echo it.
@@ -279,8 +324,21 @@ class UniFiPusher:
 
     def _request(self, method: str, url: str, **kwargs):
         headers = {'X-CSRF-Token': self._csrf} if self._csrf else {}
-        r = self.session.request(method, url, headers=headers,
-                                 timeout=self.timeout, **kwargs)
+        if isinstance(self.session, _REAL_SESSION_CLS):
+            kwargs.setdefault("allow_redirects", False)
+        try:
+            r = self.session.request(method, url, headers=headers,
+                                     timeout=self.timeout, **kwargs)
+        except requests.exceptions.SSLError as e:
+            if "fingerprints did not match" in str(e).lower():
+                raise RuntimeError(
+                    "the gateway's TLS certificate changed since it was pinned; "
+                    "if you replaced it, use Trust the new certificate in the "
+                    "UniFi panel to re-test and pin it"
+                ) from e
+            raise
+        if getattr(r, "is_redirect", False) or 300 <= getattr(r, "status_code", 200) < 400:
+            raise RuntimeError(f"UniFi {method}: gateway answered a redirect; refusing to follow")
         # The token rotates on some responses; always keep the freshest.
         rotated = r.headers.get('x-csrf-token')
         if rotated:
@@ -718,53 +776,73 @@ def _add_coverage(summary: Dict, sel: "Selection") -> None:
         summary["never_block_refused"] = sel.refused_count
 
 
+def _stored_error_text(e: Exception) -> str:
+    """Categorize requests exceptions before persisting to unifi_last_push so
+    internal host/port/socket details don't reach the dashboard (matches
+    routers/integrations._failure_reason)."""
+    if isinstance(e, requests.exceptions.SSLError):
+        return "TLS handshake failed (certificate not trusted, or the gateway's certificate changed)"
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return "could not reach the gateway"
+    if isinstance(e, requests.exceptions.HTTPError):
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        return "login refused" if code in (401, 403) else "unexpected response from the gateway"
+    if isinstance(e, RuntimeError):
+        return str(e)
+    return "push failed"
+
+
 def _push_to_unifi(db, config: Dict) -> Optional[Dict]:
     pusher = UniFiPusher.from_config(config, db=db)
     if pusher is None:
         return None
     try:
-        pusher.login()
-        sel = pusher.select(db, 'ip', pusher.tier)
-        summary = pusher.sync(sel.values, list_count=TIER_LIST_COUNTS[pusher.tier])
-    except Exception as e:
-        record_push_outcome(db, error=str(e))
-        raise
-    _add_coverage(summary, sel)
-    # Policy read-back (issue #21): a 200 from the group API is NOT evidence
-    # the control is live. When the operator names the IP policy, its
-    # destination must reference a group this push wrote, or the push status
-    # fails explicitly — a cosmetic sync must never report success.
-    if pusher.ip_policy_id:
-        v = pusher.verify_policy_reference(pusher.ip_policy_id,
-                                           summary.get("written") or {}, "ip",
-                                           filled=summary.get("filled"))
-        summary["policy_check"] = v
-        if not v["ok"]:
-            detail = f"UniFi IP policy check failed: {v['error']}"
-            logger.error("[unifi] %s", detail)
-            record_push_outcome(db, summary=summary, error=detail)
-            raise RuntimeError(detail)
-    logger.info(
-        "[unifi] pushed %d entries into %d group(s) [%s-%s-*]: "
-        "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
-        summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
-        summary["created"], summary["updated"], summary["unchanged"],
-        summary["emptied"], summary["withheld"])
-    # The retired domain arm's lists (2.1 to 2.7.4) are still on gateways that
-    # ran it. Neutralise them on every push; isolated, so a failure here never
-    # hides the IP push that just succeeded. The summary carries a fixed
-    # sentence, never the exception text: that names the gateway's address
-    # and reaches the dashboard.
-    try:
-        cleared = pusher.withdraw(DOMAIN_GROUP_TYPE, "dom-")
-        if cleared:
-            summary["domains_withdrawn"] = cleared
-            logger.warning(
-                "[unifi] the domain push is retired: replaced %d domain list(s) "
-                "left on the gateway with a placeholder that matches nothing",
-                cleared)
-    except Exception as e:
-        summary["domain_error"] = "could not clear the retired domain lists on the gateway"
-        logger.error("[unifi] could not clear the retired domain lists: %s", e)
-    record_push_outcome(db, summary=summary)
-    return summary
+        try:
+            pusher.login()
+            sel = pusher.select(db, 'ip', pusher.tier)
+            summary = pusher.sync(sel.values, list_count=TIER_LIST_COUNTS[pusher.tier])
+        except Exception as e:
+            record_push_outcome(db, error=_stored_error_text(e))
+            raise
+        _add_coverage(summary, sel)
+        # Policy read-back (issue #21): a 200 from the group API is NOT evidence
+        # the control is live. When the operator names the IP policy, its
+        # destination must reference a group this push wrote, or the push status
+        # fails explicitly — a cosmetic sync must never report success.
+        if pusher.ip_policy_id:
+            v = pusher.verify_policy_reference(pusher.ip_policy_id,
+                                               summary.get("written") or {}, "ip",
+                                               filled=summary.get("filled"))
+            summary["policy_check"] = v
+            if not v["ok"]:
+                detail = f"UniFi IP policy check failed: {v['error']}"
+                logger.error("[unifi] %s", detail)
+                record_push_outcome(db, summary=summary, error=detail)
+                raise RuntimeError(detail)
+        logger.info(
+            "[unifi] pushed %d entries into %d group(s) [%s-%s-*]: "
+            "%d created, %d updated, %d unchanged, %d emptied (withheld %d)",
+            summary["entries"], summary["groups"], pusher.group_prefix, pusher.tier,
+            summary["created"], summary["updated"], summary["unchanged"],
+            summary["emptied"], summary["withheld"])
+        # The retired domain arm's lists (2.1 to 2.7.4) are still on gateways that
+        # ran it. Neutralise them on every push; isolated, so a failure here never
+        # hides the IP push that just succeeded. The summary carries a fixed
+        # sentence, never the exception text: that names the gateway's address
+        # and reaches the dashboard.
+        try:
+            cleared = pusher.withdraw(DOMAIN_GROUP_TYPE, "dom-")
+            if cleared:
+                summary["domains_withdrawn"] = cleared
+                logger.warning(
+                    "[unifi] the domain push is retired: replaced %d domain list(s) "
+                    "left on the gateway with a placeholder that matches nothing",
+                    cleared)
+        except Exception as e:
+            summary["domain_error"] = "could not clear the retired domain lists on the gateway"
+            logger.error("[unifi] could not clear the retired domain lists: %s", e)
+        record_push_outcome(db, summary=summary)
+        return summary
+    finally:
+        if hasattr(pusher.session, "close"):
+            pusher.session.close()

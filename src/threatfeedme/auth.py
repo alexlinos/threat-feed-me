@@ -160,20 +160,30 @@ _SCRYPT_SLOTS = threading.BoundedSemaphore(4)
 _SCRYPT_WAIT_S = 2.0
 
 
-def _stored_login_ok(stored: dict, username: str, password: str) -> bool:
-    user_ok = hmac.compare_digest(username.encode("utf-8"), stored["user"].encode("utf-8"))
-    digest = hmac.new(_process_key, f"{username}\0{password}".encode("utf-8"), "sha256").digest()
-    seen = _verified.setdefault(stored["hash"], set())
-    if digest in seen:
-        return user_ok
+def check_stored_password_bounded(stored: Optional[dict], password: str) -> bool:
+    """Like check_stored_password, bounded by _SCRYPT_SLOTS so concurrent
+    password-change requests cannot bypass the scrypt concurrency cap."""
+    if not stored:
+        return False
     if not _SCRYPT_SLOTS.acquire(timeout=_SCRYPT_WAIT_S):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="Too many sign-in attempts at once; try again",
                             headers={"Retry-After": "5"})
     try:
-        pass_ok = check_stored_password(stored, password)  # always hashed: no user timing leak
+        return check_stored_password(stored, password)
     finally:
         _SCRYPT_SLOTS.release()
+
+
+def _stored_login_ok(stored: Optional[dict], username: str, password: str) -> bool:
+    if not stored:
+        return False
+    user_ok = hmac.compare_digest(username.encode("utf-8"), stored["user"].encode("utf-8"))
+    digest = hmac.new(_process_key, f"{username}\0{password}".encode("utf-8"), "sha256").digest()
+    seen = _verified.setdefault(stored["hash"], set())
+    if digest in seen:
+        return user_ok
+    pass_ok = check_stored_password_bounded(stored, password)  # always hashed: no user timing leak
     if user_ok and pass_ok and len(seen) < 16:
         seen.add(digest)
     return user_ok and pass_ok
@@ -181,7 +191,13 @@ def _stored_login_ok(stored: dict, username: str, password: str) -> bool:
 
 def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security)):
     """Enforce Basic auth when enabled; a no-op otherwise."""
-    source = auth_source()
+    _ensure_auth_config()
+    stored = None
+    if _AUTH_USER and _AUTH_PASSWORD:
+        source = "env"
+    else:
+        stored = stored_credentials()
+        source = "dashboard" if stored else None
     if not (_AUTH_REQUIRED or source):
         return
     if source is None:
@@ -196,7 +212,7 @@ def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security
     if credentials is None:
         valid = False
     elif source == "dashboard":
-        valid = _stored_login_ok(stored_credentials(), credentials.username, credentials.password)
+        valid = _stored_login_ok(stored, credentials.username, credentials.password)
     else:
         user_ok = secrets.compare_digest(credentials.username.encode("utf-8"),
                                          _AUTH_USER.encode("utf-8"))

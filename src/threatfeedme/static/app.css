@@ -194,6 +194,7 @@ input::placeholder { color:var(--dim); }
 .switch input:checked + span { background:rgba(16,185,129,.25); border-color:rgba(16,185,129,.5); }
 .switch input:checked + span:before { transform:translateX(18px); background:var(--accent-hi);
                                        box-shadow:0 0 6px rgba(16,185,129,.6); }
+.switch input:focus-visible + span { outline:2px solid var(--accent-hi); outline-offset:2px; }
 
 /* --- Kind group header rows in the feeds table (D9) --- */
 .feeds .group-row td { background:var(--card-2); font-size:.78em; font-weight:650; text-transform:uppercase; letter-spacing:.12em; padding:7px 8px; border-left:3px solid var(--dim); }
@@ -510,8 +511,9 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
 }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
 @media (prefers-reduced-motion: reduce) {
-  .logo-mark.brand-running .jaw-u, .logo-mark.brand-running .jaw-l { animation:none; }
-  .logo-mark.brand-running .prey { animation:pulse 1.4s ease-in-out infinite; }
+  .logo-mark.brand-running .jaw-u, .logo-mark.brand-running .jaw-l,
+  .logo-mark.brand-running .prey, .logo-mark.brand-error .prey,
+  .processing { animation:none; }
 }
 
 /* ---- narrow screens: the rail becomes a scrolling top strip ---- */
@@ -625,7 +627,7 @@ tbody tr:hover td { background:rgba(255,255,255,.018); }
    its panel (it did, and the page scrolled sideways at ~820px) */
 .cat-table { table-layout:fixed; }
 .cat-table th:nth-child(2), .cat-table td:nth-child(2) { width:84px; text-align:right; white-space:nowrap; font-family:var(--mono); font-size:13px; }
-.cat-table th:last-child, .cat-table td:last-child { width:56px; text-align:center; }
+.cat-table th:last-child, .cat-table td:last-child { width:78px; text-align:center; }
 /* long list names may break anywhere; not the detail row under them, where
    it let the URL builder's buttons shrink to one character per line */
 .cat-table tr:not(.cat-detail) > td:first-child { overflow-wrap:anywhere; }

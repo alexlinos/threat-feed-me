@@ -132,8 +132,7 @@ def guard_entry(entry: str, v4_floor: int = DEFAULT_V4_FLOOR,
         host = (parsed.hostname or "").lower().rstrip(".")
         if not host:
             return False, "URL has no host"
-        return guard_entry(host.lstrip("*."), v4_floor, v6_floor) \
-            if not host.startswith("*") else _domain_ok(host)
+        return _domain_ok(host) if host.startswith("*") else guard_entry(host, v4_floor, v6_floor)
     if entry.startswith("*."):
         return _domain_ok(entry)
     try:
@@ -200,6 +199,7 @@ def select_entries(entries: List[str], kind: Optional[str] = None,
                 listed.
     """
     out: List[str] = []
+    seen = set() if hosts else None
     for e in entries:
         k = entry_kind(e)
         if kind and k != kind:
@@ -214,6 +214,10 @@ def select_entries(entries: List[str], kind: Optional[str] = None,
                 e = str(net.network_address)
         elif k == "domain" and e.startswith("*.") and wildcards == "drop":
             continue
+        if seen is not None:
+            if e in seen:
+                continue
+            seen.add(e)
         out.append(e)
     return out
 
@@ -339,11 +343,12 @@ def extract_json_paths(data: Any, expr: str) -> List[str]:
     for node in nodes:
         if isinstance(node, str):
             out.append(node)
-        elif isinstance(node, (int, float)):
+        elif isinstance(node, (int, float)) and not isinstance(node, bool):
             out.append(str(node))
         elif isinstance(node, list):
             for item in node:
-                if isinstance(item, (str, int, float)):
+                if isinstance(item, str) or (isinstance(item, (int, float))
+                                             and not isinstance(item, bool)):
                     out.append(str(item))
     return out
 

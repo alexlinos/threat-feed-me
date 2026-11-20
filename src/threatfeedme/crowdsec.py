@@ -142,6 +142,21 @@ def _session(verify: bool = True) -> requests.Session:
     return s
 
 
+def _stored_error_text(e: Exception) -> str:
+    """Categorize requests exceptions before persisting to crowdsec_last_push
+    so internal host/port/socket details don't reach the dashboard."""
+    if isinstance(e, requests.exceptions.SSLError):
+        return "TLS handshake failed"
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return "could not reach the CrowdSec LAPI"
+    if isinstance(e, requests.exceptions.HTTPError):
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        return "login refused" if code in (401, 403) else "unexpected response from the LAPI"
+    if isinstance(e, RuntimeError):
+        return str(e)
+    return "publish failed"
+
+
 def _check(r: requests.Response, what: str) -> requests.Response:
     if r.is_redirect or 300 <= r.status_code < 400:
         # Credentials go to the configured LAPI only; a redirect is refused,
@@ -330,7 +345,7 @@ def push_to_crowdsec(db, config: Dict, force: bool = False, session=None) -> Opt
                     pusher.expire(scenario)
             except Exception:
                 pass
-            _record(db, error=str(e))
+            _record(db, error=_stored_error_text(e))
             raise
         expired = 0
         if prev_scenario and prev_scenario != scenario:

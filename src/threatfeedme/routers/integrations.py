@@ -22,7 +22,7 @@ from threatfeedme.pusher_unifi import (DEFAULT_MAX_ENTRIES, DEFAULT_MAX_PER_GROU
                                        ENV_PASSWORD, ENV_USER, SETTINGS_KEY,
                                        LAST_PUSH_KEY, UniFiPusher,
                                        effective_block, push_to_unifi)
-from threatfeedme.routers.feeds import _write_env_var
+from threatfeedme.routers.feeds import MAX_KEY_CHARS, _write_env_var
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -56,6 +56,25 @@ def _failure_reason(e: Exception) -> str:
     if isinstance(e, RuntimeError):
         return str(e)          # our own messages (credentials unset, certificate pin)
     return "failed"
+
+
+def _scheme_downgraded(old_url: str, new_url: str) -> bool:
+    """True when a URL moved from https:// to http:// (same host or not)."""
+    return ((old_url or "").strip().lower().startswith("https://")
+            and (new_url or "").strip().lower().startswith("http://"))
+
+
+def _validate_credential(value: str) -> None:
+    """Same validation discipline as routers/feeds.set_api_key: reject control
+    characters, oversized values (Windows 32 KB env cap), and non-ASCII BEFORE
+    writing anything to .env."""
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise HTTPException(status_code=400, detail="Credential contains control characters")
+    if len(value) > MAX_KEY_CHARS:
+        raise HTTPException(status_code=400,
+                            detail=f"Credential is longer than {MAX_KEY_CHARS} characters")
+    if not value.isascii():
+        raise HTTPException(status_code=400, detail="Credential must be plain ASCII text")
 
 
 def _host_key(host: str) -> str:
@@ -196,8 +215,7 @@ def unifi_credentials(request: UniFiCredentialsRequest,
     feed API keys: data-volume .env + process env, write-only, never logged,
     never echoed. Use a dedicated local-only UniFi admin, not a real account."""
     for value in (request.username, request.password):
-        if any(ord(c) < 32 or ord(c) == 127 for c in value):
-            raise HTTPException(status_code=400, detail="Credential contains control characters")
+        _validate_credential(value)
     pairs = ((ENV_USER, request.username.strip()), (ENV_PASSWORD, request.password))
     for var, value in pairs:
         _write_env_var(core.env_file(), var, value or None)
@@ -390,7 +408,12 @@ def crowdsec_save(request: CrowdSecSettingsRequest, _=Depends(require_auth),
     # and pressing Test posts the machine password there).
     credentials_cleared = False
     previous = _cs.lapi_url(core.db, core.config)
-    if new_url is not None and previous and _host_key(new_url) != _host_key(previous):
+    previous_verify = bool(_cs.effective_block(core.db, core.config).get("verify_ssl", True))
+    host_changed = bool(new_url is not None and previous
+                        and (_host_key(new_url) != _host_key(previous)
+                             or _scheme_downgraded(previous, new_url)))
+    tls_weakened = bool(previous and previous_verify and request.verify_ssl is False)
+    if host_changed or tls_weakened:
         for var in _cs.CREDENTIAL_VARS:
             _write_env_var(core.env_file(), var, None)
             os.environ.pop(var, None)
@@ -424,8 +447,8 @@ def crowdsec_credentials(request: CrowdSecCredentialsRequest,
              (_cs.ENV_MACHINE_PASSWORD, request.machine_password),
              (_cs.ENV_BOUNCER_KEY, request.bouncer_key))
     for _var, value in pairs:
-        if value is not None and any(ord(c) < 32 or ord(c) == 127 for c in value):
-            raise HTTPException(status_code=400, detail="Credential contains control characters")
+        if value is not None:
+            _validate_credential(value)
     for var, value in pairs:
         if value is None:
             continue

@@ -91,6 +91,7 @@ feeds:
     feed_type: "threat_intel"
     indicator_kind: "domain"
     update_interval: 3600  # upstream regenerates every 5 min; 1 h is polite
+    requires_auth: true
     auth_env: URLHAUS_AUTH_KEY
     scraper: urlhaus_keyed_csv
     enabled: false

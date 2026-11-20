@@ -50,6 +50,10 @@ class WhitelistMatcher(dict):
         # Parsed CIDR rules: list of (ip_network, set(feed_names)). Built only
         # from entries that are real networks with a non-host prefix.
         self.cidr_rules: List[Tuple[Any, Set[str]]] = []
+        # Parsed host IP rules: list of (ip_address, set(feed_names)), built
+        # from bare IPs and /32 // /128 entries. Used only when checking a
+        # CIDR indicator so a netblock overlapping a whitelisted host is caught.
+        self.addr_rules: List[Tuple[Any, Set[str]]] = []
         # Wildcard domain rules: list of (apex_domain, set(feed_names)),
         # built from "*.apex" keys. Matching is label-edge suffix match.
         self.wildcard_rules: List[Tuple[str, Set[str]]] = []
@@ -60,13 +64,14 @@ class WhitelistMatcher(dict):
         self.never_block: Optional["NeverBlockMatcher"] = None
 
     def add_cidr_rules_from_keys(self) -> None:
-        """(Re)build CIDR and wildcard-domain rules from the current keys.
+        """(Re)build CIDR, host-IP, and wildcard-domain rules from the current keys.
 
         An entry is treated as a CIDR rule when its stored value parses as a
         network whose prefix is shorter than a single host (so a plain host or
-        a /32 // /128 is left as an exact match only), and as a wildcard rule
-        when it starts with "*."."""
+        a /32 // /128 is left out of cidr_rules and recorded in addr_rules for
+        netblock overlap checks), and as a wildcard rule when it starts with "*."."""
         rules: List[Tuple[Any, Set[str]]] = []
+        addrs: List[Tuple[Any, Set[str]]] = []
         wildcards: List[Tuple[str, Set[str]]] = []
         for key, feeds in self.items():
             if key.startswith("*."):
@@ -74,26 +79,49 @@ class WhitelistMatcher(dict):
                 if apex:
                     wildcards.append((apex, set(feeds)))
                 continue
-            if "/" not in key:
+            if "/" in key:
+                try:
+                    net = ipaddress.ip_network(key, strict=False)
+                except ValueError:
+                    continue
+                if net.prefixlen >= net.max_prefixlen:
+                    addrs.append((net.network_address, set(feeds)))
+                    continue  # a /32 or /128 is a single host -> not a CIDR rule
+                rules.append((net, set(feeds)))
                 continue
             try:
-                net = ipaddress.ip_network(key, strict=False)
+                addrs.append((ipaddress.ip_address(key), set(feeds)))
             except ValueError:
-                continue
-            if net.prefixlen >= net.max_prefixlen:
-                continue  # a /32 or /128 is a single host -> exact only
-            rules.append((net, set(feeds)))
+                pass  # domain
         self.cidr_rules = rules
+        self.addr_rules = addrs
         self.wildcard_rules = wildcards
 
     def scoped_feeds(self, value: str) -> Set[str]:
-        """Feeds whitelisting ``value`` (an IP or a domain): the exact match
-        plus any containing CIDR rule (IPs) or wildcard rule (domains).
+        """Feeds whitelisting ``value`` (an IP, a CIDR range, or a domain): the
+        exact match plus any overlapping CIDR/host rule (IPs/ranges) or
+        wildcard rule (domains).
 
         Returns the union of every matching rule's feed set; empty set if
         nothing matches."""
         exact = self.get(value)
         scoped: Set[str] = set(exact) if exact else set()
+        if "/" in value:
+            try:
+                net = ipaddress.ip_network(value, strict=False)
+            except ValueError:
+                net = None
+            if net is not None:
+                net_exact = self.get(str(net.network_address))
+                if net_exact:
+                    scoped |= net_exact
+                for addr, feeds in self.addr_rules:
+                    if addr.version == net.version and addr in net:
+                        scoped |= feeds
+                for cnet, feeds in self.cidr_rules:
+                    if cnet.version == net.version and cnet.overlaps(net):
+                        scoped |= feeds
+                return scoped
         if self.cidr_rules or self.wildcard_rules:
             try:
                 addr = ipaddress.ip_address(value)
@@ -114,22 +142,31 @@ class WhitelistMatcher(dict):
 
 
 def effective_sources(
-    ip: str, sources: List[str], whitelist_map: Dict[str, Set[str]]
+    ip: str, sources: List[str], whitelist_map: Dict[str, Set[str]],
+    cidr: Optional[str] = None,
 ) -> Optional[List[str]]:
     """Apply whitelist scoping to an indicator's sources.
 
     Returns:
-      - None  if the IP is globally whitelisted (ALL_FEEDS) -> exclude entirely.
+      - None  if the IP/CIDR is globally whitelisted (ALL_FEEDS) -> exclude entirely.
       - the surviving sources otherwise (possibly empty if every reporting feed
-        has been whitelisted for this IP, which callers treat as "no evidence").
+        has been whitelisted for this IP/CIDR, which callers treat as "no evidence").
 
     Uses CIDR-aware scoping when given a WhitelistMatcher; a plain dict falls
-    back to exact-string matching (so legacy callers keep working).
+    back to exact-string matching (so legacy callers keep working). When `cidr`
+    is supplied for a netblock indicator, range overlap is checked against both
+    whitelisted CIDRs and whitelisted host IPs.
     """
     if hasattr(whitelist_map, "scoped_feeds"):
-        scoped = whitelist_map.scoped_feeds(ip)
+        scoped = whitelist_map.scoped_feeds(cidr or ip)
+        if cidr and cidr != ip:
+            ip_scoped = whitelist_map.scoped_feeds(ip)
+            if ip_scoped:
+                scoped = (set(scoped) if scoped else set()) | set(ip_scoped)
     else:
-        scoped = whitelist_map.get(ip) or set()
+        scoped = set(whitelist_map.get(ip) or ())
+        if cidr and cidr != ip:
+            scoped |= set(whitelist_map.get(cidr) or ())
     if not scoped:
         return list(sources)
     # Guard: scoped_feeds() must never return None — if it did, the ALL_FEEDS

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -72,6 +73,25 @@ def _https_url(value) -> str:
     return ""
 
 
+def _within_base(url: str, base: str) -> bool:
+    """True only when `url` is a clean, normalized HTTPS/HTTP URL inside `base`
+    with no path traversal (`..`), userinfo, query string, or fragment."""
+    if not isinstance(url, str) or len(url) > 2048 or not url.startswith(base):
+        return False
+    u = urlsplit(url)
+    b = urlsplit(base)
+    if (u.scheme != b.scheme or u.netloc != b.netloc
+            or u.username is not None or u.password is not None
+            or u.query or u.fragment):
+        return False
+    segs = [s for s in u.path.split("/") if s]
+    if any(s in (".", "..") for s in segs):
+        return False
+    norm_u = posixpath.normpath(u.path)
+    norm_b = posixpath.normpath(b.path).rstrip("/") + "/"
+    return norm_u.startswith(norm_b)
+
+
 def _clean(doc, base: str) -> Optional[Dict]:
     """Validate a parsed manifest; drop malformed entries, keep the rest.
     ``base`` is the manifest's own directory: a list URL anywhere else is
@@ -88,8 +108,8 @@ def _clean(doc, base: str) -> Optional[Dict]:
         if not all(isinstance(e.get(k), str) and e[k]
                    for k in ("name", "vendor", "url")):
             continue
-        if not e["url"].startswith(base):
-            continue  # off the factory's directory: not a list it published
+        if not _within_base(e["url"], base):
+            continue  # off the factory's directory or traversal: not a list it published
         try:
             entries = int(e.get("entries") or 0)
             nbytes = int(e.get("bytes") or 0)
@@ -201,8 +221,17 @@ def set_enabled(db, slug: str, enabled: bool, get: Callable = requests.get,
     nothing fetches and nothing serves while off."""
     if not enabled:
         # Off needs no manifest definition: if the factory retires a list,
-        # its toggle must still be able to shut it off.
-        if db.get_application_list(slug) is not None:
+        # its toggle must still be able to shut it off. If the slug IS in the
+        # manifest and belongs to a different (operator-owned) URL, refuse so
+        # a catalog toggle cannot disable the operator's custom list.
+        existing = db.get_application_list(slug)
+        if existing is not None:
+            doc = get_catalog(db, get=get, enabled=catalog_enabled,
+                              allow_private=allow_private)
+            entry = next((e for e in doc["lists"] if e["slug"] == slug), None)
+            if entry is not None and existing["source_url"] != entry["url"]:
+                raise NameTakenError(f"one of your lists is already called '{slug}'; "
+                                     "manage it from your custom lists instead")
             db.update_application_list(slug, {"enabled": 0})
         return {"name": slug, "outcome": "disabled"}
     if not catalog_enabled:

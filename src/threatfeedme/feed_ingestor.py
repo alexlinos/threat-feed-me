@@ -24,16 +24,18 @@ _MAX_FETCH_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 _QUERY_RE = re.compile(r"\?[^\s'\"<>]*")
+_USERINFO_RE = re.compile(r"(https?://)[^/\s@]+@", re.IGNORECASE)
 
 
 def _redact(text, secrets=()) -> str:
-    """A URL's query string, gone: some providers put the API key there, and
-    requests' exception text carries the full URL (review 2026-10-24).
+    """A URL's query string and userinfo, gone: some providers put credentials
+    there, and requests' exception text carries the full URL (review 2026-10-24).
 
-    `secrets` additionally scrubs the literal values of URL-embedded keys
-    (issue #8): the URLhaus Auth-Key lives in the PATH, where the query-strip
-    guard can't reach it and requests' exception text reproduces it verbatim."""
-    out = _QUERY_RE.sub("?…", str(text))
+    `secrets` additionally scrubs the literal and percent-encoded values of
+    URL-embedded keys (issue #8): the URLhaus Auth-Key lives in the PATH, where
+    the query-strip guard can't reach it and requests' exception text
+    reproduces it verbatim."""
+    out = _USERINFO_RE.sub(r"\1[redacted]@", _QUERY_RE.sub("?…", str(text)))
     for secret in secrets:
         if secret and secret in out:
             out = out.replace(secret, "[redacted]")
@@ -72,6 +74,14 @@ class ResponseTooLargeError(RuntimeError):
     """A body over its byte cap. A RuntimeError subclass so existing feed
     handlers keep working, but distinct, so a caller that treats RuntimeError
     as a bug (applications.refresh_list) can still record it as status."""
+
+
+def _close_quietly(obj) -> None:
+    if obj is not None and hasattr(obj, "close"):
+        try:
+            obj.close()
+        except Exception:
+            pass
 
 
 def _read_capped_bytes(response, label: str, max_bytes: int = _MAX_FETCH_BYTES) -> bytes:
@@ -137,12 +147,35 @@ class UnsafeURLError(RuntimeError):
     (applications.refresh_list) can still record a refusal as status."""
 
 
+def _is_public_ip(ip: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]) -> bool:
+    """True only for globally routable unicast addresses. Explicitly checks
+    IANA special-purpose registries (catching NAT64 64:ff9b::/96, multicast,
+    and IPv4-mapped/6to4/Teredo embedded private addresses regardless of Python
+    patch level)."""
+    from threatfeedme.safety import _SPECIAL_V4, _SPECIAL_V6
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None and not _is_public_ip(ip.ipv4_mapped):
+            return False
+        if ip.sixtofour is not None and not _is_public_ip(ip.sixtofour):
+            return False
+        if ip.teredo is not None:
+            server, client = ip.teredo
+            if not _is_public_ip(server) or not _is_public_ip(client):
+                return False
+        if any(ip in net for net in _SPECIAL_V6):
+            return False
+    else:
+        if any(ip in net for net in _SPECIAL_V4):
+            return False
+    return bool(ip.is_global) and not ip.is_multicast
+
+
 def _assert_public(host: str, addresses: List[str]) -> None:
     """The SSRF rule, shared by the early URL check and the connect-time
     guard so the two can never disagree."""
     for addr in addresses:
         ip = ipaddress.ip_address(addr.split('%', 1)[0])
-        if not ip.is_global:
+        if not _is_public_ip(ip):
             # The message reaches the dashboard and stored statuses; naming the
             # address made it an internal DNS lookup oracle.
             raise UnsafeURLError(
@@ -228,7 +261,7 @@ def guarded_get(url: str, *, allow_private: bool = False,
     guard_was = getattr(_ssrf_guard, "active", False)
     _ssrf_guard.active = not allow_private
     try:
-        return get(url, stream=True, proxies=None if allow_private else _NO_PROXIES,
+        return get(url, stream=True, proxies=None if allow_private else dict(_NO_PROXIES),
                    **kwargs)
     finally:
         _ssrf_guard.active = guard_was
@@ -351,7 +384,7 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
 
 
 def parse_feed_content(content: str) -> List[Dict]:
-    """Parse feed content and extract IPs and netblocks.
+    """Parse feed content and extract IPv4/IPv6 addresses and netblocks.
 
     Netblocks retain their real CIDR notation so downstream overlap detection is
     exact rather than a /16-/20-/24 guess. Module-level so callers (e.g. upload
@@ -360,25 +393,32 @@ def parse_feed_content(content: str) -> List[Dict]:
     # Keyed by stored indicator value so duplicates within one feed collapse.
     indicators: Dict[str, Dict] = {}
 
-    for line in content.split('\n'):
+    for line in content.lstrip('\ufeff').split('\n'):
         line = line.strip()
 
         # Skip comments and empty lines
         if not line or line.startswith('#') or line.startswith(';'):
             continue
 
-        cidr_matches = re.findall(_CIDR_PATTERN, line)
-        if cidr_matches:
-            for cidr in cidr_matches:
-                try:
-                    network = ipaddress.ip_network(cidr, strict=False)
-                except ValueError:
-                    continue
-                # Store the network address as the indicator but keep the
-                # canonical CIDR (with real prefix) for exact matching.
-                net_addr = str(network.network_address)
-                indicators[net_addr] = {'ip': net_addr, 'cidr': str(network)}
-        else:
+        # Strip inline comments (# or ;): IPs and CIDRs never contain either,
+        # so an IP mentioned in an explanatory comment is not ingested.
+        line = line.split('#', 1)[0].split(';', 1)[0].strip()
+        if not line:
+            continue
+
+        valid_v4_cidr = False
+        for cidr in re.findall(_CIDR_PATTERN, line):
+            try:
+                network = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                continue
+            # Store the network address as the indicator but keep the
+            # canonical CIDR (with real prefix) for exact matching.
+            net_addr = str(network.network_address)
+            indicators[net_addr] = {'ip': net_addr, 'cidr': str(network)}
+            valid_v4_cidr = True
+
+        if not valid_v4_cidr:
             for found_ip in re.findall(_IP_PATTERN, line):
                 # Validate + canonicalize: the regex alone admits shapes
                 # ipaddress rejects (leading-zero octets like 01.2.3.4), and
@@ -391,6 +431,29 @@ def parse_feed_content(content: str) -> List[Dict]:
                     continue
                 # Do not let a bare IP overwrite a netblock's CIDR metadata.
                 indicators.setdefault(canon, {'ip': canon, 'cidr': None})
+
+        # IPv6 addresses and CIDRs (STIX/TAXII 2.1, CrowdSec, IPv6 blocklists).
+        if ':' in line:
+            for token in re.split(r'[\s,|"]+', line):
+                tok = token.strip('[]')
+                if ':' not in tok or '://' in tok:
+                    continue
+                if '/' in tok:
+                    try:
+                        net = ipaddress.ip_network(tok, strict=False)
+                    except ValueError:
+                        continue
+                    if net.version == 6:
+                        net_addr = str(net.network_address)
+                        indicators[net_addr] = {'ip': net_addr, 'cidr': str(net)}
+                else:
+                    try:
+                        addr = ipaddress.ip_address(tok)
+                    except ValueError:
+                        continue
+                    if addr.version == 6:
+                        canon = str(addr)
+                        indicators.setdefault(canon, {'ip': canon, 'cidr': None})
 
     return list(indicators.values())
 
@@ -536,11 +599,14 @@ class FeedIngestor:
         return parsed
 
     def _key_secret(self, feed: FeedSource) -> Tuple[str, ...]:
-        """The live value of a feed's URL-embedded key, for scrubbing error
-        text (issue #8). Empty for header-key and keyless feeds."""
+        """The live value (raw and percent-encoded) of a feed's URL-embedded
+        key, for scrubbing error text (issue #8). Empty for header-key and
+        keyless feeds."""
         if url_has_auth_placeholder(feed.url) and feed.auth_env:
             key = os.environ.get(feed.auth_env.strip())
-            return (key,) if key else ()
+            if key:
+                encoded = quote(key, safe="")
+                return (key, encoded) if encoded != key else (key,)
         return ()
 
     def _resolved_auth_url(self, feed: FeedSource) -> Tuple[str, Tuple[str, ...]]:
@@ -572,7 +638,9 @@ class FeedIngestor:
                 f"feed credential first")
         if not self.key_policy.may_send(var, feed.url):
             raise RuntimeError(self.key_policy.send_refusal(var, feed.url))
-        return feed.url.replace(AUTH_URL_PLACEHOLDER, quote(key, safe="")), (key,)
+        encoded = quote(key, safe="")
+        secrets = (key, encoded) if encoded != key else (key,)
+        return feed.url.replace(AUTH_URL_PLACEHOLDER, encoded), secrets
 
     def _fetch_url(self, feed: FeedSource, timeout=None) -> Union[str, _NotModified]:
         """Fetch raw feed content from a URL, applying auth if required.
@@ -588,7 +656,10 @@ class FeedIngestor:
         # HoneyDB); those feeds must use a scraper that builds its own headers
         # — the generic path can only map ONE var onto auth_header, so here it
         # just verifies the credentials exist and names any that are missing.
-        if feed.requires_auth:
+        # Feeds that embed their key via {auth_key} in the URL path (issue #8)
+        # validate, bind, and inject it in _resolved_auth_url() below rather
+        # than also sending it in an Authorization header.
+        if feed.requires_auth and not url_has_auth_placeholder(feed.url):
             env_vars = [v.strip() for v in (feed.auth_env or '').split(',') if v.strip()]
             missing = [v for v in env_vars if not os.environ.get(v)]
             if not env_vars or missing:
@@ -623,6 +694,7 @@ class FeedIngestor:
         # many test seams) use the plain fetch signature.
         extra = {"secrets": secrets, "allowed_host": allowed_host} \
             if secrets else {}
+        response = None
         try:
             response = self._get_with_retries(url, headers, timeout=timeout,
                                               **extra)
@@ -631,18 +703,23 @@ class FeedIngestor:
             response.raise_for_status()
 
             content = _read_capped(response, feed.name)
+            # Stash this download's validators; ingest_feed persists them only
+            # after the whole ingest succeeds. A 200 without validators stashes
+            # (None, None) so any stored ones get cleared: sending stale
+            # validators could yield a 304 for content we never ingested.
+            self._pending_validators = (
+                response.headers.get('ETag'),
+                response.headers.get('Last-Modified'),
+            )
+            return content
         except Exception as e:
             raise _scrub_exception(e, secrets) from None
-
-        # Stash this download's validators; ingest_feed persists them only
-        # after the whole ingest succeeds. A 200 without validators stashes
-        # (None, None) so any stored ones get cleared: sending stale
-        # validators could yield a 304 for content we never ingested.
-        self._pending_validators = (
-            response.headers.get('ETag'),
-            response.headers.get('Last-Modified'),
-        )
-        return content
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
 
     def _get_with_retries(self, url: str, headers: Dict[str, str],
                           timeout=None, secrets=(), allowed_host=None) -> requests.Response:
@@ -671,17 +748,23 @@ class FeedIngestor:
             else:
                 if response.status_code == 429:
                     if attempt == _MAX_ATTEMPTS:
-                        response.raise_for_status()
+                        try:
+                            response.raise_for_status()
+                        finally:
+                            response.close()
                     try:
-                        retry_after = min(int(response.headers.get('Retry-After', '')),
-                                          _RETRY_AFTER_CAP)
+                        retry_after = max(0, min(int(response.headers.get('Retry-After', '')),
+                                                 _RETRY_AFTER_CAP))
                     except (ValueError, TypeError):
                         retry_after = None
                     response.close()
                 elif response.status_code < 500:
                     return response
                 elif attempt == _MAX_ATTEMPTS:
-                    response.raise_for_status()
+                    try:
+                        response.raise_for_status()
+                    finally:
+                        response.close()
                 else:
                     # Release the discarded 5xx response's pooled connection
                     # before retrying.
@@ -726,7 +809,7 @@ class FeedIngestor:
             # proxy.
             response = requests.get(url, headers=hop_headers, timeout=timeout or _FETCH_TIMEOUT,
                                     stream=True, allow_redirects=False,
-                                    proxies=None if self.allow_private_urls else _NO_PROXIES)
+                                    proxies=None if self.allow_private_urls else dict(_NO_PROXIES))
             if response.status_code in _REDIRECT_STATUSES:
                 location = response.headers.get('Location')
                 response.close()
@@ -734,21 +817,27 @@ class FeedIngestor:
                     raise RuntimeError(f"redirect without a Location header fetching "
                                        f"{_redact(url, secrets)}")
                 url = urljoin(url, location)
-                if allowed_host and host_of(url) != allowed_host:
+                if allowed_host and (host_of(url) != allowed_host or not same_origin(origin, url)):
                     raise RuntimeError(
-                        f"redirect left {allowed_host} for {host_of(url) or _redact(url, secrets)}; "
+                        f"redirect left {allowed_host} (or changed scheme/port) for "
+                        f"{host_of(url) or _redact(url, secrets)}; "
                         "refusing to follow — a URL-embedded key never travels off its host")
                 continue
             return response
         raise RuntimeError(f"too many redirects fetching {_redact(url, secrets)}")
 
     def _read_local_file(self, path: str) -> str:
-        """Read raw content from a local file. Explicit UTF-8 (mirroring the
-        HTTP path's decode) — the locale default on Windows is cp1252, which
-        reads a UTF-8 domain list as mojibake that then IDNA-encodes into a
-        WRONG punycode domain."""
-        with open(path, 'r', encoding='utf-8', errors='replace') as f:
-            return f.read()
+        """Read raw content from a local file with a hard byte cap. Explicit
+        UTF-8 (mirroring the HTTP path's decode) — the locale default on
+        Windows is cp1252, which reads a UTF-8 domain list as mojibake that
+        then IDNA-encodes into a WRONG punycode domain."""
+        with open(path, 'rb') as f:
+            raw = f.read(_MAX_FETCH_BYTES + 1)
+        if len(raw) > _MAX_FETCH_BYTES:
+            raise ResponseTooLargeError(
+                f"Local feed file exceeded {_MAX_FETCH_BYTES // (1024 * 1024)} MB limit"
+            )
+        return raw.decode('utf-8', errors='replace')
 
     def _parse_feed_content(self, content: str, kind: str = "ip") -> List[Dict]:
         """Instance shim around the module-level parser, dispatching by kind.
@@ -914,13 +1003,17 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
     session.headers["User-Agent"] = _TALOS_UA
     session.trust_env = bool(self.allow_private_urls)
     session.max_redirects = 3
-    proxies = None if self.allow_private_urls else _NO_PROXIES
+    proxies = None if self.allow_private_urls else dict(_NO_PROXIES)
     try:
         resp = session.get(_TALOS_TERMS_URL, timeout=_TALOS_TIMEOUT,
                            proxies=proxies, stream=True)
-        resp.raise_for_status()
-        page = _read_capped(resp, feed.name)
+        try:
+            resp.raise_for_status()
+            page = _read_capped(resp, feed.name)
+        finally:
+            _close_quietly(resp)
     except Exception as e:
+        _close_quietly(session)
         logger.error(f"Talos scraper: terms page GET failed: {e}")
         raise
 
@@ -972,25 +1065,33 @@ def _scrape_talos(self: FeedIngestor, feed: FeedSource) -> str:
                         "(possible ping-pong); refusing")
                 location = post_resp.headers.get("location") or ""
                 target = urljoin(current_url, location) if location else ""
-                if not target or urlsplit(target).hostname not in _TALOS_HOSTS:
+                parsed_target = urlsplit(target) if target else None
+                if (not parsed_target or parsed_target.scheme != "https"
+                        or parsed_target.hostname not in _TALOS_HOSTS):
                     raise RuntimeError(
                         f"Talos scraper: accept-terms answered HTTP "
                         f"{post_resp.status_code} with a redirect Location "
-                        "missing or off the snort.org allowlist; refusing to follow")
+                        "missing, non-HTTPS, or off the snort.org allowlist; refusing to follow")
                 current_url = target
                 post_resp = session.get(target, timeout=_TALOS_TIMEOUT,
                                         proxies=proxies,  # type: ignore[reportArgumentType]  # None values disable proxies at runtime
                                         stream=True,
                                         allow_redirects=False)
-        post_resp.raise_for_status()
-        body = _read_capped(post_resp, feed.name).strip()
+        try:
+            post_resp.raise_for_status()
+            body = _read_capped(post_resp, feed.name).strip()
+            content_type = post_resp.headers.get('content-type', 'unknown')
+        finally:
+            _close_quietly(post_resp)
     except Exception as e:
         logger.error(f"Talos scraper: accept-terms POST failed: {e}")
         raise
+    finally:
+        _close_quietly(session)
 
     logger.info(
         f"Talos scraper: got {len(body)} bytes from accept-terms "
-        f"(content-type: {post_resp.headers.get('content-type', 'unknown')})"
+        f"(content-type: {content_type})"
     )
     return body
 
@@ -1091,9 +1192,13 @@ def _scrape_otx_pulses(self: FeedIngestor, feed: FeedSource):
                 raise RuntimeError(self.key_policy.send_refusal(feed.auth_env, next_url))
             headers[feed.auth_header] = api_key
         response = self._get_with_retries(next_url, headers, timeout=_OTX_TIMEOUT)
-        response.raise_for_status()
         try:
-            page = json.loads(_read_capped(response, feed.name))
+            response.raise_for_status()
+            raw_page = _read_capped(response, feed.name)
+        finally:
+            _close_quietly(response)
+        try:
+            page = json.loads(raw_page)
         except ValueError:
             raise RuntimeError(f"{feed.name}: OTX pulses JSON parse failed")
 
@@ -1128,9 +1233,13 @@ def _scrape_honeydb(self: FeedIngestor, feed: FeedSource):
             raise RuntimeError(self.key_policy.send_refusal(var, feed.url))
     headers = {"X-HoneyDb-ApiId": api_id, "X-HoneyDb-ApiKey": api_key}
     response = self._get_with_retries(feed.url, headers)
-    response.raise_for_status()
     try:
-        data = json.loads(_read_capped(response, feed.name))
+        response.raise_for_status()
+        raw_body = _read_capped(response, feed.name)
+    finally:
+        _close_quietly(response)
+    try:
+        data = json.loads(raw_body)
     except ValueError:
         raise RuntimeError(f"{feed.name}: HoneyDB JSON parse failed")
     if not isinstance(data, list):
@@ -1184,12 +1293,18 @@ def _scrape_crowdsec_lapi(self: FeedIngestor, feed: FeedSource):
     _ssrf_guard.active = False
     try:
         session = crowdsec._session(verify=self.crowdsec_verify_ssl)
-        response = session.get(f"{self.crowdsec_lapi}/v1/decisions",
-                               headers={"X-Api-Key": key, "User-Agent": "ThreatFeedMe/1.0"},
-                               params=params, timeout=60, stream=True,
-                               allow_redirects=False)
-        crowdsec._check(response, "pull")
-        body = _read_capped(response, feed.name)
+        try:
+            response = session.get(f"{self.crowdsec_lapi}/v1/decisions",
+                                   headers={"X-Api-Key": key, "User-Agent": "ThreatFeedMe/1.0"},
+                                   params=params, timeout=60, stream=True,
+                                   allow_redirects=False)
+            try:
+                crowdsec._check(response, "pull")
+                body = _read_capped(response, feed.name)
+            finally:
+                _close_quietly(response)
+        finally:
+            _close_quietly(session)
     finally:
         _ssrf_guard.active = guard_was
     try:
@@ -1229,8 +1344,11 @@ def _scrape_crowdsec_console(self: FeedIngestor, feed: FeedSource):
         f"{os.environ[env_vars[0]]}:{os.environ[env_vars[1]]}".encode()).decode()
     response = self._get_with_retries(url, {"Authorization": f"Basic {token}",
                                             "User-Agent": "ThreatFeedMe/1.0"})
-    response.raise_for_status()
-    return _read_capped(response, feed.name)
+    try:
+        response.raise_for_status()
+        return _read_capped(response, feed.name)
+    finally:
+        _close_quietly(response)
 
 
 # =============================================================================
@@ -1386,20 +1504,25 @@ def _scrape_taxii21(self: FeedIngestor, feed: FeedSource):
         headers[feed.auth_header or "Authorization"] = os.environ[env_vars[0]]
 
     objects: List[dict] = []
+    seen_objects = 0
     token = None
     for _ in range(_TAXII_MAX_PAGES):
         params = {"limit": str(_TAXII_PAGE_LIMIT)}
         if token:
             params["next"] = token
         response = self._get_with_retries(f"{base}?{urlencode(params)}", headers)
-        if response.status_code in (401, 403):
-            raise RuntimeError(f"{feed.name}: the TAXII server refused the credentials "
-                               f"(HTTP {response.status_code})")
-        if response.status_code == 406:
-            raise RuntimeError(f"{feed.name}: the server doesn't speak TAXII 2.1 (HTTP 406)")
-        response.raise_for_status()
         try:
-            envelope = json.loads(_read_capped(response, feed.name))
+            if response.status_code in (401, 403):
+                raise RuntimeError(f"{feed.name}: the TAXII server refused the credentials "
+                                   f"(HTTP {response.status_code})")
+            if response.status_code == 406:
+                raise RuntimeError(f"{feed.name}: the server doesn't speak TAXII 2.1 (HTTP 406)")
+            response.raise_for_status()
+            raw_env = _read_capped(response, feed.name)
+        finally:
+            _close_quietly(response)
+        try:
+            envelope = json.loads(raw_env)
         except ValueError:
             raise RuntimeError(f"{feed.name}: response is not TAXII JSON")
         page = envelope.get("objects") if isinstance(envelope, dict) else None
@@ -1407,10 +1530,13 @@ def _scrape_taxii21(self: FeedIngestor, feed: FeedSource):
             page = []
         if not isinstance(page, list):
             raise RuntimeError(f"{feed.name}: malformed TAXII envelope")
-        objects.extend(o for o in page if isinstance(o, dict))
-        if len(objects) > _TAXII_MAX_OBJECTS:
+        seen_objects += sum(1 for o in page if isinstance(o, dict))
+        if seen_objects > _TAXII_MAX_OBJECTS:
             raise RuntimeError(f"{feed.name}: collection has more than {_TAXII_MAX_OBJECTS:,} "
                                "objects; point the feed at a narrower collection")
+        # Keep only indicator objects across pages so non-indicator SDOs/SROs
+        # don't sit in memory until indicator_values() discards them.
+        objects.extend(o for o in page if isinstance(o, dict) and o.get("type") == "indicator")
         if not envelope.get("more"):
             break
         token = envelope.get("next")
