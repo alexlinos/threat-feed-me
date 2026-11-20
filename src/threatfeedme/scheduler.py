@@ -132,6 +132,36 @@ def _maybe_catalog_poll(db=None, config=None) -> None:
     except Exception as e:  # sync_catalog shouldn't raise; the thread must live
         logger.error(f"[catalog] poll failed: {e}")
 
+OWNERSHIP_GUARD_LAST_POLL_KEY = "ownership_guard_last_poll_at"
+
+
+def _maybe_ownership_guard_poll(db=None, config=None) -> None:
+    """Daily refresh of the must-not-block IP ownership bundle (issue #18)."""
+    from threatfeedme import ownership_guard
+    db = core.db if db is None else db
+    config = core.config if config is None else config
+    cfg = ownership_guard.guard_config(config)
+    if not cfg.get("enabled", True) or not cfg.get("remote_enabled", True):
+        return
+    try:
+        interval_h = float(cfg.get("interval_hours", 24))
+    except (ValueError, TypeError):
+        interval_h = 24.0
+    last = db.get_setting(OWNERSHIP_GUARD_LAST_POLL_KEY)
+    if last:
+        try:
+            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
+            if elapsed < interval_h * 3600:
+                return
+        except (ValueError, TypeError):
+            pass
+    db.set_setting(OWNERSHIP_GUARD_LAST_POLL_KEY, datetime.now(timezone.utc).isoformat())
+    try:
+        ownership_guard.refresh_ownership_guard(db, config)
+    except Exception as e:
+        logger.warning(f"[ownership_guard] poll failed: {e}")
+
+
 def _maybe_check_updates() -> None:
     """Daily release check (issue #10). Same shape as _maybe_backup: the
     persisted update_last_check stamp paces it, so the first loop tick
@@ -284,6 +314,12 @@ def _scheduler_loop():
             _maybe_catalog_poll()
         except Exception as e:
             logger.error(f"Scheduler catalog check failed: {e}")
+        # Must-not-block IP ownership bundle (issue #18): daily cached prefix
+        # map of vendor-operated shared frontends (zero live lookups at push).
+        try:
+            _maybe_ownership_guard_poll()
+        except Exception as e:
+            logger.warning(f"Scheduler ownership guard check failed: {e}")
 
         # Daily release check (issue #10). The first tick doubles as the
         # delayed startup check; nothing here is on the request path, so

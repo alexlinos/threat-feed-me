@@ -264,6 +264,127 @@ def _existing_manifest(path: Path) -> dict:
         return {}
 
 
+_GUARD_MIN_V4 = 8
+_GUARD_MIN_V6 = 20
+_GITHUB_FRONTEND_KEYS = frozenset({"web", "api", "packages", "pages"})
+
+
+def _valid_networks(raw_values: Iterable[str]) -> tuple[list[ipaddress.IPv4Network], list[ipaddress.IPv6Network]]:
+    """Parse valid CIDRs enforcing the prefix floors so a poisoned vendor file
+    can never smuggle an overly wide block into ownership_guard.json."""
+    v4: list[ipaddress.IPv4Network] = []
+    v6: list[ipaddress.IPv6Network] = []
+    for raw in raw_values:
+        try:
+            net = ipaddress.ip_network(raw.strip(), strict=False)
+        except ValueError:
+            continue
+        if net.version == 4:
+            if net.prefixlen >= _GUARD_MIN_V4:
+                v4.append(net)
+        elif net.prefixlen >= _GUARD_MIN_V6:
+            v6.append(net)
+    return list(ipaddress.collapse_addresses(v4)), list(ipaddress.collapse_addresses(v6))
+
+
+def _subtract_networks(base: list, exclude: list) -> list:
+    """Return `base` with every range in `exclude` subtracted and collapsed.
+    Used to derive Google's own frontends (gcp_goog minus gcp_cloud) while
+    leaving rentable GCP tenant compute blockable (issue #18)."""
+    if not base or not exclude:
+        return list(ipaddress.collapse_addresses(base)) if base else []
+    remaining = list(base)
+    for exc in exclude:
+        next_rem = []
+        for net in remaining:
+            if not net.overlaps(exc):
+                next_rem.append(net)
+            elif net.subnet_of(exc):
+                continue
+            else:
+                next_rem.extend(net.address_exclude(exc))
+        remaining = next_rem
+    return list(ipaddress.collapse_addresses(remaining)) if remaining else []
+
+
+def build_ownership_guard(snapshots_dir: Path, generated_at: str,
+                          out_path: Path | None = None) -> dict:
+    """Build the curated must-not-block IP ownership bundle (issue #18) from
+    infra-watch snapshots: vendor-operated shared frontends ONLY, explicitly
+    excluding rentable tenant compute (GCP Cloud, AWS EC2/AMAZON, Azure VMs,
+    GitHub Actions runners)."""
+    vendors: dict[str, list[str]] = {}
+
+    cf = load_snapshot(snapshots_dir, "cloudflare_ips")
+    if cf:
+        v4, v6 = _valid_networks(_value(e) for e in cf)
+        cidrs = [str(n) for n in v4] + [str(n) for n in v6]
+        if cidrs:
+            vendors["cloudflare"] = cidrs
+
+    goog = load_snapshot(snapshots_dir, "gcp_goog")
+    cloud = load_snapshot(snapshots_dir, "gcp_cloud") or []
+    if goog:
+        g4, g6 = _valid_networks(_value(e) for e in goog)
+        c4, c6 = _valid_networks(_value(e) for e in cloud)
+        f4 = _subtract_networks(g4, c4)
+        f6 = _subtract_networks(g6, c6)
+        cidrs = [str(n) for n in f4] + [str(n) for n in f6]
+        if cidrs:
+            vendors["google_frontends"] = cidrs
+
+    m365 = load_snapshot(snapshots_dir, "m365_endpoints")
+    if m365:
+        raw_m365 = [
+            parts[3] for e in m365
+            if len(parts := e.split("|")) == 4 and parts[0] == "ip"
+        ]
+        v4, v6 = _valid_networks(raw_m365)
+        cidrs = [str(n) for n in v4] + [str(n) for n in v6]
+        if cidrs:
+            vendors["m365"] = cidrs
+
+    aws = load_snapshot(snapshots_dir, "aws_ip_ranges")
+    if aws:
+        raw_cf = [
+            parts[3] for e in aws
+            if len(parts := e.split("|")) == 4 and parts[2] == "CLOUDFRONT"
+        ]
+        v4, v6 = _valid_networks(raw_cf)
+        cidrs = [str(n) for n in v4] + [str(n) for n in v6]
+        if cidrs:
+            vendors["aws_cloudfront"] = cidrs
+
+    gh = load_snapshot(snapshots_dir, "github_meta")
+    if gh:
+        raw_gh = [
+            parts[2] for e in gh
+            if len(parts := e.split("|")) == 3 and parts[1] in _GITHUB_FRONTEND_KEYS
+        ]
+        v4, v6 = _valid_networks(raw_gh)
+        cidrs = [str(n) for n in v4] + [str(n) for n in v6]
+        if cidrs:
+            vendors["github_frontends"] = cidrs
+
+    ordered_vendors = {k: vendors[k] for k in sorted(vendors)}
+    previous = _existing_manifest(out_path) if out_path is not None else {}
+    if previous.get("vendors") == ordered_vendors and previous.get("schema_version") == 1:
+        doc = {
+            "schema_version": 1,
+            "generated_at": previous.get("generated_at") or generated_at,
+            "vendors": ordered_vendors,
+        }
+    else:
+        doc = {
+            "schema_version": 1,
+            "generated_at": generated_at,
+            "vendors": ordered_vendors,
+        }
+        if out_path is not None and ordered_vendors:
+            _write_if_changed(out_path, json.dumps(doc, indent=1) + "\n")
+    return doc
+
+
 def build(snapshots_dir: Path, out_dir: Path, base_url: str,
           generated_at: str) -> dict:
     """Slice every known snapshot into catalog files + the manifest.
@@ -335,6 +456,8 @@ def build(snapshots_dir: Path, out_dir: Path, base_url: str,
                     "lists": manifest_lists}
         _write_if_changed(out_dir / "catalog.json",
                           json.dumps(manifest, indent=1) + "\n")
+    build_ownership_guard(snapshots_dir, generated_at,
+                          out_path=out_dir / "ownership_guard.json")
     for w in warnings:
         print(f"WARN {w}", file=sys.stderr)
     return manifest

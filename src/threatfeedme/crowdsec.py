@@ -172,12 +172,14 @@ class CrowdSecPusher:
     def __init__(self, lapi: str, tier: str = DEFAULT_TIER,
                  duration_h: int = DEFAULT_DURATION_H,
                  max_entries: int = DEFAULT_MAX_ENTRIES,
-                 verify_ssl: bool = True, session=None):
+                 verify_ssl: bool = True, session=None,
+                 ownership_guard=None):
         self.lapi = normalize_lapi_url(lapi)
         self.tier = tier if tier in _VALID_TIERS else DEFAULT_TIER
         self.duration_h = max(_MIN_DURATION_H, min(_MAX_DURATION_H, int(duration_h)))
         self.max_entries = max(1, int(max_entries))
         self.session = session if session is not None else _session(verify_ssl)
+        self.ownership_guard = ownership_guard
         self._token: Optional[str] = None
 
     @classmethod
@@ -221,19 +223,43 @@ class CrowdSecPusher:
 
     def collect(self, db) -> List[str]:
         """The tier's IP/CIDR values, whitelist-applied, strongest first. The
-        never-block veto is applied by is_included; we also count what it
-        refused so the push summary names the exclusion (issue #19)."""
+        never-block veto (issue #19) and must-not-block ownership guard
+        (issue #18) are counted separately so the push summary names both."""
         tier = ConfidenceTier(self.tier)
         wl = db.get_whitelist_map()
         nb = getattr(wl, "never_block", None)
+        guard = self.ownership_guard
+        if guard is None:
+            from threatfeedme.ownership_guard import OwnershipGuard
+            guard = OwnershipGuard.from_config({}, db=db)
+        guard.check_ready()
         values: List[str] = []
         self.last_refused = 0
+        self.last_ownership_refused = 0
+        self.last_ownership_refused_by_vendor: Dict[str, int] = {}
         for i in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier], kind='ip'):
-            if nb and nb.matches(firewall_value(i)):
+            val = firewall_value(i)
+            if nb and nb.matches(val):
                 self.last_refused += 1
                 continue
-            if is_included(i, wl, tier=tier):
-                values.append(firewall_value(i))
+            if not is_included(i, wl, tier=tier):
+                continue
+            vendor = guard.match(val)
+            if vendor is not None:
+                self.last_ownership_refused += 1
+                self.last_ownership_refused_by_vendor[vendor] = (
+                    self.last_ownership_refused_by_vendor.get(vendor, 0) + 1
+                )
+                continue
+            values.append(val)
+        if self.last_ownership_refused:
+            breakdown = ", ".join(
+                f"{k}={v}" for k, v in sorted(self.last_ownership_refused_by_vendor.items())
+            )
+            logger.info(
+                "[crowdsec] withheld %d address(es) in must-not-block ownership ranges (%s)",
+                self.last_ownership_refused, breakdown,
+            )
         if len(values) > self.max_entries:
             logger.warning("[crowdsec] %s tier has %d entries; pushing the strongest %d "
                            "(max_entries)", self.tier, len(values), self.max_entries)
@@ -310,6 +336,8 @@ def push_to_crowdsec(db, config: Dict, force: bool = False, session=None) -> Opt
         pusher = CrowdSecPusher.from_block(block, session=session)
         if pusher is None:
             return None
+        from threatfeedme.ownership_guard import OwnershipGuard
+        pusher.ownership_guard = OwnershipGuard.from_config(config, db=db)
         values = pusher.collect(db)
         digest = hashlib.sha256("\n".join(values).encode()).hexdigest()[:16]
         last = _last(db)
@@ -359,6 +387,11 @@ def push_to_crowdsec(db, config: Dict, force: bool = False, session=None) -> Opt
                    "expired_previous": expired, "duration_h": pusher.duration_h}
         if getattr(pusher, "last_refused", 0):
             summary["never_block_refused"] = pusher.last_refused
+        if getattr(pusher, "last_ownership_refused", 0):
+            summary["ownership_refused"] = pusher.last_ownership_refused
+            summary["ownership_refused_by_vendor"] = dict(
+                getattr(pusher, "last_ownership_refused_by_vendor", {})
+            )
         _record(db, error=None, live_scenario=scenario, digest=digest,
                 tier=pusher.tier, pushed_at=datetime.now(timezone.utc).isoformat(),
                 summary=summary)
