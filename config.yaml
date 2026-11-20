@@ -29,6 +29,13 @@ feeds_settings:
   # store no URL at all (rows keep the metadata they already have until they
   # age out of retention).
   retain_submitted_url: true
+  # Plain-text IP feeds extract IPv4 only by default so IPv4-only firewalls
+  # polling bare /feeds/*.txt (without ?family=4) keep working unchanged on
+  # upgrade. Set true to ingest IPv6 addresses and CIDRs from all plain-text
+  # IP feeds, or opt in per custom feed via include_ipv6 (the Add URL feed /
+  # Upload list checkbox). TAXII 2.1, CrowdSec, and manual IPv6 entries stay
+  # supported either way.
+  ingest_ipv6: false
 
 feeds:
   # --- Talos (Snort.org IP block list, self-hosted via scraper) ----------
@@ -468,6 +475,23 @@ safety:
   # min_prefix_ipv4: 10
   # Narrowest IPv6 prefix accepted (default 24): entries wider than /24 are refused. 0 turns the floor off.
   # min_prefix_ipv6: 24
+  #
+  # Must-not-block IP ownership guard (issue #18): at push time (UniFi and
+  # CrowdSec), refuse addresses overlapping curated vendor-operated shared
+  # frontends (public DNS resolvers, Cloudflare edge, Google Workspace/Search
+  # frontends, Microsoft 365 Worldwide, AWS CloudFront, GitHub frontends) while
+  # leaving rentable cloud tenant compute (GCP Compute, AWS EC2, Azure VMs,
+  # GitHub Actions) blockable. Backed by a baked floor plus a daily cached
+  # bundle from infra-snapshots (no live DNS/WHOIS lookups during a push).
+  # ownership_guard:
+  #   enabled: true
+  #   remote_enabled: true               # set false on air-gapped installs (uses baked floor + extra_ranges)
+  #   fail_closed_on_missing_cache: false # set true to refuse pushes until remote bundle has cached once
+  #   extra_ranges:                      # operator-added vendor networks (string CIDR or {cidr, vendor})
+  #     - 203.0.113.0/24
+  #     - { cidr: 198.51.100.0/24, vendor: my_saas }
+  #   allow_ranges: []                   # explicit override: allow a range through with a logged warning
+  #   allow_vendors: []                  # explicit override: disable protection for named vendor(s) with a warning
 
 scoring:
   # How indicators are bucketed into High/Medium/Low.

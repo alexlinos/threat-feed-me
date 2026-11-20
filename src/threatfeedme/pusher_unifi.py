@@ -152,6 +152,9 @@ class Selection:
     kept_floor: Optional[float] = None
     refused: List[str] = field(default_factory=list)
     refused_count: int = 0
+    ownership_refused: List[str] = field(default_factory=list)
+    ownership_refused_count: int = 0
+    ownership_refused_by_vendor: Dict[str, int] = field(default_factory=dict)
 
 
 class UniFiPusher:
@@ -160,8 +163,10 @@ class UniFiPusher:
                  max_entries: int = DEFAULT_MAX_ENTRIES,
                  max_per_group: int = DEFAULT_MAX_PER_GROUP,
                  ip_policy_id: str = "",
-                 timeout: int = 20, session=None, cert_sha256: str = None):
+                 timeout: int = 20, session=None, cert_sha256: str = None,
+                 ownership_guard=None):
         self._last_groups: Optional[Dict] = None
+        self.ownership_guard = ownership_guard
         host = (host or "").strip()
         # Strip any scheme, then drop anything after the first '/' — a path
         # on an http host would otherwise survive into the coerced URL and
@@ -254,7 +259,11 @@ class UniFiPusher:
         cfg = effective_block(db, config)
         if not cfg.get('enabled'):
             return None
-        return cls.from_block(cfg)
+        pusher = cls.from_block(cfg)
+        if pusher is not None:
+            from threatfeedme.ownership_guard import OwnershipGuard
+            pusher.ownership_guard = OwnershipGuard.from_config(config, db=db)
+        return pusher
 
     # ---------------- UniFi OS API plumbing ----------------
 
@@ -489,14 +498,23 @@ class UniFiPusher:
         withheld: List[str] = []
         refused: List[str] = []
         refused_count = 0
+        ownership_refused: List[str] = []
+        ownership_refused_count = 0
+        ownership_refused_by_vendor: Dict[str, int] = {}
         total = 0
         skipped_v6 = 0
         score_cutoff: Optional[float] = None
         kept_floor: Optional[float] = None
         nb = getattr(wl_map, "never_block", None)
+        guard = self.ownership_guard
+        if guard is None and kind == 'ip':
+            from threatfeedme.ownership_guard import OwnershipGuard
+            guard = OwnershipGuard.from_config({}, db=db)
+        if guard is not None and kind == 'ip':
+            guard.check_ready()
 
         def eligible():
-            nonlocal refused_count, skipped_v6
+            nonlocal refused_count, ownership_refused_count, skipped_v6
             for ind in db.iter_indicators_by_tiers(CUMULATIVE_TIERS[tier_enum], kind=kind):
                 # Never-block first: a named operator veto (issue #19), counted
                 # apart from whitelist drops and from truncation. is_included also
@@ -516,6 +534,20 @@ class UniFiPusher:
                 if kind == 'ip' and ':' in value:      # UniFi address-groups are IPv4-only
                     skipped_v6 += 1
                     continue
+                # Must-not-block IP ownership guard (issue #18): refuse shared
+                # vendor frontends (DNS, Cloudflare, M365, Google frontends,
+                # CloudFront, GitHub frontends, operator extra_ranges) and
+                # report how many were withheld and why.
+                if guard is not None and kind == 'ip':
+                    vendor = guard.match(value)
+                    if vendor is not None:
+                        ownership_refused_count += 1
+                        ownership_refused_by_vendor[vendor] = (
+                            ownership_refused_by_vendor.get(vendor, 0) + 1
+                        )
+                        if len(ownership_refused) < _WITHHELD_REPORT_CAP:
+                            ownership_refused.append(value)
+                        continue
                 yield value, ind.confidence_score
 
         for value, score in eligible():
@@ -534,6 +566,14 @@ class UniFiPusher:
         if refused_count:
             logger.info("[unifi] refused %d never-block value(s) in the %s tier",
                         refused_count, tier_value)
+        if ownership_refused_count:
+            breakdown = ", ".join(
+                f"{k}={v}" for k, v in sorted(ownership_refused_by_vendor.items())
+            )
+            logger.info(
+                "[unifi] withheld %d address(es) in must-not-block ownership ranges (%s)",
+                ownership_refused_count, breakdown,
+            )
         if total > cap:
             # ASCII only: Windows consoles default to cp1252.
             logger.warning(
@@ -543,7 +583,10 @@ class UniFiPusher:
                 tier_value, total, cap, cap, total - cap)
         return Selection(values=kept, withheld=withheld, cap=cap, total=total,
                          score_cutoff=score_cutoff, kept_floor=kept_floor,
-                         refused=refused, refused_count=refused_count)
+                         refused=refused, refused_count=refused_count,
+                         ownership_refused=ownership_refused,
+                         ownership_refused_count=ownership_refused_count,
+                         ownership_refused_by_vendor=ownership_refused_by_vendor)
 
     def select(self, db, kind: str, tier_value: str) -> Selection:
         """A tier's selection with the fixed list-count cap applied — exactly
@@ -774,6 +817,11 @@ def _add_coverage(summary: Dict, sel: "Selection") -> None:
     # a named exclusion, counted apart from truncation (issue #19).
     if sel.refused_count:
         summary["never_block_refused"] = sel.refused_count
+    # Must-not-block IP ownership guard (issue #18): report total and per-vendor
+    # breakdown so withheld shared-infrastructure addresses are always visible.
+    if sel.ownership_refused_count:
+        summary["ownership_refused"] = sel.ownership_refused_count
+        summary["ownership_refused_by_vendor"] = dict(sel.ownership_refused_by_vendor)
 
 
 def _stored_error_text(e: Exception) -> str:

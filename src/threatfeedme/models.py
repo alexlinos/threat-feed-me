@@ -300,6 +300,9 @@ class FeedSource(BaseModel):
     # 'domain'. Feeds DECLARE their kind; domain extraction only runs for
     # domain feeds. Never sniff domains out of IP feeds.
     indicator_kind: str = "ip"
+    # Opt-in IPv6 extraction for plain-text IP feeds (default false so bare
+    # /feeds/*.txt pollers on IPv4-only firewalls aren't surprised on upgrade).
+    include_ipv6: bool = False
 
     @field_validator('indicator_kind')
     @classmethod

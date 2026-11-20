@@ -863,6 +863,38 @@ automatically on startup:
 - **Feeds you deleted stay deleted.** An update never resurrects them; the
   dashboard's *Restore default feeds* button brings them back explicitly.
 
+**Upgrading to 2.7.7 (from 2.7.5 or 2.7.6).** What you will notice:
+
+- **IPv6 from plain-text feeds is off unless you ask for it.** 2.7.6 read
+  IPv6 addresses out of every IP feed; if you ran it, those rows age out.
+  Turn it on per feed with the **include IPv6** box on *Add feed* and
+  *Upload list*, or for every feed with `feeds_settings.ingest_ipv6: true`.
+  A firewall that takes one family per list should poll with `?family=4`.
+  TAXII and CrowdSec feeds read IPv6 either way.
+- **Whitelisting one address also removes any listed range that contains
+  it** (since 2.7.6). A whitelisted host inside a listed /16 takes the whole
+  /16 off the served lists and the pushes, the same rule the never-block
+  list follows.
+- **AWS application lists gain their IPv4 ranges.** Every AWS list in the
+  catalog was IPv6-only until now. A list you have switched on will hold
+  its next refresh for you to approve, because it grows past the change
+  threshold; approve it on the Applications page.
+- **Pushes leave out shared vendor addresses.** The UniFi and CrowdSec
+  pushes refuse any address or range inside a vendor's own shared front
+  ends: public DNS resolvers and Cloudflare (built in), and Google's own
+  services, Microsoft 365, CloudFront and GitHub's web, API and Pages
+  ranges (fetched once a day from this project's published catalog; see
+  PRIVACY.md). Rentable cloud compute stays blockable. The status line of
+  each integration says how many addresses a push left out and for which
+  vendor, and whether the vendor ranges have been fetched yet. The list
+  URLs are not affected. Settings are under `safety.ownership_guard` in
+  `config.yaml` (`extra_ranges`, `allow_ranges`, `allow_vendors`,
+  `remote_enabled: false` for an air-gapped install).
+- **Recurrence predictor, if you run it:** run `scripts/predictor.sh both`
+  right after upgrading. 2.7.6 changed how some features are computed, and
+  the existing model keeps scoring with the old meaning until it is
+  retrained.
+
 **Upgrading to 2.7.5 with the UniFi push on.** What you will notice:
 
 - **The domain push is gone.** If you had a Domains tier set, the next push

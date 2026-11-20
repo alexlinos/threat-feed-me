@@ -116,6 +116,20 @@ def resolve_retain_submitted_url(config) -> bool:
     return True
 
 
+def resolve_ingest_ipv6(config) -> bool:
+    """Global opt-in for IPv6 extraction on plain-text IP feeds (default False
+    so IPv4-only firewalls polling bare /feeds/*.txt are never surprised on
+    upgrade). Accepts feeds_settings.ingest_ipv6 or top-level 'feeds.ingest_ipv6'."""
+    cfg = config or {}
+    feeds = cfg.get('feeds')
+    for block in (cfg.get('feeds_settings'), feeds if isinstance(feeds, dict) else None):
+        if isinstance(block, dict) and 'ingest_ipv6' in block:
+            return bool(block['ingest_ipv6'])
+    if 'feeds.ingest_ipv6' in cfg:
+        return bool(cfg['feeds.ingest_ipv6'])
+    return False
+
+
 def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
                 collect_values: Optional[Dict] = None) -> Dict:
     """Fetch and ingest enabled feeds (optionally a subset by name).
@@ -141,6 +155,7 @@ def fetch_feeds(db: Database, config: Dict, only: Optional[List[str]] = None,
         # Same key the tier guard reads, resolved once here.
         shared_platforms=resolve_shared_platforms(config),
         retain_submitted_url=resolve_retain_submitted_url(config),
+        ingest_ipv6=resolve_ingest_ipv6(config),
     )
     feeds = db.get_feed_sources(enabled_only=True)
     if only is not None:

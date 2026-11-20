@@ -27,6 +27,7 @@ import argparse
 import ipaddress
 from typing import Any, Callable
 import json
+import os
 import re
 import sys
 import time
@@ -39,6 +40,9 @@ import requests
 USER_AGENT = "threat-feed-me-infra-watch/1.0 (+https://github.com/alexlinos/threat-feed-me)"
 FETCH_TIMEOUT = 60
 MAX_BYTES = 32 * 1024 * 1024  # vendor files are < 1 MB; cap hostile/looped bodies
+_MAX_RETRIES = 3
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_sleep = time.sleep
 
 # Alert thresholds (overridable on the CLI). The prefix floors mirror the
 # 2.6 application-list safety rules: a v4 prefix never wider than /8, v6
@@ -54,13 +58,30 @@ DEFAULT_V6_FLOOR_ALERT = 20     # alert if any v6 prefix is narrower than /20
 # --------------------------------------------------------------------------
 
 def get(url: str, headers: dict | None = None) -> bytes:
-    resp = requests.get(url, headers={"User-Agent": USER_AGENT, **(headers or {})},
-                        timeout=FETCH_TIMEOUT, stream=True)
-    resp.raise_for_status()
-    body = resp.raw.read(MAX_BYTES + 1, decode_content=True)
-    if len(body) > MAX_BYTES:
-        raise ValueError(f"response over {MAX_BYTES} bytes: {url}")
-    return body
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            with requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT, **(headers or {})},
+                timeout=FETCH_TIMEOUT,
+                stream=True,
+            ) as resp:
+                if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+                    _sleep(2 ** (attempt - 1))
+                    continue
+                resp.raise_for_status()
+                body = resp.raw.read(MAX_BYTES + 1, decode_content=True)
+                if len(body) > MAX_BYTES:
+                    raise ValueError(f"response over {MAX_BYTES} bytes: {url}")
+                return body
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                _sleep(2 ** (attempt - 1))
+                continue
+            raise
+    raise last_exc or RuntimeError(f"failed to fetch {url}")
 
 
 def get_json(url: str, headers: dict | None = None):
@@ -111,7 +132,9 @@ def fetch_cloudflare():
 
 
 def fetch_github_meta():
-    return get_json("https://api.github.com/meta")
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    return get_json("https://api.github.com/meta", headers=headers)
 
 
 # --------------------------------------------------------------------------
@@ -119,10 +142,20 @@ def fetch_github_meta():
 # --------------------------------------------------------------------------
 
 def normalize_aws(data: dict) -> set[str]:
+    # AWS names the two families differently: IPv4 is "prefixes" (entries
+    # keyed ip_prefix), IPv6 is "ipv6_prefixes" (entries keyed ipv6_prefix).
+    # This read "ipv4_prefixes" from the day the catalog shipped until
+    # 2.7.7, a key that does not exist, so every published AWS list was
+    # IPv6-only and nothing failed. A family that parses to nothing is now
+    # a failed fetch: the snapshot is kept and the run turns red.
     out = set()
-    for key, kind in (("ipv4_prefixes", "v4"), ("ipv6_prefixes", "v6")):
-        for p in data.get(key, []):
-            out.add(f"{kind}|{p.get('region','')}|{p.get('service','')}|{p['ip_prefix'] if kind == 'v4' else p['ipv6_prefix']}")
+    for key, field, kind in (("prefixes", "ip_prefix", "v4"),
+                             ("ipv6_prefixes", "ipv6_prefix", "v6")):
+        rows = data.get(key) or []
+        if not rows:
+            raise ValueError(f"AWS ranges: no {kind} entries under '{key}'")
+        for p in rows:
+            out.add(f"{kind}|{p.get('region','')}|{p.get('service','')}|{p[field]}")
     return out
 
 
@@ -324,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--change-pct", type=float, default=DEFAULT_CHANGE_PCT)
     ap.add_argument("--v4-floor", type=int, default=DEFAULT_V4_FLOOR_ALERT)
     ap.add_argument("--v6-floor", type=int, default=DEFAULT_V6_FLOOR_ALERT)
+    ap.add_argument("--accept-alert", action="store_true",
+                    help="write alerting sources as the new baseline instead of holding them")
     args = ap.parse_args(argv)
 
     snapshots_dir = Path(args.snapshots)
@@ -347,14 +382,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FAIL {src.name}: {exc}", file=sys.stderr)
             continue
         previous = load_previous(snapshots_dir, src.name)
-        results[src.name] = evaluate(src, previous, entries,
-                                     args.change_pct, args.v4_floor, args.v6_floor)
-        if args.update:
+        r = evaluate(src, previous, entries,
+                     args.change_pct, args.v4_floor, args.v6_floor)
+        results[src.name] = r
+        # Hold alerting sources at their last-good snapshot unless explicitly
+        # accepted (--accept-alert), so a suspicious swing on one vendor does
+        # not freeze updates for the other healthy vendors. Also skip rewriting
+        # unchanged snapshots (azure_service_tags.json is >6 MB) so daily no-op
+        # runs don't churn git with timestamp-only diffs.
+        should_write = (
+            args.update
+            and (not r.get("alert") or args.accept_alert)
+            and (previous is None or entries != previous)
+        )
+        if should_write:
             payload = {"source": src.name, "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "entries": sorted(entries)}
             snapshot_path(snapshots_dir, src.name).write_text(
                 json.dumps(payload, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        r = results[src.name]
         print(f"{src.name}: {r.get('count')} entries, +{r.get('added', 0)} "
               f"-{r.get('removed', 0)} ({r.get('pct_change', 0)}%) "
               f"{'ALERT' if r.get('alert') else 'ok'}")
@@ -370,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if fetch_failed:
         return 2
-    if any(r.get("alert") for r in results.values()):
+    if any(r.get("alert") for r in results.values()) and not args.accept_alert:
         return 1
     return 0
 

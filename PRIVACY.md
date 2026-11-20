@@ -148,6 +148,16 @@ public IP address and the request time. New feeds it lists wait for you to
 Add them unless you turn on auto-add. If you point `catalog.url` at a mirror,
 that host receives the request instead.
 
+**To GitHub, once a day, for the IP ownership guard bundle** (`ownership_guard.py`,
+config `safety.ownership_guard.remote_enabled`, on by default). One unauthenticated
+HTTPS GET of `catalog/ownership_guard.json` from `raw.githubusercontent.com`
+(`infra-snapshots` branch), carrying curated vendor-operated shared frontend
+prefixes (Cloudflare, Google frontends, Microsoft 365, AWS CloudFront, GitHub
+frontends) used to refuse blocking shared infrastructure during firewall pushes.
+Nothing is sent beyond the request itself; no indicator IP is ever queried
+externally. Set `safety.ownership_guard.remote_enabled: false` on air-gapped
+installs to rely only on the baked floor and `extra_ranges`.
+
 **To nobody else.** The software does not contact the maintainer, a
 licensing server or an analytics endpoint, and it never updates itself.
 Country lookups for the dashboard heatmap use an offline table derived from
@@ -156,9 +166,10 @@ service is called at runtime. The map outline is served by the application
 itself, not fetched from a CDN, and the dashboard loads no web fonts,
 scripts or images from anywhere else. You can confirm all of this with an egress
 rule that allows only your enabled feed hosts, your gateway and your
-CrowdSec LAPI: the software works normally behind it (the release check and
-catalog poll fail silently and the feeds already installed keep working;
-set `updates.enabled`, `catalog.enabled` and `app_catalog.enabled` to false
+CrowdSec LAPI: the software works normally behind it (the release check,
+catalog poll, and ownership-guard refresh fail silently and the feeds already
+installed keep working; set `updates.enabled`, `catalog.enabled`,
+`app_catalog.enabled`, and `safety.ownership_guard.remote_enabled` to false
 to stop the attempts).
 
 ## What the software exposes to the network

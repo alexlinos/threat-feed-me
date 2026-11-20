@@ -77,6 +77,8 @@ class FeedRequest(BaseModel):
     # Maps to a scraper server-side; a client can never name a scraper
     # directly (the crowdsec_* ones carry integration credentials).
     format: str = "list"
+    # Opt-in IPv6 extraction for custom plain-text IP feeds (default false).
+    include_ipv6: bool = False
     # A name that already exists is refused (409) unless this is set: adding a
     # feed used to replace a same-named one silently, shipped defaults included.
     overwrite: bool = False

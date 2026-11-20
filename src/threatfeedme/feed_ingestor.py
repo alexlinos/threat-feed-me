@@ -383,12 +383,76 @@ def parse_domain_feed_content(content: str) -> List[Dict]:
     return list(indicators.values())
 
 
-def parse_feed_content(content: str) -> List[Dict]:
-    """Parse feed content and extract IPv4/IPv6 addresses and netblocks.
+def _extract_ips_from_text(text: str, indicators: Dict[str, Dict], *,
+                           include_ipv6: bool = False) -> bool:
+    """Extract IPv4 (and optionally IPv6) addresses and CIDRs from a single
+    line fragment into `indicators`. Returns True if at least one valid
+    indicator was found."""
+    found_any = False
+    valid_v4_cidr = False
+    for cidr in re.findall(_CIDR_PATTERN, text):
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        # Store the network address as the indicator but keep the
+        # canonical CIDR (with real prefix) for exact matching.
+        net_addr = str(network.network_address)
+        indicators[net_addr] = {'ip': net_addr, 'cidr': str(network)}
+        valid_v4_cidr = True
+        found_any = True
+
+    if not valid_v4_cidr:
+        for found_ip in re.findall(_IP_PATTERN, text):
+            # Validate + canonicalize: the regex alone admits shapes
+            # ipaddress rejects (leading-zero octets like 01.2.3.4), and
+            # serving such a string on the IP-only URLs errors a strict
+            # firewall address import — the exact D2 failure. The CIDR
+            # branch above already gets this via ip_network().
+            try:
+                canon = str(ipaddress.ip_address(found_ip))
+            except ValueError:
+                continue
+            # Do not let a bare IP overwrite a netblock's CIDR metadata.
+            indicators.setdefault(canon, {'ip': canon, 'cidr': None})
+            found_any = True
+
+    # Opt-in IPv6 addresses and CIDRs (STIX/TAXII 2.1, CrowdSec, or feeds with
+    # include_ipv6 / feeds_settings.ingest_ipv6 enabled).
+    if include_ipv6 and ':' in text:
+        for token in re.split(r'[\s,|";]+', text):
+            tok = token.strip('[]')
+            if ':' not in tok or '://' in tok:
+                continue
+            if '/' in tok:
+                try:
+                    net = ipaddress.ip_network(tok, strict=False)
+                except ValueError:
+                    continue
+                if net.version == 6:
+                    net_addr = str(net.network_address)
+                    indicators[net_addr] = {'ip': net_addr, 'cidr': str(net)}
+                    found_any = True
+            else:
+                try:
+                    addr = ipaddress.ip_address(tok)
+                except ValueError:
+                    continue
+                if addr.version == 6:
+                    canon = str(addr)
+                    indicators.setdefault(canon, {'ip': canon, 'cidr': None})
+                    found_any = True
+    return found_any
+
+
+def parse_feed_content(content: str, *, include_ipv6: bool = False) -> List[Dict]:
+    """Parse feed content and extract IPv4 (and optionally IPv6) addresses and
+    netblocks.
 
     Netblocks retain their real CIDR notation so downstream overlap detection is
     exact rather than a /16-/20-/24 guess. Module-level so callers (e.g. upload
-    validation) can reuse it without a Database.
+    validation) can reuse it without a Database. `include_ipv6` defaults to
+    False so bare /feeds/*.txt pollers on IPv4-only firewalls aren't surprised.
     """
     # Keyed by stored indicator value so duplicates within one feed collapse.
     indicators: Dict[str, Dict] = {}
@@ -396,64 +460,21 @@ def parse_feed_content(content: str) -> List[Dict]:
     for line in content.lstrip('\ufeff').split('\n'):
         line = line.strip()
 
-        # Skip comments and empty lines
+        # Skip full-line comments and empty lines
         if not line or line.startswith('#') or line.startswith(';'):
             continue
 
-        # Strip inline comments (# or ;): IPs and CIDRs never contain either,
-        # so an IP mentioned in an explanatory comment is not ingested.
-        line = line.split('#', 1)[0].split(';', 1)[0].strip()
-        if not line:
-            continue
-
-        valid_v4_cidr = False
-        for cidr in re.findall(_CIDR_PATTERN, line):
-            try:
-                network = ipaddress.ip_network(cidr, strict=False)
-            except ValueError:
+        # Prefer the prefix before an inline '#' or ';' comment when it already
+        # carries an address/CIDR (so an IP mentioned in a trailing comment is
+        # not ingested). If the prefix has no address — e.g. a semicolon-
+        # separated CSV ("desc;198.51.100.1;high") or a description containing
+        # "# 39" ahead of the IP — fall back to scanning the full line so real
+        # entries are never dropped.
+        if '#' in line or ';' in line:
+            prefix = line.split('#', 1)[0].split(';', 1)[0].strip()
+            if prefix and _extract_ips_from_text(prefix, indicators, include_ipv6=include_ipv6):
                 continue
-            # Store the network address as the indicator but keep the
-            # canonical CIDR (with real prefix) for exact matching.
-            net_addr = str(network.network_address)
-            indicators[net_addr] = {'ip': net_addr, 'cidr': str(network)}
-            valid_v4_cidr = True
-
-        if not valid_v4_cidr:
-            for found_ip in re.findall(_IP_PATTERN, line):
-                # Validate + canonicalize: the regex alone admits shapes
-                # ipaddress rejects (leading-zero octets like 01.2.3.4), and
-                # serving such a string on the IP-only URLs errors a strict
-                # firewall address import — the exact D2 failure. The CIDR
-                # branch above already gets this via ip_network().
-                try:
-                    canon = str(ipaddress.ip_address(found_ip))
-                except ValueError:
-                    continue
-                # Do not let a bare IP overwrite a netblock's CIDR metadata.
-                indicators.setdefault(canon, {'ip': canon, 'cidr': None})
-
-        # IPv6 addresses and CIDRs (STIX/TAXII 2.1, CrowdSec, IPv6 blocklists).
-        if ':' in line:
-            for token in re.split(r'[\s,|"]+', line):
-                tok = token.strip('[]')
-                if ':' not in tok or '://' in tok:
-                    continue
-                if '/' in tok:
-                    try:
-                        net = ipaddress.ip_network(tok, strict=False)
-                    except ValueError:
-                        continue
-                    if net.version == 6:
-                        net_addr = str(net.network_address)
-                        indicators[net_addr] = {'ip': net_addr, 'cidr': str(net)}
-                else:
-                    try:
-                        addr = ipaddress.ip_address(tok)
-                    except ValueError:
-                        continue
-                    if addr.version == 6:
-                        canon = str(addr)
-                        indicators.setdefault(canon, {'ip': canon, 'cidr': None})
+        _extract_ips_from_text(line, indicators, include_ipv6=include_ipv6)
 
     return list(indicators.values())
 
@@ -497,13 +518,17 @@ class FeedIngestor:
                  key_policy: Optional[KeyPolicy] = None,
                  crowdsec_lapi: str = "", crowdsec_console_id: str = "",
                  crowdsec_verify_ssl: bool = True,
-                 shared_platforms=None, retain_submitted_url: bool = True):
+                 shared_platforms=None, retain_submitted_url: bool = True,
+                 ingest_ipv6: bool = False):
         self.db = db
         # Keep the submitted URL of URL-shaped feed lines in row metadata
         # (see row_metadata). On by default: the path is what makes a shared
         # platform legible in the database at all. Off, ingestion stores no
         # URL and metadata is exactly what it was before issue #17.
         self.retain_submitted_url = bool(retain_submitted_url)
+        # Global opt-in for IPv6 extraction on plain-text IP feeds (default
+        # False so IPv4-only firewalls polling bare /feeds/*.txt don't break).
+        self.ingest_ipv6 = bool(ingest_ipv6)
         # Shared-platform tag at ingest. Import inside: scorer is the tier
         # layer and must stay importable without pulling the ingest layer in.
         from threatfeedme.scorer import shared_platform_for, DEFAULT_SHARED_PLATFORMS
@@ -584,7 +609,13 @@ class FeedIngestor:
         finally:
             _ssrf_guard.active = guard_was
 
-        parsed = self._parse_feed_content(content, kind=feed.indicator_kind)
+        want_ipv6 = (
+            self.ingest_ipv6
+            or bool(getattr(feed, "include_ipv6", False))
+            or feed.scraper in ("taxii21", "crowdsec_lapi", "crowdsec_console")
+        )
+        parsed = self._parse_feed_content(content, kind=feed.indicator_kind,
+                                          include_ipv6=want_ipv6)
         # A scraper feed that yields zero indicators means the scrape returned
         # something other than the block list (e.g. an HTTP 200 error/terms
         # page, a Cloudflare interstitial). Treat that as a failure rather than
@@ -839,7 +870,8 @@ class FeedIngestor:
             )
         return raw.decode('utf-8', errors='replace')
 
-    def _parse_feed_content(self, content: str, kind: str = "ip") -> List[Dict]:
+    def _parse_feed_content(self, content: str, kind: str = "ip",
+                            include_ipv6: bool = False) -> List[Dict]:
         """Instance shim around the module-level parser, dispatching by kind.
 
         Domain feeds go through parse_domain_feed_content (hosts-file/domain/
@@ -848,7 +880,7 @@ class FeedIngestor:
         """
         if kind == "domain":
             return parse_domain_feed_content(content)
-        return parse_feed_content(content)
+        return parse_feed_content(content, include_ipv6=bool(include_ipv6 or self.ingest_ipv6))
 
     def ingest_feed(self, feed: FeedSource) -> int:
         """Fetch and ingest all indicators from a feed"""

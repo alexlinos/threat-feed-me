@@ -178,11 +178,26 @@ v2.4.19 and v2.5.0):
   or dashboard variables.
 - **UniFi credentials are bound to their gateway**: changing the gateway host
   clears the saved login rather than carrying it to the new host; the site id
-  is validated before it is used in gateway API paths.
+  is validated before it is used in gateway API paths. Since 2.7.6, real UniFi
+  sessions with `verify_ssl: false` and a pinned certificate mount urllib3
+  `assert_fingerprint` directly on the TLS socket (closing the probe-then-login
+  window), ignore environment proxies, and refuse HTTP redirects; CrowdSec
+  credentials also clear on `https` → `http` or `verify_ssl` downgrade.
+- **Remote feed catalog fetches** (since 2.7.6) run through the connect-time
+  SSRF guard with a 1 MB streaming cap, reject `local_file` and non-HTTP(S)
+  entries in both `catalog_sync` and `Database.sync_catalog_feeds`, and enforce
+  same-origin redirects on keyed feeds and Talos terms redirects.
+- **The shared-address guard's range bundle** (2.7.7, `ownership_guard.py`)
+  is fetched over HTTPS through the same connect-time SSRF guard with a
+  2 MB cap. A fetched bundle can only make a push leave addresses out, so
+  it is bounded: no range wider than /8 (IPv4) or /20 (IPv6), and no
+  bundle covering more than 2% of IPv4. One that fails either check is
+  refused whole and the last good bundle stays in use.
 - **Basic auth** compares credentials as bytes in constant time and always
   checks both fields. A sign-in set on the System page (v2.5.1) is stored as
   a salted scrypt hash, never the password; the password is always hashed,
-  even for a wrong username, so timing doesn't reveal valid usernames. A
+  even for a wrong username, so timing doesn't reveal valid usernames, and
+  since 2.7.6 password-change verification shares the bounded scrypt slot cap. A
   verified login is remembered in memory, keyed by a per-process secret, so
   dashboard polling doesn't re-run scrypt. Changing it needs the current
   password. The first one can only be set on a request that arrived by IP
