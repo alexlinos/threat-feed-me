@@ -1,8 +1,8 @@
-# Infra list watch — 2026-11-20 17:20 UTC
+# Infra list watch — 2026-11-21 14:45 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
-| aws_ip_ranges | 17828 | 10767 | 0 | 152.49 | ALERT: changed 152.5% of entries (threshold 10%) |
+| aws_ip_ranges | 17834 | 6 | 0 | 0.03 | ok |
 | m365_endpoints | 306 | 0 | 0 | 0.0 | ok |
 | m365_gcc_high | 127 | 0 | 0 | 0.0 | ok |
 | m365_dod | 121 | 0 | 0 | 0.0 | ok |
@@ -14,8 +14,8 @@
 | github_meta | 8523 | 0 | 0 | 0.0 | ok |
 
 ## aws_ip_ranges
-- added: `v4|GLOBAL|AMAZON_CONNECT|15.193.0.0/19`
-- added: `v4|GLOBAL|AMAZON|1.178.172.0/23`
-- added: `v4|GLOBAL|AMAZON|1.178.72.0/21`
-- added: `v4|GLOBAL|AMAZON|1.179.14.0/23`
-- added: `v4|GLOBAL|AMAZON|1.179.52.0/22`
+- added: `v4|ap-southeast-3|AMAZON|1.178.86.0/24`
+- added: `v4|ap-southeast-3|EC2|1.178.86.0/24`
+- added: `v4|sa-west-1|EFS|83.160.241.0/25`
+- added: `v4|sa-west-1|EFS|83.160.244.0/22`
+- added: `v6|sa-west-1|EFS|2600:1f1e:c38f:1500::/56`

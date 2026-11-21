@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-20T17:20:48Z",
+ "generated_at": "2026-11-21T14:45:01Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -50,8 +50,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 9403,
-   "bytes": 161701,
+   "entries": 9404,
+   "bytes": 161715,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
   },
   {
@@ -193,8 +193,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2 ranges, all regions.",
    "format": "list",
-   "entries": 4496,
-   "bytes": 80238,
+   "entries": 4497,
+   "bytes": 80252,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2.txt"
   },
   {
@@ -215,8 +215,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EFS ranges, all regions.",
    "format": "list",
-   "entries": 197,
-   "bytes": 3917,
+   "entries": 201,
+   "bytes": 3999,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-efs.txt"
   },
   {
