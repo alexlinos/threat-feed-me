@@ -130,6 +130,10 @@ proposals, not yet agreed scope.
   as long as its whitelist entry stays, with no timer, so a feed that fixed
   its mistake months ago still pays for it. Decaying the penalty with the
   flag's age would let a feed earn its weight back.
+- **Manual catalog check button.** A *Check now* button next to *Auto-add new
+  catalog feeds* under System (`POST /api/catalog/sync`) so an operator can
+  pull a new `feed_catalog.yaml` version on demand instead of waiting up to
+  24 hours for the scheduled poll.
 
 ## Not planned
 
