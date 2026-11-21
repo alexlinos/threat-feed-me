@@ -137,6 +137,55 @@ def fetch_github_meta():
     return get_json("https://api.github.com/meta", headers=headers)
 
 
+ZOOM_FILES = {
+    "meetings": "https://assets.zoom.us/docs/ipranges/ZoomMeetings.txt",
+    "phone": "https://assets.zoom.us/docs/ipranges/ZoomPhone.txt",
+    "crc": "https://assets.zoom.us/docs/ipranges/ZoomCRC.txt",
+    "contact_center": "https://assets.zoom.us/docs/ipranges/ZoomCC.txt",
+    "cdn": "https://assets.zoom.us/docs/ipranges/ZoomCDN.txt",
+}
+
+
+def fetch_zoom():
+    return {
+        service: get(url).decode("utf-8", errors="replace")
+        for service, url in ZOOM_FILES.items()
+    }
+
+
+def fetch_atlassian():
+    return get_json("https://ip-ranges.atlassian.com/")
+
+
+def fetch_okta():
+    return get_json("https://s3.amazonaws.com/okta-ip-ranges/ip_ranges.json")
+
+
+def fetch_fastly():
+    return get_json("https://api.fastly.com/public-ip-list")
+
+
+def fetch_oci():
+    return get_json("https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json")
+
+
+def fetch_digitalocean():
+    return get("https://digitalocean.com/geo/google.csv").decode("utf-8", errors="replace")
+
+
+STRIPE_FILES = {
+    "api": "https://stripe.com/files/ips/ips_api.txt",
+    "webhooks": "https://stripe.com/files/ips/ips_webhooks.txt",
+}
+
+
+def fetch_stripe():
+    return {
+        service: get(url).decode("utf-8", errors="replace")
+        for service, url in STRIPE_FILES.items()
+    }
+
+
 # --------------------------------------------------------------------------
 # Normalizers: parsed JSON -> set of canonical "kind|a|b" entry strings
 # --------------------------------------------------------------------------
@@ -224,6 +273,133 @@ def normalize_github_meta(data: dict) -> set[str]:
     return out
 
 
+def _valid_ip_or_cidr(raw: str) -> str | None:
+    token = (raw or "").strip()
+    if not token or token.startswith("#"):
+        return None
+    try:
+        net = ipaddress.ip_network(token, strict=False)
+    except ValueError:
+        return None
+    return str(net.network_address) if "/" not in token else str(net)
+
+
+def normalize_zoom(data: dict) -> set[str]:
+    # {service: plain-text CIDR lines}
+    out = set()
+    for service, text in (data or {}).items():
+        if not isinstance(text, str):
+            continue
+        for line in text.splitlines():
+            val = _valid_ip_or_cidr(line)
+            if val:
+                out.add(f"zoom|{service}|{val}")
+    return out
+
+
+def normalize_atlassian(data: dict) -> set[str]:
+    # Live shape: {"items": [{"cidr": "...", "product": [...], "direction": [...]}]}
+    out = set()
+    for item in (data or {}).get("items", []):
+        if not isinstance(item, dict):
+            continue
+        cidr = _valid_ip_or_cidr(item.get("cidr", ""))
+        if not cidr:
+            continue
+        products = item.get("product") or ["general"]
+        directions = item.get("direction") or ["both"]
+        for prod in products:
+            for direction in directions:
+                out.add(f"atlassian|{prod}|{direction}|{cidr}")
+    return out
+
+
+_OKTA_CELL_RE = re.compile(r"^([a-z]+?)(?:_(pam|workflow))?_cell_\d+$", re.IGNORECASE)
+
+
+def normalize_okta(data: dict) -> set[str]:
+    # Live shape: {"us_cell_1": {"ip_ranges": ["192.0.2.1/32", ...]}, ...}
+    out = set()
+    for cell, payload in (data or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        m = _OKTA_CELL_RE.match(str(cell))
+        if m:
+            region = m.group(1).lower()
+            svc_raw = (m.group(2) or "core").lower()
+            service = "workflows" if svc_raw == "workflow" else svc_raw
+        else:
+            region = str(cell).split("_", 1)[0].lower() or "other"
+            service = "core"
+        for raw in payload.get("ip_ranges", []):
+            val = _valid_ip_or_cidr(str(raw))
+            if val:
+                out.add(f"okta|{region}|{service}|{val}")
+    return out
+
+
+def normalize_fastly(data: dict) -> set[str]:
+    # Live shape: {"addresses": [...], "ipv6_addresses": [...]}
+    out = set()
+    for key, kind in (("addresses", "v4"), ("ipv6_addresses", "v6")):
+        rows = (data or {}).get(key) or []
+        if not rows:
+            raise ValueError(f"Fastly ranges: no {kind} entries under '{key}'")
+        for raw in rows:
+            val = _valid_ip_or_cidr(str(raw))
+            if val:
+                out.add(f"{kind}|{val}")
+    return out
+
+
+def normalize_oci(data: dict) -> set[str]:
+    # Live shape: {"regions": [{"region": "...", "cidrs": [{"cidr": "...", "tags": [...]}]}]}
+    out = set()
+    for reg in (data or {}).get("regions", []):
+        if not isinstance(reg, dict):
+            continue
+        region = str(reg.get("region") or "global")
+        for row in reg.get("cidrs", []):
+            if not isinstance(row, dict):
+                continue
+            cidr = _valid_ip_or_cidr(str(row.get("cidr") or ""))
+            if not cidr:
+                continue
+            tags = row.get("tags") or ["OCI"]
+            for tag in tags:
+                out.add(f"oci|{region}|{tag}|{cidr}")
+    return out
+
+
+def normalize_digitalocean(data: str) -> set[str]:
+    # Live shape: geofeed CSV "cidr,country,region,city,postal"
+    out = set()
+    for line in (data or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(",")
+        cidr = _valid_ip_or_cidr(parts[0])
+        if not cidr:
+            continue
+        country = (parts[1].strip().upper() if len(parts) > 1 and parts[1].strip() else "ZZ")
+        out.add(f"do|{country}|{cidr}")
+    return out
+
+
+def normalize_stripe(data: dict) -> set[str]:
+    # {service: plain-text IP lines}
+    out = set()
+    for service, text in (data or {}).items():
+        if not isinstance(text, str):
+            continue
+        for line in text.splitlines():
+            val = _valid_ip_or_cidr(line)
+            if val:
+                out.add(f"stripe|{service}|{val}")
+    return out
+
+
 @dataclass
 class Source:
     name: str
@@ -248,6 +424,13 @@ SOURCES = [
            note="blob URL found via the download page weekly"),
     Source("cloudflare_ips", fetch_cloudflare, normalize_cloudflare),
     Source("github_meta", fetch_github_meta, normalize_github_meta),
+    Source("zoom_ips", fetch_zoom, normalize_zoom),
+    Source("atlassian_ips", fetch_atlassian, normalize_atlassian),
+    Source("okta_ips", fetch_okta, normalize_okta),
+    Source("fastly_ips", fetch_fastly, normalize_fastly),
+    Source("oci_ips", fetch_oci, normalize_oci),
+    Source("digitalocean_ips", fetch_digitalocean, normalize_digitalocean),
+    Source("stripe_ips", fetch_stripe, normalize_stripe),
 ]
 
 

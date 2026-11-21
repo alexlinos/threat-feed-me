@@ -152,8 +152,8 @@ that host receives the request instead.
 config `safety.ownership_guard.remote_enabled`, on by default). One unauthenticated
 HTTPS GET of `catalog/ownership_guard.json` from `raw.githubusercontent.com`
 (`infra-snapshots` branch), carrying curated vendor-operated shared frontend
-prefixes (Cloudflare, Google frontends, Microsoft 365, AWS CloudFront, GitHub
-frontends) used to refuse blocking shared infrastructure during firewall pushes.
+prefixes (Cloudflare, Fastly, Google frontends, Microsoft 365, AWS CloudFront,
+GitHub frontends) used to refuse blocking shared infrastructure during firewall pushes.
 Nothing is sent beyond the request itself; no indicator IP is ever queried
 externally. Set `safety.ownership_guard.remote_enabled: false` on air-gapped
 installs to rely only on the baked floor and `extra_ranges`.

@@ -81,8 +81,23 @@ VENDORS: dict[str, tuple[str, str]] = {
                      + _RENTABLE, _GOOGLE_DOCS),
     "Cloudflare": ("Cloudflare's edge network ranges." + _RENTABLE,
                    "https://www.cloudflare.com/ips/"),
+    "Fastly": ("Fastly's global CDN edge network ranges." + _RENTABLE,
+               "https://www.fastly.com/documentation/guides/concepts/edge-state/cache/public-ip-list/"),
     "GitHub": ("GitHub's address ranges per service, from the GitHub meta API.",
                "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-githubs-ip-addresses"),
+    "Zoom": ("Zoom's published IP ranges by service (Meetings, Phone, CRC, Contact Center, CDN).",
+             "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060548"),
+    "Atlassian": ("Atlassian Cloud IP ranges for Jira, Confluence, Bitbucket, Trello, Opsgenie and related services.",
+                  "https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/"),
+    "Okta": ("Okta identity platform IP ranges grouped by region and service (Core, Workflows, PAM).",
+             "https://help.okta.com/en-us/content/topics/security/ip-address-allow-listing.htm"),
+    "Stripe": ("Stripe's published API and webhook IP addresses.",
+               "https://docs.stripe.com/ips"),
+    "Oracle Cloud": ("Oracle Cloud Infrastructure (OCI) address ranges by service tag across all regions."
+                     + _RENTABLE,
+                     "https://docs.oracle.com/en-us/iaas/Content/General/Concepts/addressranges.htm"),
+    "DigitalOcean": ("DigitalOcean customer and droplet ranges, all regions." + _RENTABLE,
+                     "https://docs.digitalocean.com/platform/platform-specs/#ip-addresses"),
 }
 
 
@@ -215,6 +230,179 @@ def slice_github_meta(entries: list[str]) -> dict[str, CatalogList]:
             for key, values in sorted(by_key.items())}
 
 
+_ZOOM_SERVICES = {
+    "meetings": ("Zoom Meetings", "Zoom Meetings and Webinars IP ranges."),
+    "phone": ("Zoom Phone", "Zoom Phone signaling and media IP ranges."),
+    "crc": ("Zoom CRC", "Zoom Conference Room Connector IP ranges."),
+    "contact_center": ("Zoom Contact Center", "Zoom Contact Center IP ranges."),
+    "cdn": ("Zoom CDN", "Zoom content delivery IP ranges."),
+}
+
+
+def slice_zoom(entries: list[str]) -> dict[str, CatalogList]:
+    by_svc: dict[str, list[str]] = {}
+    all_vals: list[str] = []
+    for e in entries:
+        parts = e.split("|")
+        if len(parts) != 3:
+            continue
+        svc, val = parts[1], parts[2]
+        by_svc.setdefault(svc, []).append(val)
+        all_vals.append(val)
+    out: dict[str, CatalogList] = {}
+    if all_vals:
+        out["zoom-all"] = ("Zoom", "Zoom (All services)",
+                           "All published Zoom IP ranges combined.", all_vals, "")
+    for svc, vals in sorted(by_svc.items()):
+        label, desc = _ZOOM_SERVICES.get(svc, (f"Zoom {svc.replace('_', ' ').title()}",
+                                               f"Zoom {svc} IP ranges."))
+        out[f"zoom-{slugify(svc)}"] = ("Zoom", label, desc, vals, "")
+    return out
+
+
+_ATLASSIAN_NAMES = {
+    "jira": "Jira",
+    "confluence": "Confluence",
+    "bitbucket": "Bitbucket",
+    "trello": "Trello",
+    "opsgenie": "Opsgenie",
+    "statuspage": "Statuspage",
+    "loom": "Loom",
+    "email": "Email",
+    "forge": "Forge",
+    "halp": "Halp",
+    "rovo-crawler": "Rovo Crawler",
+    "github-for-jira": "GitHub for Jira",
+}
+
+
+def slice_atlassian(entries: list[str]) -> dict[str, CatalogList]:
+    by_prod: dict[str, list[str]] = {}
+    by_dir: dict[str, list[str]] = {}
+    all_vals: list[str] = []
+    for e in entries:
+        parts = e.split("|")
+        if len(parts) != 4:
+            continue
+        prod, direction, val = parts[1], parts[2], parts[3]
+        by_prod.setdefault(prod, []).append(val)
+        by_dir.setdefault(direction, []).append(val)
+        all_vals.append(val)
+    out: dict[str, CatalogList] = {}
+    if all_vals:
+        out["atlassian-all"] = ("Atlassian", "Atlassian Cloud (All products)",
+                                "All Atlassian Cloud ingress and egress IP ranges.",
+                                all_vals, "All products")
+    for direction in ("ingress", "egress"):
+        if by_dir.get(direction):
+            out[f"atlassian-{direction}"] = (
+                "Atlassian", f"Atlassian Cloud ({direction.title()})",
+                f"All Atlassian Cloud {direction} IP ranges across products.",
+                by_dir[direction], "All products",
+            )
+    for prod, vals in sorted(by_prod.items()):
+        label = _ATLASSIAN_NAMES.get(prod, prod.replace("-", " ").title())
+        out[f"atlassian-{slugify(prod)}"] = (
+            "Atlassian", f"Atlassian {label}",
+            f"Atlassian Cloud {label} IP ranges.", vals, "By product",
+        )
+    return out
+
+
+_OKTA_REGIONS = {
+    "us": "US",
+    "emea": "EMEA",
+    "apac": "APAC",
+    "ca": "Canada",
+    "in": "India",
+    "preview": "Preview",
+}
+_OKTA_SERVICES = {
+    "core": "Core",
+    "workflows": "Workflows",
+    "pam": "Privileged Access (PAM)",
+}
+
+
+def slice_okta(entries: list[str]) -> dict[str, CatalogList]:
+    by_region: dict[str, list[str]] = {}
+    by_svc: dict[str, list[str]] = {}
+    all_vals: list[str] = []
+    for e in entries:
+        parts = e.split("|")
+        if len(parts) != 4:
+            continue
+        region, svc, val = parts[1], parts[2], parts[3]
+        by_region.setdefault(region, []).append(val)
+        by_svc.setdefault(svc, []).append(val)
+        all_vals.append(val)
+    out: dict[str, CatalogList] = {}
+    if all_vals:
+        out["okta-all"] = ("Okta", "Okta (All cells)",
+                           "All Okta production and preview cell IP ranges.",
+                           all_vals, ALL_REGIONS)
+    for region, vals in sorted(by_region.items()):
+        label = _OKTA_REGIONS.get(region, region.upper())
+        out[f"okta-{slugify(region)}"] = (
+            "Okta", f"Okta {label}",
+            f"Okta {label} cell IP ranges (Core, Workflows, PAM).",
+            vals, "By region",
+        )
+    for svc, vals in sorted(by_svc.items()):
+        label = _OKTA_SERVICES.get(svc, svc.title())
+        out[f"okta-{slugify(svc)}"] = (
+            "Okta", f"Okta {label}",
+            f"Okta {label} IP ranges across all regions.",
+            vals, "By service",
+        )
+    return out
+
+
+_OCI_TAGS = {
+    "OCI": ("oci-all", "Oracle Cloud (All OCI)", "All Oracle Cloud Infrastructure public IP ranges, all regions."),
+    "OSN": ("oci-osn", "Oracle Services Network (OSN)", "Oracle Services Network ranges across all regions."),
+    "OBJECT_STORAGE": ("oci-object-storage", "Oracle Object Storage", "Oracle Cloud Object Storage ranges across all regions."),
+}
+
+
+def slice_oci(entries: list[str]) -> dict[str, CatalogList]:
+    by_tag: dict[str, list[str]] = {}
+    for e in entries:
+        parts = e.split("|")
+        if len(parts) != 4:
+            continue
+        by_tag.setdefault(parts[2], []).append(parts[3])
+    out: dict[str, CatalogList] = {}
+    for tag, vals in sorted(by_tag.items()):
+        slug, name, desc = _OCI_TAGS.get(
+            tag, (f"oci-{slugify(tag)}", f"Oracle Cloud {tag}", f"Oracle Cloud {tag} ranges, all regions.")
+        )
+        out[slug] = ("Oracle Cloud", name, desc, vals, ALL_REGIONS)
+    return out
+
+
+def slice_stripe(entries: list[str]) -> dict[str, CatalogList]:
+    by_svc: dict[str, list[str]] = {}
+    all_vals: list[str] = []
+    for e in entries:
+        parts = e.split("|")
+        if len(parts) != 3:
+            continue
+        by_svc.setdefault(parts[1], []).append(parts[2])
+        all_vals.append(parts[2])
+    out: dict[str, CatalogList] = {}
+    if all_vals:
+        out["stripe-all"] = ("Stripe", "Stripe (All)",
+                             "All published Stripe API and webhook IP addresses.", all_vals, "")
+    if by_svc.get("api"):
+        out["stripe-api"] = ("Stripe", "Stripe API",
+                             "Stripe API endpoint IP addresses (api.stripe.com).", by_svc["api"], "")
+    if by_svc.get("webhooks"):
+        out["stripe-webhooks"] = ("Stripe", "Stripe Webhooks",
+                                  "Stripe webhook source IP addresses.", by_svc["webhooks"], "")
+    return out
+
+
 SLICERS: dict[str, Callable[[list[str]], dict[str, CatalogList]]] = {
     "aws_ip_ranges": slice_aws,
     "gcp_cloud": lambda e: slice_single(
@@ -227,7 +415,18 @@ SLICERS: dict[str, Callable[[list[str]], dict[str, CatalogList]]] = {
     "cloudflare_ips": lambda e: slice_single(
         "cloudflare", "Cloudflare", "Cloudflare ranges",
         "Cloudflare edge network ranges.", e),
+    "fastly_ips": lambda e: slice_single(
+        "fastly", "Fastly", "Fastly ranges",
+        "Fastly global CDN edge network ranges.", e),
     "github_meta": slice_github_meta,
+    "zoom_ips": slice_zoom,
+    "atlassian_ips": slice_atlassian,
+    "okta_ips": slice_okta,
+    "oci_ips": slice_oci,
+    "digitalocean_ips": lambda e: slice_single(
+        "digitalocean", "DigitalOcean", "DigitalOcean ranges",
+        "DigitalOcean customer and droplet ranges, all regions.", e),
+    "stripe_ips": slice_stripe,
 }
 
 
@@ -322,6 +521,13 @@ def build_ownership_guard(snapshots_dir: Path, generated_at: str,
         cidrs = [str(n) for n in v4] + [str(n) for n in v6]
         if cidrs:
             vendors["cloudflare"] = cidrs
+
+    fastly = load_snapshot(snapshots_dir, "fastly_ips")
+    if fastly:
+        v4, v6 = _valid_networks(_value(e) for e in fastly)
+        cidrs = [str(n) for n in v4] + [str(n) for n in v6]
+        if cidrs:
+            vendors["fastly"] = cidrs
 
     goog = load_snapshot(snapshots_dir, "gcp_goog")
     cloud = load_snapshot(snapshots_dir, "gcp_cloud") or []

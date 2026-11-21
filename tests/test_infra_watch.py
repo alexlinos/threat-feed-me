@@ -230,3 +230,61 @@ def test_github_meta_uses_token_and_get_retries_transient_503(monkeypatch):
     assert data == {"web": ["192.0.2.0/24"]}
     assert len(seen_headers) == 2
     assert seen_headers[0]["Authorization"] == "Bearer synthetic-gh-token"
+
+
+def test_normalize_zoom_atlassian_okta_fastly_oci_do_stripe():
+    import pytest
+
+    # Zoom
+    assert iw.normalize_zoom({
+        "meetings": "# comment\n192.0.2.0/24\nbad-line\n",
+        "phone": "198.51.100.0/25\n",
+    }) == {"zoom|meetings|192.0.2.0/24", "zoom|phone|198.51.100.0/25"}
+
+    # Atlassian
+    assert iw.normalize_atlassian({"items": [
+        {"cidr": "203.0.113.0/24", "product": ["jira", "confluence"], "direction": ["egress"]},
+    ]}) == {
+        "atlassian|jira|egress|203.0.113.0/24",
+        "atlassian|confluence|egress|203.0.113.0/24",
+    }
+
+    # Okta
+    assert iw.normalize_okta({
+        "us_cell_1": {"ip_ranges": ["192.0.2.1/32"]},
+        "emea_workflow_cell_2": {"ip_ranges": ["198.51.100.2/32"]},
+        "preview_pam_cell_1": {"ip_ranges": ["203.0.113.3/32"]},
+    }) == {
+        "okta|us|core|192.0.2.1/32",
+        "okta|emea|workflows|198.51.100.2/32",
+        "okta|preview|pam|203.0.113.3/32",
+    }
+
+    # Fastly (requires both v4 and v6 families, matching AWS discipline)
+    assert iw.normalize_fastly({
+        "addresses": ["192.0.2.0/24"],
+        "ipv6_addresses": ["2001:db8::/32"],
+    }) == {"v4|192.0.2.0/24", "v6|2001:db8::/32"}
+    with pytest.raises(ValueError, match="no v4"):
+        iw.normalize_fastly({"addresses": [], "ipv6_addresses": ["2001:db8::/32"]})
+
+    # OCI
+    assert iw.normalize_oci({"regions": [
+        {"region": "us-ashburn-1", "cidrs": [
+            {"cidr": "192.0.2.0/24", "tags": ["OCI", "OBJECT_STORAGE"]},
+        ]},
+    ]}) == {
+        "oci|us-ashburn-1|OCI|192.0.2.0/24",
+        "oci|us-ashburn-1|OBJECT_STORAGE|192.0.2.0/24",
+    }
+
+    # DigitalOcean geofeed CSV
+    assert iw.normalize_digitalocean(
+        "# header\n198.51.100.0/24,US,US-NY,New York,10001\nnot-a-cidr,XX\n"
+    ) == {"do|US|198.51.100.0/24"}
+
+    # Stripe
+    assert iw.normalize_stripe({
+        "api": "203.0.113.10\n",
+        "webhooks": "203.0.113.20\n",
+    }) == {"stripe|api|203.0.113.10", "stripe|webhooks|203.0.113.20"}

@@ -37,12 +37,14 @@ always hungry.
 </p>
 
 **New in 2.7:** application allow-lists. A built-in catalog of Microsoft 365
-(all four clouds), AWS, Azure, Google, GitHub and Cloudflare lists, each linked
-to the vendor's own documentation and switched on one at a time, served
-strictly as the vendor publishes them. A firewall URL builder under every list:
-pick FortiGate, Palo Alto, Sophos, pfSense and more, and copy the exact URL. And
-`?family=4|6` on every list for firewalls that take one IP version. Coming from
-2.4 or earlier? See [Upgrading](#upgrading) first: High gets smaller on purpose.
+(all four clouds), AWS, Azure, Google, Google Cloud, GitHub, Cloudflare,
+Fastly, Zoom, Atlassian, Okta, Stripe, Oracle Cloud and DigitalOcean lists,
+each linked to the vendor's own documentation and switched on one at a time,
+served strictly as the vendor publishes them. A firewall URL builder under every
+list: pick FortiGate, Palo Alto, Sophos, pfSense and more, and copy the exact
+URL. And `?family=4|6` on every list for firewalls that take one IP version.
+Coming from 2.4 or earlier? See [Upgrading](#upgrading) first: High gets
+smaller on purpose.
 
 ### Coming from MineMeld?
 
@@ -59,7 +61,7 @@ hand it to firewalls and SIEMs, with less to maintain:
 | EDL feed outputs (PAN-OS) | `/feeds/{high,medium,all}.txt` and `/feeds/domains/...`: plain one-per-line lists that PAN-OS External Dynamic Lists and every other firewall accept |
 | TAXII miners (TAXII 1.x feeds) | TAXII **2.1** collections as feeds: MISP, OpenCTI or any TAXII 2.1 server |
 | TAXII DataFeed output (TAXII 1.1 / STIX 1.x) | TAXII **2.1** / STIX **2.1**, read-only, six collections |
-| Office 365 / AWS / Azure / GCP miners (allow-lists) | Application lists: a built-in catalog (Microsoft 365 in all four clouds, AWS, Azure, Google, GitHub, Cloudflare) you switch on per list, plus lists you point at any URL; per service, all regions |
+| Office 365 / AWS / Azure / GCP miners (allow-lists) | Application lists: a built-in catalog (Microsoft 365 in all four clouds, AWS, Azure, Google, GitHub, Cloudflare, Fastly, Zoom, Atlassian, Okta, Stripe, Oracle Cloud, DigitalOcean) you switch on per list, plus lists you point at any URL; per service, all regions |
 | Node graph you wire and maintain | Nothing to wire: add a feed, it votes |
 
 What it doesn't do (yet): per-region cloud allow-lists, arbitrary processing graphs, TAXII 1.x, writes over TAXII, syslog-driven lists,
@@ -211,7 +213,8 @@ UniFi when they're configured. The top bar says how many feeds are healthy and
 names the first one that isn't.
 
 **3. Apps (Applications).** Allow-lists, kept apart from the block lists. Pick a vendor on
-the left (Microsoft 365, AWS, Azure, Google, GitHub, Cloudflare), read what
+the left (Microsoft 365, AWS, Azure, Google, GitHub, Cloudflare, Fastly, Zoom,
+Atlassian, Okta, Stripe, Oracle Cloud, DigitalOcean), read what
 the list is for and follow the link to the vendor's own guidance, then switch
 on the lists you need; nothing is downloaded until you do. Each list gets its
 own URL and a URL builder that shapes it for your firewall. You can also add
@@ -305,7 +308,8 @@ score, votes and sources, and the whitelist (by IP, CIDR, domain or
   `?family=4|6` shape a list for one firewall; ETags so unchanged lists cost
   a 304. The dashboard's URL builder composes these for your firewall.
 - **Application allow-lists**: vendor ranges and domains (Microsoft 365,
-  AWS, Azure, Google, GitHub, Cloudflare) from a built-in catalog, or any URL
+  AWS, Azure, Google, GitHub, Cloudflare, Fastly, Zoom, Atlassian, Okta,
+  Stripe, Oracle Cloud, DigitalOcean) from a built-in catalog, or any URL
   you point a list at, served at their own URLs and kept out of threat
   scoring; every refresh passes prefix floors, a special-use check and a
   change guard that holds big swings for your approval

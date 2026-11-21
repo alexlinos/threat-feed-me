@@ -160,3 +160,46 @@ def test_no_snapshots_deletes_nothing(tmp_path):
     empty.mkdir()
     bc.build(empty, out, "https://factory.example/", "2026-11-08T00:00:00Z")
     assert (out / "cloudflare.txt").exists()   # a broken run never wipes the catalog
+
+
+def test_expanded_vendor_slicers_and_fastly_ownership_guard(tmp_path):
+    data = {
+        "zoom_ips": ["zoom|meetings|192.0.2.0/25", "zoom|phone|192.0.2.128/25"],
+        "atlassian_ips": [
+            "atlassian|jira|egress|198.51.100.0/25",
+            "atlassian|bitbucket|ingress|198.51.100.128/25",
+        ],
+        "okta_ips": [
+            "okta|us|core|203.0.113.1/32",
+            "okta|emea|workflows|203.0.113.2/32",
+        ],
+        "fastly_ips": ["v4|192.0.2.0/26", "v6|2001:db8::/32"],
+        "oci_ips": [
+            "oci|us-ashburn-1|OCI|198.51.100.0/24",
+            "oci|us-ashburn-1|OBJECT_STORAGE|198.51.100.0/26",
+        ],
+        "digitalocean_ips": ["do|US|203.0.113.0/25"],
+        "stripe_ips": ["stripe|api|203.0.113.10", "stripe|webhooks|203.0.113.20"],
+    }
+    manifest, out = _build(tmp_path, data)
+    slugs = {m["slug"] for m in manifest["lists"]}
+    expected = {
+        "zoom-all", "zoom-meetings", "zoom-phone",
+        "atlassian-all", "atlassian-ingress", "atlassian-egress",
+        "atlassian-jira", "atlassian-bitbucket",
+        "okta-all", "okta-us", "okta-emea", "okta-core", "okta-workflows",
+        "fastly", "oci-all", "oci-object-storage", "digitalocean",
+        "stripe-all", "stripe-api", "stripe-webhooks",
+    }
+    assert expected <= slugs
+    for v in ("Zoom", "Atlassian", "Okta", "Fastly", "Oracle Cloud", "DigitalOcean", "Stripe"):
+        assert v in manifest["vendors"]
+        assert manifest["vendors"][v]["docs"].startswith("https://")
+
+    # Fastly shared CDN edge is included in ownership_guard.json; rentable
+    # DigitalOcean and OCI space is NOT.
+    guard_doc = json.loads((out / "ownership_guard.json").read_text(encoding="utf-8"))
+    assert "fastly" in guard_doc["vendors"]
+    assert "192.0.2.0/26" in guard_doc["vendors"]["fastly"]
+    assert "digitalocean" not in guard_doc["vendors"]
+    assert "oci" not in guard_doc["vendors"]

@@ -8,16 +8,19 @@ already decided, so whoever builds it starts from them.
 **What shipped.** Allow-lists for SaaS and cloud ranges, one of MineMeld's
 most visible jobs, served at their own URLs (`/lists/<name>.txt`, plus CSV
 and JSON). A built-in catalog covers Microsoft 365 (all four clouds, by
-category), AWS and Azure (per service, all regions), Google, Google Cloud,
-GitHub and Cloudflare; the project slices the vendor files centrally and
-installs fetch only the lists they switch on. Any URL of your own works
-too, as a plain list or as JSON with a filter expression.
+category), AWS, Azure, Google, Google Cloud, GitHub, Cloudflare, Fastly,
+Zoom, Atlassian, Okta, Stripe, Oracle Cloud and DigitalOcean; the project
+slices the vendor files centrally and installs fetch only the lists they
+switch on. Any URL of your own works too, as a plain list or as JSON with
+a filter expression.
 
 **Still open.**
 
-- More vendors: Zoom, Okta, Atlassian, Slack. Adobe was tried and removed:
-  the factory found no downloadable file linked from its endpoints page,
-  and the page's own text is not a safe source for a list firewalls allow.
+- More vendors with official downloadable IP/domain lists. Adobe and Slack
+  were evaluated and skipped: Adobe has no downloadable file linked from its
+  endpoints page, and Slack publishes no static IP file (its outbound and
+  webhook traffic runs on dynamic AWS ranges; Slack recommends hostname rules
+  and HMAC webhook verification instead).
 - Per-region lists were decided against (thousands of lists for little
   use); revisit only on demand.
 - Uploading a list file (today a list needs a URL).
