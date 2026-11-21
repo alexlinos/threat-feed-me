@@ -15,7 +15,7 @@
 # declares (a new key's allowed host is a release decision). Mirror changes into config.yaml's feeds: so fresh air-gapped
 # installs get them too (tests/test_catalog.py checks the two agree).
 
-catalog_version: 3
+catalog_version: 4
 feeds:
 - name: talos_snort
   url: https://snort.org/downloads/ip-block-list/terms
@@ -128,6 +128,12 @@ feeds:
   url: https://www.spamhaus.org/drop/drop.txt
   feed_type: spam
   update_interval: 7200
+- name: spamhaus_drop_v6
+  url: https://www.spamhaus.org/drop/dropv6.txt
+  feed_type: spam
+  update_interval: 7200
+  include_ipv6: true
+  enabled: false
 - name: bsdly_traplist
   url: https://www.bsdly.net/~peter/bsdly.net.traplist
   feed_type: spam
@@ -160,6 +166,11 @@ feeds:
   url: https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-3d.ipv4
   feed_type: threat_intel
   update_interval: 3600
+- name: threatview_ip_high
+  url: https://threatview.io/Downloads/IP-High-Confidence-Feed.txt
+  feed_type: threat_intel
+  update_interval: 86400
+  enabled: false
 - name: abuse_ch_threatfox
   url: https://threatfox.abuse.ch/export/csv/ip-port/recent/
   feed_type: malware

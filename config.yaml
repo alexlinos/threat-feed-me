@@ -266,6 +266,18 @@ feeds:
     feed_type: "spam"
     update_interval: 7200
 
+  # --- Spamhaus DROPv6 (IPv6 hijacked/leased netblocks, opt-in) ----------
+  # Primary-curator IPv6 counterpart to spamhaus_drop (~90 CIDRs, 100% novel,
+  # zero noise). Ships disabled with include_ipv6: true so dual-stack
+  # firewalls (FortiGate, Palo Alto, OPNsense, pfSense IPv6) can opt in
+  # without surprising IPv4-only pollers.
+  - name: spamhaus_drop_v6
+    url: https://www.spamhaus.org/drop/dropv6.txt
+    feed_type: "spam"
+    update_interval: 7200
+    include_ipv6: true
+    enabled: false
+
   # --- bsdly.net greytrap (ratified 2026-08-20) ---------------------------
   # Peter Hansteen's SMTP greytrapping + bruteforce trap list: small (~600),
   # hourly, and genuinely independent — trap-caught senders, not a
@@ -327,6 +339,17 @@ feeds:
     url: https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-3d.ipv4
     feed_type: "threat_intel"
     update_interval: 3600  # mirror refreshes ~hourly
+
+  # --- ThreatView.io high-confidence IPv4 feed (opt-in) ------------------
+  # Compact (~16k entries), updated daily; live-measured 25% novel against
+  # the enabled IP roster with moderate overlap against AbuseIPDB (46%) and
+  # Blocklist.de (39%). Ships disabled as the opt-in IP counterpart to
+  # threatview_domains.
+  - name: threatview_ip_high
+    url: https://threatview.io/Downloads/IP-High-Confidence-Feed.txt
+    feed_type: "threat_intel"
+    update_interval: 86400
+    enabled: false
 
   # --- Retired feeds kept for reference (disabled) -----------------------
   # Feodo and SSLBL were removed 2026-08: abuse.ch key-walled its platforms
