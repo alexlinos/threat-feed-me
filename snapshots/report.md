@@ -1,8 +1,8 @@
-# Infra list watch — 2026-11-21 14:45 UTC
+# Infra list watch — 2026-11-21 14:50 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
-| aws_ip_ranges | 17834 | 6 | 0 | 0.03 | ok |
+| aws_ip_ranges | 17834 | 0 | 0 | 0.0 | ok |
 | m365_endpoints | 306 | 0 | 0 | 0.0 | ok |
 | m365_gcc_high | 127 | 0 | 0 | 0.0 | ok |
 | m365_dod | 121 | 0 | 0 | 0.0 | ok |
@@ -12,10 +12,10 @@
 | azure_service_tags | 105909 | 0 | 0 | 0.0 | ok |
 | cloudflare_ips | 22 | 0 | 0 | 0.0 | ok |
 | github_meta | 8523 | 0 | 0 | 0.0 | ok |
-
-## aws_ip_ranges
-- added: `v4|ap-southeast-3|AMAZON|1.178.86.0/24`
-- added: `v4|ap-southeast-3|EC2|1.178.86.0/24`
-- added: `v4|sa-west-1|EFS|83.160.241.0/25`
-- added: `v4|sa-west-1|EFS|83.160.244.0/22`
-- added: `v6|sa-west-1|EFS|2600:1f1e:c38f:1500::/56`
+| zoom_ips | 136 | 136 | 0 | 100.0 | baseline seeded |
+| atlassian_ips | 975 | 975 | 0 | 100.0 | baseline seeded |
+| okta_ips | 3179 | 3179 | 0 | 100.0 | baseline seeded |
+| fastly_ips | 24 | 24 | 0 | 100.0 | baseline seeded |
+| oci_ips | 1186 | 1186 | 0 | 100.0 | baseline seeded |
+| digitalocean_ips | 1243 | 1243 | 0 | 100.0 | baseline seeded |
+| stripe_ips | 177 | 177 | 0 | 100.0 | baseline seeded |

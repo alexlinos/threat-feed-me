@@ -1,13 +1,25 @@
 {
- "generated_at": "2026-11-21T14:45:01Z",
+ "generated_at": "2026-11-21T14:50:06Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
    "docs": "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html"
   },
+  "Atlassian": {
+   "description": "Atlassian Cloud IP ranges for Jira, Confluence, Bitbucket, Trello, Opsgenie and related services.",
+   "docs": "https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/"
+  },
   "Cloudflare": {
    "description": "Cloudflare's edge network ranges. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
    "docs": "https://www.cloudflare.com/ips/"
+  },
+  "DigitalOcean": {
+   "description": "DigitalOcean customer and droplet ranges, all regions. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
+   "docs": "https://docs.digitalocean.com/platform/platform-specs/#ip-addresses"
+  },
+  "Fastly": {
+   "description": "Fastly's global CDN edge network ranges. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
+   "docs": "https://www.fastly.com/documentation/guides/concepts/edge-state/cache/public-ip-list/"
   },
   "GitHub": {
    "description": "GitHub's address ranges per service, from the GitHub meta API.",
@@ -40,6 +52,22 @@
   "Microsoft Azure": {
    "description": "Azure service tags, one list per service across all regions. AzureCloud is all of Azure's public space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
    "docs": "https://learn.microsoft.com/azure/virtual-network/service-tags-overview"
+  },
+  "Okta": {
+   "description": "Okta identity platform IP ranges grouped by region and service (Core, Workflows, PAM).",
+   "docs": "https://help.okta.com/en-us/content/topics/security/ip-address-allow-listing.htm"
+  },
+  "Oracle Cloud": {
+   "description": "Oracle Cloud Infrastructure (OCI) address ranges by service tag across all regions. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
+   "docs": "https://docs.oracle.com/en-us/iaas/Content/General/Concepts/addressranges.htm"
+  },
+  "Stripe": {
+   "description": "Stripe's published API and webhook IP addresses.",
+   "docs": "https://docs.stripe.com/ips"
+  },
+  "Zoom": {
+   "description": "Zoom's published IP ranges by service (Meetings, Phone, CRC, Contact Center, CDN).",
+   "docs": "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060548"
   }
  },
  "lists": [
@@ -341,6 +369,171 @@
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-workspaces-gateways.txt"
   },
   {
+   "slug": "atlassian-all",
+   "name": "Atlassian Cloud (All products)",
+   "vendor": "Atlassian",
+   "group": "All products",
+   "description": "All Atlassian Cloud ingress and egress IP ranges.",
+   "format": "list",
+   "entries": 175,
+   "bytes": 3292,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-all.txt"
+  },
+  {
+   "slug": "atlassian-egress",
+   "name": "Atlassian Cloud (Egress)",
+   "vendor": "Atlassian",
+   "group": "All products",
+   "description": "All Atlassian Cloud egress IP ranges across products.",
+   "format": "list",
+   "entries": 165,
+   "bytes": 3118,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-egress.txt"
+  },
+  {
+   "slug": "atlassian-ingress",
+   "name": "Atlassian Cloud (Ingress)",
+   "vendor": "Atlassian",
+   "group": "All products",
+   "description": "All Atlassian Cloud ingress IP ranges across products.",
+   "format": "list",
+   "entries": 28,
+   "bytes": 478,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-ingress.txt"
+  },
+  {
+   "slug": "atlassian-bitbucket",
+   "name": "Atlassian Bitbucket",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Bitbucket IP ranges.",
+   "format": "list",
+   "entries": 102,
+   "bytes": 1972,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-bitbucket.txt"
+  },
+  {
+   "slug": "atlassian-confluence",
+   "name": "Atlassian Confluence",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Confluence IP ranges.",
+   "format": "list",
+   "entries": 106,
+   "bytes": 2121,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-confluence.txt"
+  },
+  {
+   "slug": "atlassian-email",
+   "name": "Atlassian Email",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Email IP ranges.",
+   "format": "list",
+   "entries": 24,
+   "bytes": 397,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-email.txt"
+  },
+  {
+   "slug": "atlassian-forge",
+   "name": "Atlassian Forge",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Forge IP ranges.",
+   "format": "list",
+   "entries": 95,
+   "bytes": 1935,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-forge.txt"
+  },
+  {
+   "slug": "atlassian-github-for-jira",
+   "name": "Atlassian GitHub for Jira",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud GitHub for Jira IP ranges.",
+   "format": "list",
+   "entries": 3,
+   "bytes": 53,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-github-for-jira.txt"
+  },
+  {
+   "slug": "atlassian-halp",
+   "name": "Atlassian Halp",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Halp IP ranges.",
+   "format": "list",
+   "entries": 99,
+   "bytes": 2006,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-halp.txt"
+  },
+  {
+   "slug": "atlassian-jira",
+   "name": "Atlassian Jira",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Jira IP ranges.",
+   "format": "list",
+   "entries": 106,
+   "bytes": 2121,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-jira.txt"
+  },
+  {
+   "slug": "atlassian-loom",
+   "name": "Atlassian Loom",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Loom IP ranges.",
+   "format": "list",
+   "entries": 12,
+   "bytes": 206,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-loom.txt"
+  },
+  {
+   "slug": "atlassian-opsgenie",
+   "name": "Atlassian Opsgenie",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Opsgenie IP ranges.",
+   "format": "list",
+   "entries": 97,
+   "bytes": 1962,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-opsgenie.txt"
+  },
+  {
+   "slug": "atlassian-rovo-crawler",
+   "name": "Atlassian Rovo Crawler",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Rovo Crawler IP ranges.",
+   "format": "list",
+   "entries": 13,
+   "bytes": 236,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-rovo-crawler.txt"
+  },
+  {
+   "slug": "atlassian-statuspage",
+   "name": "Atlassian Statuspage",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Statuspage IP ranges.",
+   "format": "list",
+   "entries": 99,
+   "bytes": 2006,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-statuspage.txt"
+  },
+  {
+   "slug": "atlassian-trello",
+   "name": "Atlassian Trello",
+   "vendor": "Atlassian",
+   "group": "By product",
+   "description": "Atlassian Cloud Trello IP ranges.",
+   "format": "list",
+   "entries": 99,
+   "bytes": 2006,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/atlassian-trello.txt"
+  },
+  {
    "slug": "cloudflare",
    "name": "Cloudflare ranges",
    "vendor": "Cloudflare",
@@ -350,6 +543,28 @@
    "entries": 22,
    "bytes": 336,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/cloudflare.txt"
+  },
+  {
+   "slug": "digitalocean",
+   "name": "DigitalOcean ranges",
+   "vendor": "DigitalOcean",
+   "group": "",
+   "description": "DigitalOcean customer and droplet ranges, all regions.",
+   "format": "list",
+   "entries": 1243,
+   "bytes": 20807,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/digitalocean.txt"
+  },
+  {
+   "slug": "fastly",
+   "name": "Fastly ranges",
+   "vendor": "Fastly",
+   "group": "",
+   "description": "Fastly global CDN edge network ranges.",
+   "format": "list",
+   "entries": 24,
+   "bytes": 369,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/fastly.txt"
   },
   {
    "slug": "github-actions",
@@ -2561,6 +2776,248 @@
    "entries": 48,
    "bytes": 814,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-zerotrustsegmentation.txt"
+  },
+  {
+   "slug": "okta-all",
+   "name": "Okta (All cells)",
+   "vendor": "Okta",
+   "group": "All regions",
+   "description": "All Okta production and preview cell IP ranges.",
+   "format": "list",
+   "entries": 2313,
+   "bytes": 38744,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-all.txt"
+  },
+  {
+   "slug": "okta-apac",
+   "name": "Okta APAC",
+   "vendor": "Okta",
+   "group": "By region",
+   "description": "Okta APAC cell IP ranges (Core, Workflows, PAM).",
+   "format": "list",
+   "entries": 276,
+   "bytes": 4572,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-apac.txt"
+  },
+  {
+   "slug": "okta-ca",
+   "name": "Okta Canada",
+   "vendor": "Okta",
+   "group": "By region",
+   "description": "Okta Canada cell IP ranges (Core, Workflows, PAM).",
+   "format": "list",
+   "entries": 107,
+   "bytes": 1817,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-ca.txt"
+  },
+  {
+   "slug": "okta-emea",
+   "name": "Okta EMEA",
+   "vendor": "Okta",
+   "group": "By region",
+   "description": "Okta EMEA cell IP ranges (Core, Workflows, PAM).",
+   "format": "list",
+   "entries": 567,
+   "bytes": 9536,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-emea.txt"
+  },
+  {
+   "slug": "okta-in",
+   "name": "Okta India",
+   "vendor": "Okta",
+   "group": "By region",
+   "description": "Okta India cell IP ranges (Core, Workflows, PAM).",
+   "format": "list",
+   "entries": 103,
+   "bytes": 1737,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-in.txt"
+  },
+  {
+   "slug": "okta-preview",
+   "name": "Okta Preview",
+   "vendor": "Okta",
+   "group": "By region",
+   "description": "Okta Preview cell IP ranges (Core, Workflows, PAM).",
+   "format": "list",
+   "entries": 302,
+   "bytes": 5065,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-preview.txt"
+  },
+  {
+   "slug": "okta-us",
+   "name": "Okta US",
+   "vendor": "Okta",
+   "group": "By region",
+   "description": "Okta US cell IP ranges (Core, Workflows, PAM).",
+   "format": "list",
+   "entries": 1256,
+   "bytes": 21094,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-us.txt"
+  },
+  {
+   "slug": "okta-core",
+   "name": "Okta Core",
+   "vendor": "Okta",
+   "group": "By service",
+   "description": "Okta Core IP ranges across all regions.",
+   "format": "list",
+   "entries": 2175,
+   "bytes": 36447,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-core.txt"
+  },
+  {
+   "slug": "okta-pam",
+   "name": "Okta Privileged Access (PAM)",
+   "vendor": "Okta",
+   "group": "By service",
+   "description": "Okta Privileged Access (PAM) IP ranges across all regions.",
+   "format": "list",
+   "entries": 138,
+   "bytes": 2297,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-pam.txt"
+  },
+  {
+   "slug": "okta-workflows",
+   "name": "Okta Workflows",
+   "vendor": "Okta",
+   "group": "By service",
+   "description": "Okta Workflows IP ranges across all regions.",
+   "format": "list",
+   "entries": 568,
+   "bytes": 9466,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-workflows.txt"
+  },
+  {
+   "slug": "oci-all",
+   "name": "Oracle Cloud (All OCI)",
+   "vendor": "Oracle Cloud",
+   "group": "All regions",
+   "description": "All Oracle Cloud Infrastructure public IP ranges, all regions.",
+   "format": "list",
+   "entries": 571,
+   "bytes": 9080,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/oci-all.txt"
+  },
+  {
+   "slug": "oci-object-storage",
+   "name": "Oracle Object Storage",
+   "vendor": "Oracle Cloud",
+   "group": "All regions",
+   "description": "Oracle Cloud Object Storage ranges across all regions.",
+   "format": "list",
+   "entries": 68,
+   "bytes": 1068,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/oci-object-storage.txt"
+  },
+  {
+   "slug": "oci-osn",
+   "name": "Oracle Services Network (OSN)",
+   "vendor": "Oracle Cloud",
+   "group": "All regions",
+   "description": "Oracle Services Network ranges across all regions.",
+   "format": "list",
+   "entries": 547,
+   "bytes": 8946,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/oci-osn.txt"
+  },
+  {
+   "slug": "stripe-all",
+   "name": "Stripe (All)",
+   "vendor": "Stripe",
+   "group": "",
+   "description": "All published Stripe API and webhook IP addresses.",
+   "format": "list",
+   "entries": 177,
+   "bytes": 2559,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/stripe-all.txt"
+  },
+  {
+   "slug": "stripe-api",
+   "name": "Stripe API",
+   "vendor": "Stripe",
+   "group": "",
+   "description": "Stripe API endpoint IP addresses (api.stripe.com).",
+   "format": "list",
+   "entries": 162,
+   "bytes": 2352,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/stripe-api.txt"
+  },
+  {
+   "slug": "stripe-webhooks",
+   "name": "Stripe Webhooks",
+   "vendor": "Stripe",
+   "group": "",
+   "description": "Stripe webhook source IP addresses.",
+   "format": "list",
+   "entries": 15,
+   "bytes": 207,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/stripe-webhooks.txt"
+  },
+  {
+   "slug": "zoom-all",
+   "name": "Zoom (All services)",
+   "vendor": "Zoom",
+   "group": "",
+   "description": "All published Zoom IP ranges combined.",
+   "format": "list",
+   "entries": 58,
+   "bytes": 937,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-all.txt"
+  },
+  {
+   "slug": "zoom-cdn",
+   "name": "Zoom CDN",
+   "vendor": "Zoom",
+   "group": "",
+   "description": "Zoom content delivery IP ranges.",
+   "format": "list",
+   "entries": 3,
+   "bytes": 47,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-cdn.txt"
+  },
+  {
+   "slug": "zoom-crc",
+   "name": "Zoom CRC",
+   "vendor": "Zoom",
+   "group": "",
+   "description": "Zoom Conference Room Connector IP ranges.",
+   "format": "list",
+   "entries": 49,
+   "bytes": 790,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-crc.txt"
+  },
+  {
+   "slug": "zoom-contact-center",
+   "name": "Zoom Contact Center",
+   "vendor": "Zoom",
+   "group": "",
+   "description": "Zoom Contact Center IP ranges.",
+   "format": "list",
+   "entries": 12,
+   "bytes": 184,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-contact-center.txt"
+  },
+  {
+   "slug": "zoom-meetings",
+   "name": "Zoom Meetings",
+   "vendor": "Zoom",
+   "group": "",
+   "description": "Zoom Meetings and Webinars IP ranges.",
+   "format": "list",
+   "entries": 50,
+   "bytes": 807,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-meetings.txt"
+  },
+  {
+   "slug": "zoom-phone",
+   "name": "Zoom Phone",
+   "vendor": "Zoom",
+   "group": "",
+   "description": "Zoom Phone signaling and media IP ranges.",
+   "format": "list",
+   "entries": 22,
+   "bytes": 353,
+   "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-phone.txt"
   }
  ]
 }

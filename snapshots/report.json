@@ -1,21 +1,15 @@
 {
- "fetched_at": "2026-11-21 14:45 UTC",
+ "fetched_at": "2026-11-21 14:50 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
    "count": 17834,
    "baseline": false,
-   "added": 6,
+   "added": 0,
    "removed": 0,
-   "added_sample": [
-    "v4|ap-southeast-3|AMAZON|1.178.86.0/24",
-    "v4|ap-southeast-3|EC2|1.178.86.0/24",
-    "v4|sa-west-1|EFS|83.160.241.0/25",
-    "v4|sa-west-1|EFS|83.160.244.0/22",
-    "v6|sa-west-1|EFS|2600:1f1e:c38f:1500::/56"
-   ],
+   "added_sample": [],
    "removed_sample": [],
-   "pct_change": 0.03,
+   "pct_change": 0.0,
    "min_v4_prefix": 11,
    "min_v6_prefix": 32,
    "alert": false,
@@ -146,6 +140,69 @@
    "min_v6_prefix": 29,
    "alert": false,
    "alert_reasons": []
+  },
+  "zoom_ips": {
+   "status": "ok",
+   "count": 136,
+   "baseline": true,
+   "added": 136,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "atlassian_ips": {
+   "status": "ok",
+   "count": 975,
+   "baseline": true,
+   "added": 975,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "okta_ips": {
+   "status": "ok",
+   "count": 3179,
+   "baseline": true,
+   "added": 3179,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "fastly_ips": {
+   "status": "ok",
+   "count": 24,
+   "baseline": true,
+   "added": 24,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "oci_ips": {
+   "status": "ok",
+   "count": 1186,
+   "baseline": true,
+   "added": 1186,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "digitalocean_ips": {
+   "status": "ok",
+   "count": 1243,
+   "baseline": true,
+   "added": 1243,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
+  },
+  "stripe_ips": {
+   "status": "ok",
+   "count": 177,
+   "baseline": true,
+   "added": 177,
+   "removed": 0,
+   "pct_change": 100.0,
+   "alert": false
   }
  }
 }
