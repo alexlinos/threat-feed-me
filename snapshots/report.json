@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-11-21 14:50 UTC",
+ "fetched_at": "2026-11-22 14:40 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
@@ -144,65 +144,112 @@
   "zoom_ips": {
    "status": "ok",
    "count": 136,
-   "baseline": true,
-   "added": 136,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 16,
+   "min_v6_prefix": null,
+   "alert": false,
+   "alert_reasons": []
   },
   "atlassian_ips": {
    "status": "ok",
    "count": 975,
-   "baseline": true,
-   "added": 975,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 17,
+   "min_v6_prefix": 36,
+   "alert": false,
+   "alert_reasons": []
   },
   "okta_ips": {
    "status": "ok",
    "count": 3179,
-   "baseline": true,
-   "added": 3179,
-   "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "baseline": false,
+   "added": 116,
+   "removed": 116,
+   "added_sample": [
+    "okta|apac|core|15.134.247.108/32",
+    "okta|apac|core|16.178.207.35/32",
+    "okta|apac|core|18.177.103.136/32",
+    "okta|apac|core|3.112.140.43/32",
+    "okta|apac|core|52.196.5.44/32"
+   ],
+   "removed_sample": [
+    "okta|apac|core|13.197.79.172/32",
+    "okta|apac|core|13.237.41.61/32",
+    "okta|apac|core|13.239.200.221/32",
+    "okta|apac|core|3.114.93.18/32",
+    "okta|apac|core|3.24.211.97/32"
+   ],
+   "pct_change": 7.3,
+   "min_v4_prefix": 26,
+   "min_v6_prefix": null,
+   "alert": false,
+   "alert_reasons": []
   },
   "fastly_ips": {
    "status": "ok",
    "count": 24,
-   "baseline": true,
-   "added": 24,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 16,
+   "min_v6_prefix": 31,
+   "alert": false,
+   "alert_reasons": []
   },
   "oci_ips": {
    "status": "ok",
    "count": 1186,
-   "baseline": true,
-   "added": 1186,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 16,
+   "min_v6_prefix": null,
+   "alert": false,
+   "alert_reasons": []
   },
   "digitalocean_ips": {
    "status": "ok",
    "count": 1243,
-   "baseline": true,
-   "added": 1243,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 17,
+   "min_v6_prefix": 48,
+   "alert": false,
+   "alert_reasons": []
   },
   "stripe_ips": {
    "status": "ok",
    "count": 177,
-   "baseline": true,
-   "added": 177,
+   "baseline": false,
+   "added": 0,
    "removed": 0,
-   "pct_change": 100.0,
-   "alert": false
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
+   "min_v4_prefix": 32,
+   "min_v6_prefix": null,
+   "alert": false,
+   "alert_reasons": []
   }
  }
 }
