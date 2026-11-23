@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-11-22 14:40 UTC",
+ "fetched_at": "2026-11-23 18:22 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
@@ -171,25 +171,25 @@
   },
   "okta_ips": {
    "status": "ok",
-   "count": 3179,
+   "count": 3182,
    "baseline": false,
-   "added": 116,
-   "removed": 116,
+   "added": 138,
+   "removed": 135,
    "added_sample": [
-    "okta|apac|core|15.134.247.108/32",
-    "okta|apac|core|16.178.207.35/32",
-    "okta|apac|core|18.177.103.136/32",
-    "okta|apac|core|3.112.140.43/32",
-    "okta|apac|core|52.196.5.44/32"
+    "okta|apac|core|18.179.213.194/32",
+    "okta|apac|core|18.182.250.224/32",
+    "okta|apac|core|35.72.176.1/32",
+    "okta|apac|core|35.77.135.40/32",
+    "okta|apac|core|52.62.161.191/32"
    ],
    "removed_sample": [
-    "okta|apac|core|13.197.79.172/32",
-    "okta|apac|core|13.237.41.61/32",
-    "okta|apac|core|13.239.200.221/32",
-    "okta|apac|core|3.114.93.18/32",
-    "okta|apac|core|3.24.211.97/32"
+    "okta|apac|core|13.158.102.202/32",
+    "okta|apac|core|13.197.86.191/32",
+    "okta|apac|core|15.135.156.249/32",
+    "okta|apac|core|52.192.201.209/32",
+    "okta|apac|core|54.178.180.211/32"
    ],
-   "pct_change": 7.3,
+   "pct_change": 8.59,
    "min_v4_prefix": 26,
    "min_v6_prefix": null,
    "alert": false,

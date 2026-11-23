@@ -1,4 +1,4 @@
-# Infra list watch — 2026-11-22 14:40 UTC
+# Infra list watch — 2026-11-23 18:22 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
@@ -14,20 +14,20 @@
 | github_meta | 8523 | 0 | 0 | 0.0 | ok |
 | zoom_ips | 136 | 0 | 0 | 0.0 | ok |
 | atlassian_ips | 975 | 0 | 0 | 0.0 | ok |
-| okta_ips | 3179 | 116 | 116 | 7.3 | ok |
+| okta_ips | 3182 | 138 | 135 | 8.59 | ok |
 | fastly_ips | 24 | 0 | 0 | 0.0 | ok |
 | oci_ips | 1186 | 0 | 0 | 0.0 | ok |
 | digitalocean_ips | 1243 | 0 | 0 | 0.0 | ok |
 | stripe_ips | 177 | 0 | 0 | 0.0 | ok |
 
 ## okta_ips
-- added: `okta|apac|core|15.134.247.108/32`
-- added: `okta|apac|core|16.178.207.35/32`
-- added: `okta|apac|core|18.177.103.136/32`
-- added: `okta|apac|core|3.112.140.43/32`
-- added: `okta|apac|core|52.196.5.44/32`
-- removed: `okta|apac|core|13.197.79.172/32`
-- removed: `okta|apac|core|13.237.41.61/32`
-- removed: `okta|apac|core|13.239.200.221/32`
-- removed: `okta|apac|core|3.114.93.18/32`
-- removed: `okta|apac|core|3.24.211.97/32`
+- added: `okta|apac|core|18.179.213.194/32`
+- added: `okta|apac|core|18.182.250.224/32`
+- added: `okta|apac|core|35.72.176.1/32`
+- added: `okta|apac|core|35.77.135.40/32`
+- added: `okta|apac|core|52.62.161.191/32`
+- removed: `okta|apac|core|13.158.102.202/32`
+- removed: `okta|apac|core|13.197.86.191/32`
+- removed: `okta|apac|core|15.135.156.249/32`
+- removed: `okta|apac|core|52.192.201.209/32`
+- removed: `okta|apac|core|54.178.180.211/32`
