@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-23T18:22:37Z",
+ "generated_at": "2026-11-24T17:53:47Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -78,8 +78,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 9404,
-   "bytes": 161715,
+   "entries": 9407,
+   "bytes": 161766,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
   },
   {
@@ -221,8 +221,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2 ranges, all regions.",
    "format": "list",
-   "entries": 4497,
-   "bytes": 80252,
+   "entries": 4499,
+   "bytes": 80280,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2.txt"
   },
   {
@@ -1827,8 +1827,8 @@
    "group": "All regions",
    "description": "Azure service tag AzureCloud address prefixes, all regions.",
    "format": "list",
-   "entries": 4907,
-   "bytes": 93039,
+   "entries": 8245,
+   "bytes": 175745,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-azurecloud.txt"
   },
   {
@@ -2454,8 +2454,8 @@
    "group": "All regions",
    "description": "Azure service tag M365ManagementActivityApi address prefixes, all regions.",
    "format": "list",
-   "entries": 429,
-   "bytes": 8636,
+   "entries": 430,
+   "bytes": 8654,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-m365managementactivityapi.txt"
   },
   {
@@ -2465,8 +2465,8 @@
    "group": "All regions",
    "description": "Azure service tag M365ManagementActivityApiWebhook address prefixes, all regions.",
    "format": "list",
-   "entries": 375,
-   "bytes": 7512,
+   "entries": 376,
+   "bytes": 7530,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-m365managementactivityapiwebhook.txt"
   },
   {
@@ -2553,8 +2553,8 @@
    "group": "All regions",
    "description": "Azure service tag PowerBI address prefixes, all regions.",
    "format": "list",
-   "entries": 1058,
-   "bytes": 19128,
+   "entries": 1059,
+   "bytes": 19144,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/azure-powerbi.txt"
   },
   {
@@ -2784,8 +2784,8 @@
    "group": "All regions",
    "description": "All Okta production and preview cell IP ranges.",
    "format": "list",
-   "entries": 2315,
-   "bytes": 38786,
+   "entries": 2313,
+   "bytes": 38747,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-all.txt"
   },
   {
@@ -2796,7 +2796,7 @@
    "description": "Okta APAC cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
    "entries": 276,
-   "bytes": 4575,
+   "bytes": 4573,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-apac.txt"
   },
   {
@@ -2807,7 +2807,7 @@
    "description": "Okta Canada cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
    "entries": 107,
-   "bytes": 1822,
+   "bytes": 1821,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-ca.txt"
   },
   {
@@ -2818,7 +2818,7 @@
    "description": "Okta EMEA cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
    "entries": 567,
-   "bytes": 9527,
+   "bytes": 9529,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-emea.txt"
   },
   {
@@ -2828,8 +2828,8 @@
    "group": "By region",
    "description": "Okta India cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 103,
-   "bytes": 1736,
+   "entries": 104,
+   "bytes": 1755,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-in.txt"
   },
   {
@@ -2850,8 +2850,8 @@
    "group": "By region",
    "description": "Okta US cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 1258,
-   "bytes": 21144,
+   "entries": 1255,
+   "bytes": 21087,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-us.txt"
   },
   {
@@ -2861,8 +2861,8 @@
    "group": "By service",
    "description": "Okta Core IP ranges across all regions.",
    "format": "list",
-   "entries": 2176,
-   "bytes": 36457,
+   "entries": 2175,
+   "bytes": 36438,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-core.txt"
   },
   {
@@ -2872,8 +2872,8 @@
    "group": "By service",
    "description": "Okta Privileged Access (PAM) IP ranges across all regions.",
    "format": "list",
-   "entries": 139,
-   "bytes": 2329,
+   "entries": 138,
+   "bytes": 2309,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-pam.txt"
   },
   {
@@ -2883,8 +2883,8 @@
    "group": "By service",
    "description": "Okta Workflows IP ranges across all regions.",
    "format": "list",
-   "entries": 569,
-   "bytes": 9474,
+   "entries": 570,
+   "bytes": 9493,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-workflows.txt"
   },
   {
