@@ -2875,7 +2875,6 @@
   "v4|ap-southeast-2|WORKSPACES_GATEWAYS|3.25.44.0/23",
   "v4|ap-southeast-2|WORKSPACES_GATEWAYS|54.153.254.0/24",
   "v4|ap-southeast-3|AMAZON|1.178.19.0/24",
-  "v4|ap-southeast-3|AMAZON|1.178.86.0/24",
   "v4|ap-southeast-3|AMAZON|104.255.59.101/32",
   "v4|ap-southeast-3|AMAZON|104.255.59.102/32",
   "v4|ap-southeast-3|AMAZON|104.255.59.103/32",
@@ -2951,7 +2950,6 @@
   "v4|ap-southeast-3|DYNAMODB|35.71.96.0/24",
   "v4|ap-southeast-3|EC2_INSTANCE_CONNECT|43.218.193.64/29",
   "v4|ap-southeast-3|EC2|1.178.19.0/24",
-  "v4|ap-southeast-3|EC2|1.178.86.0/24",
   "v4|ap-southeast-3|EC2|108.136.0.0/15",
   "v4|ap-southeast-3|EC2|15.177.92.0/24",
   "v4|ap-southeast-3|EC2|15.232.0.0/16",
@@ -17840,6 +17838,6 @@
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f24:34::/48",
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f32:4000::/39"
  ],
- "fetched_at": "2026-11-24T17:53:41Z",
+ "fetched_at": "2026-11-25T17:20:35Z",
  "source": "aws_ip_ranges"
 }

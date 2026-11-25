@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-24T17:53:47Z",
+ "generated_at": "2026-11-25T17:20:40Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -78,8 +78,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 9407,
-   "bytes": 161766,
+   "entries": 9406,
+   "bytes": 161752,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
   },
   {
@@ -221,8 +221,8 @@
    "group": "All regions",
    "description": "Amazon Web Services EC2 ranges, all regions.",
    "format": "list",
-   "entries": 4499,
-   "bytes": 80280,
+   "entries": 4498,
+   "bytes": 80266,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-ec2.txt"
   },
   {
@@ -2784,8 +2784,8 @@
    "group": "All regions",
    "description": "All Okta production and preview cell IP ranges.",
    "format": "list",
-   "entries": 2313,
-   "bytes": 38747,
+   "entries": 2312,
+   "bytes": 38729,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-all.txt"
   },
   {
@@ -2796,7 +2796,7 @@
    "description": "Okta APAC cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
    "entries": 276,
-   "bytes": 4573,
+   "bytes": 4572,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-apac.txt"
   },
   {
@@ -2817,8 +2817,8 @@
    "group": "By region",
    "description": "Okta EMEA cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 567,
-   "bytes": 9529,
+   "entries": 568,
+   "bytes": 9545,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-emea.txt"
   },
   {
@@ -2828,8 +2828,8 @@
    "group": "By region",
    "description": "Okta India cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 104,
-   "bytes": 1755,
+   "entries": 103,
+   "bytes": 1732,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-in.txt"
   },
   {
@@ -2839,8 +2839,8 @@
    "group": "By region",
    "description": "Okta Preview cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 302,
-   "bytes": 5059,
+   "entries": 300,
+   "bytes": 5021,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-preview.txt"
   },
   {
@@ -2850,8 +2850,8 @@
    "group": "By region",
    "description": "Okta US cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 1255,
-   "bytes": 21087,
+   "entries": 1256,
+   "bytes": 21115,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-us.txt"
   },
   {
@@ -2861,8 +2861,8 @@
    "group": "By service",
    "description": "Okta Core IP ranges across all regions.",
    "format": "list",
-   "entries": 2175,
-   "bytes": 36438,
+   "entries": 2174,
+   "bytes": 36424,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-core.txt"
   },
   {
@@ -2873,7 +2873,7 @@
    "description": "Okta Privileged Access (PAM) IP ranges across all regions.",
    "format": "list",
    "entries": 138,
-   "bytes": 2309,
+   "bytes": 2305,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-pam.txt"
   },
   {
@@ -2883,8 +2883,8 @@
    "group": "By service",
    "description": "Okta Workflows IP ranges across all regions.",
    "format": "list",
-   "entries": 570,
-   "bytes": 9493,
+   "entries": 569,
+   "bytes": 9477,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-workflows.txt"
   },
   {
@@ -2960,8 +2960,8 @@
    "group": "",
    "description": "All published Zoom IP ranges combined.",
    "format": "list",
-   "entries": 58,
-   "bytes": 937,
+   "entries": 55,
+   "bytes": 891,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-all.txt"
   },
   {
@@ -2982,8 +2982,8 @@
    "group": "",
    "description": "Zoom Conference Room Connector IP ranges.",
    "format": "list",
-   "entries": 49,
-   "bytes": 790,
+   "entries": 50,
+   "bytes": 807,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-crc.txt"
   },
   {
@@ -3015,8 +3015,8 @@
    "group": "",
    "description": "Zoom Phone signaling and media IP ranges.",
    "format": "list",
-   "entries": 22,
-   "bytes": 353,
+   "entries": 21,
+   "bytes": 337,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/zoom-phone.txt"
   }
  ]

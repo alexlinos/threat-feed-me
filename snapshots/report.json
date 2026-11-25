@@ -1,24 +1,18 @@
 {
- "fetched_at": "2026-11-24 17:53 UTC",
+ "fetched_at": "2026-11-25 17:20 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 17839,
+   "count": 17837,
    "baseline": false,
-   "added": 7,
+   "added": 0,
    "removed": 2,
-   "added_sample": [
-    "v4|ap-south-1|AMAZON|15.248.200.0/26",
-    "v4|ap-southeast-2|EC2|40.32.0.0/16",
-    "v4|ap-southeast-2|EC2|40.35.0.0/16",
-    "v4|us-west-2|AMAZON|15.248.208.0/26",
-    "v4|us-west-2|AMAZON|15.248.208.64/26"
-   ],
+   "added_sample": [],
    "removed_sample": [
-    "v6|us-east-1|AMAZON|2600:f0f1:18::/46",
-    "v6|us-east-1|EC2|2600:f0f1:18::/46"
+    "v4|ap-southeast-3|AMAZON|1.178.86.0/24",
+    "v4|ap-southeast-3|EC2|1.178.86.0/24"
    ],
-   "pct_change": 0.05,
+   "pct_change": 0.01,
    "min_v4_prefix": 11,
    "min_v6_prefix": 32,
    "alert": false,
@@ -112,23 +106,11 @@
    "status": "ok",
    "count": 112580,
    "baseline": false,
-   "added": 6857,
-   "removed": 186,
-   "added_sample": [
-    "cidr|AzureCloud.australiacentral2|australiacentral2|2603:1010:404:1000::/52",
-    "cidr|AzureCloud.australiacentral2|australiacentral2|2603:1010:404:100::/56",
-    "cidr|AzureCloud.australiacentral2|australiacentral2|2603:1010:404:10::/60",
-    "cidr|AzureCloud.australiacentral2|australiacentral2|2603:1010:404:2000::/51",
-    "cidr|AzureCloud.australiacentral2|australiacentral2|2603:1010:404:200::/55"
-   ],
-   "removed_sample": [
-    "cidr|AzureCloud.australiacentral2|australiacentral2|2603:1010:404::/47",
-    "cidr|AzureCloud.australiacentral|australiacentral|2603:1010:304::/47",
-    "cidr|AzureCloud.australiaeast|australiaeast|172.146.0.0/17",
-    "cidr|AzureCloud.australiaeast|australiaeast|2603:1010:6::/47",
-    "cidr|AzureCloud.australiasoutheast|australiasoutheast|2603:1010:101:8::/61"
-   ],
-   "pct_change": 6.65,
+   "added": 0,
+   "removed": 0,
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
    "min_v4_prefix": 11,
    "min_v6_prefix": 36,
    "alert": false,
@@ -166,11 +148,21 @@
    "status": "ok",
    "count": 136,
    "baseline": false,
-   "added": 0,
-   "removed": 0,
-   "added_sample": [],
-   "removed_sample": [],
-   "pct_change": 0.0,
+   "added": 4,
+   "removed": 4,
+   "added_sample": [
+    "zoom|crc|192.204.12.0/23",
+    "zoom|crc|3.235.96.158/31",
+    "zoom|crc|3.235.96.26/31",
+    "zoom|crc|69.174.110.0/23"
+   ],
+   "removed_sample": [
+    "zoom|crc|192.204.12.0/22",
+    "zoom|crc|3.235.96.0/23",
+    "zoom|crc|69.174.108.0/22",
+    "zoom|phone|192.204.12.0/23"
+   ],
+   "pct_change": 5.88,
    "min_v4_prefix": 16,
    "min_v6_prefix": null,
    "alert": false,
@@ -192,25 +184,25 @@
   },
   "okta_ips": {
    "status": "ok",
-   "count": 3181,
+   "count": 3179,
    "baseline": false,
-   "added": 103,
-   "removed": 104,
+   "added": 88,
+   "removed": 90,
    "added_sample": [
-    "okta|apac|core|15.135.8.17/32",
-    "okta|apac|core|52.68.2.119/32",
-    "okta|apac|core|52.69.181.154/32",
-    "okta|apac|core|54.253.138.63/32",
-    "okta|apac|pam|52.62.235.77/32"
+    "okta|apac|core|13.211.118.101/32",
+    "okta|apac|core|13.236.37.89/32",
+    "okta|apac|core|18.182.240.107/32",
+    "okta|apac|core|3.24.19.156/32",
+    "okta|apac|core|35.78.58.170/32"
    ],
    "removed_sample": [
-    "okta|apac|core|13.196.249.31/32",
-    "okta|apac|core|32.236.213.206/32",
-    "okta|apac|core|35.75.95.40/32",
-    "okta|apac|core|52.64.221.215/32",
-    "okta|apac|pam|13.210.54.59/32"
+    "okta|apac|core|13.192.109.233/32",
+    "okta|apac|core|13.193.113.45/32",
+    "okta|apac|core|3.105.103.28/32",
+    "okta|apac|core|3.24.101.223/32",
+    "okta|apac|core|52.63.132.201/32"
    ],
-   "pct_change": 6.51,
+   "pct_change": 5.6,
    "min_v4_prefix": 26,
    "min_v6_prefix": null,
    "alert": false,
