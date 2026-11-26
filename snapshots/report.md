@@ -1,8 +1,8 @@
-# Infra list watch — 2026-11-25 17:20 UTC
+# Infra list watch — 2026-11-26 17:01 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
-| aws_ip_ranges | 17837 | 0 | 2 | 0.01 | ok |
+| aws_ip_ranges | 17838 | 1 | 0 | 0.01 | ok |
 | m365_endpoints | 306 | 0 | 0 | 0.0 | ok |
 | m365_gcc_high | 127 | 0 | 0 | 0.0 | ok |
 | m365_dod | 121 | 0 | 0 | 0.0 | ok |
@@ -12,36 +12,25 @@
 | azure_service_tags | 112580 | 0 | 0 | 0.0 | ok |
 | cloudflare_ips | 22 | 0 | 0 | 0.0 | ok |
 | github_meta | 8523 | 0 | 0 | 0.0 | ok |
-| zoom_ips | 136 | 4 | 4 | 5.88 | ok |
+| zoom_ips | 136 | 0 | 0 | 0.0 | ok |
 | atlassian_ips | 975 | 0 | 0 | 0.0 | ok |
-| okta_ips | 3179 | 88 | 90 | 5.6 | ok |
+| okta_ips | 3175 | 104 | 108 | 6.67 | ok |
 | fastly_ips | 24 | 0 | 0 | 0.0 | ok |
 | oci_ips | 1186 | 0 | 0 | 0.0 | ok |
 | digitalocean_ips | 1243 | 0 | 0 | 0.0 | ok |
 | stripe_ips | 177 | 0 | 0 | 0.0 | ok |
 
 ## aws_ip_ranges
-- removed: `v4|ap-southeast-3|AMAZON|1.178.86.0/24`
-- removed: `v4|ap-southeast-3|EC2|1.178.86.0/24`
-
-## zoom_ips
-- added: `zoom|crc|192.204.12.0/23`
-- added: `zoom|crc|3.235.96.158/31`
-- added: `zoom|crc|3.235.96.26/31`
-- added: `zoom|crc|69.174.110.0/23`
-- removed: `zoom|crc|192.204.12.0/22`
-- removed: `zoom|crc|3.235.96.0/23`
-- removed: `zoom|crc|69.174.108.0/22`
-- removed: `zoom|phone|192.204.12.0/23`
+- added: `v4|us-west-2|AMAZON|15.248.208.128/26`
 
 ## okta_ips
-- added: `okta|apac|core|13.211.118.101/32`
-- added: `okta|apac|core|13.236.37.89/32`
-- added: `okta|apac|core|18.182.240.107/32`
-- added: `okta|apac|core|3.24.19.156/32`
-- added: `okta|apac|core|35.78.58.170/32`
-- removed: `okta|apac|core|13.192.109.233/32`
-- removed: `okta|apac|core|13.193.113.45/32`
-- removed: `okta|apac|core|3.105.103.28/32`
-- removed: `okta|apac|core|3.24.101.223/32`
-- removed: `okta|apac|core|52.63.132.201/32`
+- added: `okta|apac|core|13.230.75.243/32`
+- added: `okta|apac|core|13.236.222.103/32`
+- added: `okta|apac|core|13.238.152.135/32`
+- added: `okta|apac|core|15.134.148.197/32`
+- added: `okta|apac|core|15.134.83.39/32`
+- removed: `okta|apac|core|13.211.112.136/32`
+- removed: `okta|apac|core|15.134.162.65/32`
+- removed: `okta|apac|core|15.135.185.166/32`
+- removed: `okta|apac|core|16.179.5.155/32`
+- removed: `okta|apac|core|18.178.122.252/32`

@@ -1,17 +1,16 @@
 {
- "fetched_at": "2026-11-25 17:20 UTC",
+ "fetched_at": "2026-11-26 17:01 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
-   "count": 17837,
+   "count": 17838,
    "baseline": false,
-   "added": 0,
-   "removed": 2,
-   "added_sample": [],
-   "removed_sample": [
-    "v4|ap-southeast-3|AMAZON|1.178.86.0/24",
-    "v4|ap-southeast-3|EC2|1.178.86.0/24"
+   "added": 1,
+   "removed": 0,
+   "added_sample": [
+    "v4|us-west-2|AMAZON|15.248.208.128/26"
    ],
+   "removed_sample": [],
    "pct_change": 0.01,
    "min_v4_prefix": 11,
    "min_v6_prefix": 32,
@@ -148,21 +147,11 @@
    "status": "ok",
    "count": 136,
    "baseline": false,
-   "added": 4,
-   "removed": 4,
-   "added_sample": [
-    "zoom|crc|192.204.12.0/23",
-    "zoom|crc|3.235.96.158/31",
-    "zoom|crc|3.235.96.26/31",
-    "zoom|crc|69.174.110.0/23"
-   ],
-   "removed_sample": [
-    "zoom|crc|192.204.12.0/22",
-    "zoom|crc|3.235.96.0/23",
-    "zoom|crc|69.174.108.0/22",
-    "zoom|phone|192.204.12.0/23"
-   ],
-   "pct_change": 5.88,
+   "added": 0,
+   "removed": 0,
+   "added_sample": [],
+   "removed_sample": [],
+   "pct_change": 0.0,
    "min_v4_prefix": 16,
    "min_v6_prefix": null,
    "alert": false,
@@ -184,25 +173,25 @@
   },
   "okta_ips": {
    "status": "ok",
-   "count": 3179,
+   "count": 3175,
    "baseline": false,
-   "added": 88,
-   "removed": 90,
+   "added": 104,
+   "removed": 108,
    "added_sample": [
-    "okta|apac|core|13.211.118.101/32",
-    "okta|apac|core|13.236.37.89/32",
-    "okta|apac|core|18.182.240.107/32",
-    "okta|apac|core|3.24.19.156/32",
-    "okta|apac|core|35.78.58.170/32"
+    "okta|apac|core|13.230.75.243/32",
+    "okta|apac|core|13.236.222.103/32",
+    "okta|apac|core|13.238.152.135/32",
+    "okta|apac|core|15.134.148.197/32",
+    "okta|apac|core|15.134.83.39/32"
    ],
    "removed_sample": [
-    "okta|apac|core|13.192.109.233/32",
-    "okta|apac|core|13.193.113.45/32",
-    "okta|apac|core|3.105.103.28/32",
-    "okta|apac|core|3.24.101.223/32",
-    "okta|apac|core|52.63.132.201/32"
+    "okta|apac|core|13.211.112.136/32",
+    "okta|apac|core|15.134.162.65/32",
+    "okta|apac|core|15.135.185.166/32",
+    "okta|apac|core|16.179.5.155/32",
+    "okta|apac|core|18.178.122.252/32"
    ],
-   "pct_change": 5.6,
+   "pct_change": 6.67,
    "min_v4_prefix": 26,
    "min_v6_prefix": null,
    "alert": false,

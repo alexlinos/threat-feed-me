@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-25T17:20:40Z",
+ "generated_at": "2026-11-26T17:01:31Z",
  "vendors": {
   "AWS": {
    "description": "Amazon Web Services address ranges per service, across all regions. AMAZON and EC2 are rentable space. These ranges also host other customers' workloads, so allowing them lets anything running there through.",
@@ -78,8 +78,8 @@
    "group": "All regions",
    "description": "Amazon Web Services AMAZON ranges, all regions.",
    "format": "list",
-   "entries": 9406,
-   "bytes": 161752,
+   "entries": 9407,
+   "bytes": 161770,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/aws-amazon.txt"
   },
   {
@@ -2784,8 +2784,8 @@
    "group": "All regions",
    "description": "All Okta production and preview cell IP ranges.",
    "format": "list",
-   "entries": 2312,
-   "bytes": 38729,
+   "entries": 2310,
+   "bytes": 38683,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-all.txt"
   },
   {
@@ -2796,7 +2796,7 @@
    "description": "Okta APAC cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
    "entries": 276,
-   "bytes": 4572,
+   "bytes": 4574,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-apac.txt"
   },
   {
@@ -2807,7 +2807,7 @@
    "description": "Okta Canada cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
    "entries": 107,
-   "bytes": 1821,
+   "bytes": 1820,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-ca.txt"
   },
   {
@@ -2817,8 +2817,8 @@
    "group": "By region",
    "description": "Okta EMEA cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 568,
-   "bytes": 9545,
+   "entries": 567,
+   "bytes": 9530,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-emea.txt"
   },
   {
@@ -2828,8 +2828,8 @@
    "group": "By region",
    "description": "Okta India cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 103,
-   "bytes": 1732,
+   "entries": 104,
+   "bytes": 1750,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-in.txt"
   },
   {
@@ -2839,8 +2839,8 @@
    "group": "By region",
    "description": "Okta Preview cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 300,
-   "bytes": 5021,
+   "entries": 299,
+   "bytes": 4992,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-preview.txt"
   },
   {
@@ -2850,8 +2850,8 @@
    "group": "By region",
    "description": "Okta US cell IP ranges (Core, Workflows, PAM).",
    "format": "list",
-   "entries": 1256,
-   "bytes": 21115,
+   "entries": 1255,
+   "bytes": 21094,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-us.txt"
   },
   {
@@ -2861,8 +2861,8 @@
    "group": "By service",
    "description": "Okta Core IP ranges across all regions.",
    "format": "list",
-   "entries": 2174,
-   "bytes": 36424,
+   "entries": 2172,
+   "bytes": 36380,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-core.txt"
   },
   {
@@ -2873,7 +2873,7 @@
    "description": "Okta Privileged Access (PAM) IP ranges across all regions.",
    "format": "list",
    "entries": 138,
-   "bytes": 2305,
+   "bytes": 2303,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-pam.txt"
   },
   {
@@ -2883,8 +2883,8 @@
    "group": "By service",
    "description": "Okta Workflows IP ranges across all regions.",
    "format": "list",
-   "entries": 569,
-   "bytes": 9477,
+   "entries": 567,
+   "bytes": 9438,
    "url": "https://raw.githubusercontent.com/alexlinos/threat-feed-me/infra-snapshots/catalog/okta-workflows.txt"
   },
   {

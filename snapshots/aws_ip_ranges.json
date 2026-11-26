@@ -10170,6 +10170,7 @@
   "v4|us-west-2|AMAZON|15.248.161.0/24",
   "v4|us-west-2|AMAZON|15.248.162.0/24",
   "v4|us-west-2|AMAZON|15.248.208.0/26",
+  "v4|us-west-2|AMAZON|15.248.208.128/26",
   "v4|us-west-2|AMAZON|15.248.208.64/26",
   "v4|us-west-2|AMAZON|15.248.40.0/22",
   "v4|us-west-2|AMAZON|15.248.80.0/20",
@@ -17838,6 +17839,6 @@
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f24:34::/48",
   "v6|us-west-2|WORKSPACES_GATEWAYS|2600:1f32:4000::/39"
  ],
- "fetched_at": "2026-11-25T17:20:35Z",
+ "fetched_at": "2026-11-26T17:01:25Z",
  "source": "aws_ip_ranges"
 }
