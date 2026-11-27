@@ -291,6 +291,7 @@
   "oci|ap-sydney-1|OSN|192.29.158.0/23",
   "oci|ap-sydney-1|OSN|207.127.107.192/26",
   "oci|ap-tokyo-1|OBJECT_STORAGE|134.70.80.0/22",
+  "oci|ap-tokyo-1|OCI|129.203.128.0/17",
   "oci|ap-tokyo-1|OCI|131.186.32.0/20",
   "oci|ap-tokyo-1|OCI|131.186.56.0/21",
   "oci|ap-tokyo-1|OCI|132.145.112.0/20",
@@ -460,6 +461,7 @@
   "oci|eu-frankfurt-1|OCI|89.168.64.0/18",
   "oci|eu-frankfurt-1|OCI|92.5.0.0/17",
   "oci|eu-frankfurt-1|OCI|92.5.128.0/18",
+  "oci|eu-frankfurt-1|OCI|92.6.0.0/16",
   "oci|eu-frankfurt-1|OSN|130.61.0.128/25",
   "oci|eu-frankfurt-1|OSN|130.61.2.128/25",
   "oci|eu-frankfurt-1|OSN|130.61.4.128/25",
@@ -1178,6 +1180,7 @@
   "oci|us-sanjose-1|OSN|204.216.120.0/22",
   "oci|us-shawnee-1|OBJECT_STORAGE|192.22.40.0/22",
   "oci|us-shawnee-1|OCI|192.22.0.0/19",
+  "oci|us-shawnee-1|OSN|107.186.224.0/19",
   "oci|us-shawnee-1|OSN|192.22.32.0/26",
   "oci|us-shawnee-1|OSN|192.22.32.128/25",
   "oci|us-shawnee-1|OSN|192.22.33.192/26",
@@ -1187,6 +1190,6 @@
   "oci|us-shawnee-1|OSN|192.22.44.128/25",
   "oci|us-shawnee-1|OSN|192.22.48.0/23"
  ],
- "fetched_at": "2026-11-21T14:50:05Z",
+ "fetched_at": "2026-11-27T16:46:44Z",
  "source": "oci_ips"
 }

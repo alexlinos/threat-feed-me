@@ -1,8 +1,8 @@
-# Infra list watch — 2026-11-26 17:01 UTC
+# Infra list watch — 2026-11-27 16:46 UTC
 
 | source | entries | +added | -removed | %change | status |
 |---|---|---|---|---|---|
-| aws_ip_ranges | 17838 | 1 | 0 | 0.01 | ok |
+| aws_ip_ranges | 17838 | 0 | 0 | 0.0 | ok |
 | m365_endpoints | 306 | 0 | 0 | 0.0 | ok |
 | m365_gcc_high | 127 | 0 | 0 | 0.0 | ok |
 | m365_dod | 121 | 0 | 0 | 0.0 | ok |
@@ -14,23 +14,25 @@
 | github_meta | 8523 | 0 | 0 | 0.0 | ok |
 | zoom_ips | 136 | 0 | 0 | 0.0 | ok |
 | atlassian_ips | 975 | 0 | 0 | 0.0 | ok |
-| okta_ips | 3175 | 104 | 108 | 6.67 | ok |
+| okta_ips | 3188 | 100 | 87 | 5.89 | ok |
 | fastly_ips | 24 | 0 | 0 | 0.0 | ok |
-| oci_ips | 1186 | 0 | 0 | 0.0 | ok |
+| oci_ips | 1189 | 3 | 0 | 0.25 | ok |
 | digitalocean_ips | 1243 | 0 | 0 | 0.0 | ok |
 | stripe_ips | 177 | 0 | 0 | 0.0 | ok |
 
-## aws_ip_ranges
-- added: `v4|us-west-2|AMAZON|15.248.208.128/26`
-
 ## okta_ips
-- added: `okta|apac|core|13.230.75.243/32`
-- added: `okta|apac|core|13.236.222.103/32`
-- added: `okta|apac|core|13.238.152.135/32`
-- added: `okta|apac|core|15.134.148.197/32`
-- added: `okta|apac|core|15.134.83.39/32`
-- removed: `okta|apac|core|13.211.112.136/32`
-- removed: `okta|apac|core|15.134.162.65/32`
-- removed: `okta|apac|core|15.135.185.166/32`
-- removed: `okta|apac|core|16.179.5.155/32`
-- removed: `okta|apac|core|18.178.122.252/32`
+- added: `okta|apac|core|13.236.115.176/32`
+- added: `okta|apac|core|15.168.87.101/32`
+- added: `okta|apac|core|52.196.194.234/32`
+- added: `okta|apac|core|54.206.59.186/32`
+- added: `okta|apac|core|57.182.149.125/32`
+- removed: `okta|apac|core|13.192.36.151/32`
+- removed: `okta|apac|core|15.168.246.122/32`
+- removed: `okta|apac|core|3.114.160.58/32`
+- removed: `okta|apac|core|54.206.152.198/32`
+- removed: `okta|apac|core|54.253.249.252/32`
+
+## oci_ips
+- added: `oci|ap-tokyo-1|OCI|129.203.128.0/17`
+- added: `oci|eu-frankfurt-1|OCI|92.6.0.0/16`
+- added: `oci|us-shawnee-1|OSN|107.186.224.0/19`

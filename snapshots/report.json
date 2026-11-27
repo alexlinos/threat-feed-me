@@ -1,17 +1,15 @@
 {
- "fetched_at": "2026-11-26 17:01 UTC",
+ "fetched_at": "2026-11-27 16:46 UTC",
  "sources": {
   "aws_ip_ranges": {
    "status": "ok",
    "count": 17838,
    "baseline": false,
-   "added": 1,
+   "added": 0,
    "removed": 0,
-   "added_sample": [
-    "v4|us-west-2|AMAZON|15.248.208.128/26"
-   ],
+   "added_sample": [],
    "removed_sample": [],
-   "pct_change": 0.01,
+   "pct_change": 0.0,
    "min_v4_prefix": 11,
    "min_v6_prefix": 32,
    "alert": false,
@@ -173,25 +171,25 @@
   },
   "okta_ips": {
    "status": "ok",
-   "count": 3175,
+   "count": 3188,
    "baseline": false,
-   "added": 104,
-   "removed": 108,
+   "added": 100,
+   "removed": 87,
    "added_sample": [
-    "okta|apac|core|13.230.75.243/32",
-    "okta|apac|core|13.236.222.103/32",
-    "okta|apac|core|13.238.152.135/32",
-    "okta|apac|core|15.134.148.197/32",
-    "okta|apac|core|15.134.83.39/32"
+    "okta|apac|core|13.236.115.176/32",
+    "okta|apac|core|15.168.87.101/32",
+    "okta|apac|core|52.196.194.234/32",
+    "okta|apac|core|54.206.59.186/32",
+    "okta|apac|core|57.182.149.125/32"
    ],
    "removed_sample": [
-    "okta|apac|core|13.211.112.136/32",
-    "okta|apac|core|15.134.162.65/32",
-    "okta|apac|core|15.135.185.166/32",
-    "okta|apac|core|16.179.5.155/32",
-    "okta|apac|core|18.178.122.252/32"
+    "okta|apac|core|13.192.36.151/32",
+    "okta|apac|core|15.168.246.122/32",
+    "okta|apac|core|3.114.160.58/32",
+    "okta|apac|core|54.206.152.198/32",
+    "okta|apac|core|54.253.249.252/32"
    ],
-   "pct_change": 6.67,
+   "pct_change": 5.89,
    "min_v4_prefix": 26,
    "min_v6_prefix": null,
    "alert": false,
@@ -213,13 +211,17 @@
   },
   "oci_ips": {
    "status": "ok",
-   "count": 1186,
+   "count": 1189,
    "baseline": false,
-   "added": 0,
+   "added": 3,
    "removed": 0,
-   "added_sample": [],
+   "added_sample": [
+    "oci|ap-tokyo-1|OCI|129.203.128.0/17",
+    "oci|eu-frankfurt-1|OCI|92.6.0.0/16",
+    "oci|us-shawnee-1|OSN|107.186.224.0/19"
+   ],
    "removed_sample": [],
-   "pct_change": 0.0,
+   "pct_change": 0.25,
    "min_v4_prefix": 16,
    "min_v6_prefix": null,
    "alert": false,
